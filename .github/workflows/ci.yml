@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -e ".[dev]"
+      - run: black --check medianav_toolbox/ tests/
+      - run: isort --check-only medianav_toolbox/ tests/
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -e ".[dev]"
+      - run: pytest tests/ -v --ignore=tests/integration
+
+  integration:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -e ".[dev]"
+      - run: pytest tests/integration/ -v -m integration
+        env:
+          NAVIEXTRAS_USER: ${{ secrets.NAVIEXTRAS_USER }}
+          NAVIEXTRAS_PASS: ${{ secrets.NAVIEXTRAS_PASS }}
+          NAVIEXTRAS_USB_PATH: analysis/usb_drive/disk

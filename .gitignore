@@ -1,0 +1,39 @@
+# Secrets / credentials
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+venv/
+.venv/
+
+# Testing
+.pytest_cache/
+htmlcov/
+.coverage
+
+# IDE
+.vscode/
+.idea/
+
+# App data
+download_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Analysis artifacts (large binaries, decompiled output)
+analysis/extracted/
+analysis/DaciaMediaNavEvolutionToolbox-inst.exe
+analysis/main_exe_decompiled.c
+analysis/plugin_decompiled.c
+analysis/nngine_decompiled.c
+analysis/usb_drive/
+analysis/capture/
+
+# Capture artifacts (mitmproxy, wine logs)
+capture/

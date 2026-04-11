@@ -1,0 +1,34 @@
+{
+  "resources": [
+    {
+      "version": "3",
+      "name": "index",
+      "location": "https://zippy.naviextras.com/services/index/rest/3"
+    },
+    {
+      "version": "1",
+      "name": "mobile",
+      "location": "https://www.naviextras.com/mobile/service"
+    },
+    {
+      "version": "2",
+      "name": "index",
+      "location": "https://zippy.naviextras.com/services/index/rest/2"
+    },
+    {
+      "version": "1",
+      "name": "selfie",
+      "location": "https://zippy.naviextras.com/services/selfie/rest/1"
+    },
+    {
+      "version": "1",
+      "name": "register",
+      "location": "https://zippy.naviextras.com/services/register/rest/1"
+    },
+    {
+      "version": "1",
+      "name": "index",
+      "location": "https://zippy.naviextras.com/services/index/1"
+    }
+  ]
+}
