@@ -52,10 +52,12 @@ The existing codebase has scaffolding (CLI, device parsing, download/install stu
   - 10 tests ✅
 
 - [x] **1.4** Implement igo-binary serializer in `medianav_toolbox/igo_serializer.py`
-  - `build_boot_request_body()` — builds IndexArg payload
-  - 4 tests including encrypt-to-wire verification ✅
-  - **Partial**: DEVICE mode credential encoding (17-byte block) not yet reversed
-  - **Partial**: Registration request body encoding not yet reversed
+  - `build_boot_request_body()` — builds IndexArg payload (RANDOM mode)
+  - `build_empty_device_request()` — builds empty DEVICE mode requests (hasActSvc, getProcess, etc.)
+  - `extract_credential_block()` — extracts 17-byte D8...D9 credential block from captured requests
+  - 9 tests including DEVICE mode encrypt-to-wire verification ✅
+  - **Partial**: credential block encoding (D8...D9) not yet reversible from Name alone
+  - **Partial**: non-empty request bodies (login, register, model list) not yet buildable
 
 ### Key Protocol Findings (from Phase 1)
 
