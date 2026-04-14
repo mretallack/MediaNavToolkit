@@ -36,27 +36,38 @@ The existing codebase has scaffolding (CLI, device parsing, download/install stu
 
 ## Phase 1: Protocol Implementation
 
-- [ ] **1.1** Implement SnakeOil cipher in `medianav_toolbox/crypto.py`
+- [x] **1.1** Implement SnakeOil cipher in `medianav_toolbox/crypto.py`
   - `snakeoil(data, seed) → bytes` — xorshift128 PRNG stream cipher
-  - Symmetric: same function for encrypt and decrypt
-  - Tests: encrypt known plaintext, verify against mitmproxy capture
+  - 8 tests verified against mitmproxy captures ✅
 
-- [ ] **1.2** Implement wire protocol envelope in `medianav_toolbox/protocol.py`
-  - `build_request(payload, seed, auth_mode, service_minor) → bytes` — 16-byte header + SnakeOil-encrypted payload
-  - `parse_response(data, seed) → bytes` — strip 4-byte header, decrypt payload
-  - RANDOM mode: generate random seed, put in header
-  - DEVICE mode: put Code in header, use Secret as seed
-  - Tests: round-trip encrypt/decrypt, parse real response from mitmproxy
+- [x] **1.2** Implement wire protocol envelope in `medianav_toolbox/protocol.py`
+  - `build_request()` — 16-byte header + SnakeOil-encrypted payload
+  - `parse_response()` — strip 4-byte header, decrypt payload
+  - 12 tests including byte-for-byte match against capture ✅
 
-- [ ] **1.3** Implement igo-binary parser (deserializer)
-  - Read type tags (0x01=int32, 0x02=byte, 0x04=int64, 0x05=string, 0x80=envelope)
-  - Handle nested structures
-  - Tests: parse decrypted boot response, registration response, model list
+- [x] **1.3** Implement igo-binary parser in `medianav_toolbox/igo_parser.py`
+  - `parse_boot_response()` — extracts service name→URL map
+  - `parse_register_response()` — extracts Name, Code, Secret, MaxAge
+  - `parse_model_list_response()` — extracts device model list
+  - 10 tests ✅
 
-- [ ] **1.4** Implement igo-binary serializer
-  - Write typed fields matching the format the server expects
-  - Build RegisterDeviceArg, HasActivatableServiceArg, LoginArg, etc.
-  - Tests: serialize and verify against known wire captures
+- [x] **1.4** Implement igo-binary serializer in `medianav_toolbox/igo_serializer.py`
+  - `build_boot_request_body()` — builds IndexArg payload
+  - 4 tests including encrypt-to-wire verification ✅
+  - **Partial**: DEVICE mode credential encoding (17-byte block) not yet reversed
+  - **Partial**: Registration request body encoding not yet reversed
+
+### Key Protocol Findings (from Phase 1)
+
+Request payload format (after decryption):
+- RANDOM mode: `[counter 1B] [flags 1B] [body...]`
+- DEVICE mode: `[counter 1B] [flags 1B] [credentials 17B] [body...]`
+
+PRNG seed per mode:
+- RANDOM requests: seed = key in wire header
+- DEVICE requests: seed = **Code** (not Secret!)
+- RANDOM responses: seed = same key as request
+- DEVICE responses: seed = **Secret**
 
 ## Phase 2: Server Communication
 
@@ -103,7 +114,9 @@ The existing codebase has scaffolding (CLI, device parsing, download/install stu
 
 ## Remaining Research
 
-- [ ] **R.1** DEVICE mode request encryption — verify that DEVICE mode requests also use Secret as PRNG seed (responses confirmed working)
+- [x] **R.1** ~~DEVICE mode request encryption~~ — RESOLVED: DEVICE mode requests use **Code** as PRNG seed, responses use **Secret**
 - [ ] **R.2** NNGE decryption — device.nng encryption algorithm (key: `m0$7j0n4(0n73n71I)`, template: `ZXXXXXXXXXXXXXXXXXXZ`)
 - [ ] **R.3** SWID format_swid() — extract exact byte-to-char mapping from Ghidra (`FUN_1009c960`)
 - [ ] **R.4** Imei field — understand the `x51x4Dx30x30x30x30x31` encoding
+- [ ] **R.5** DEVICE mode credential encoding — the 17-byte credential block in request payloads. Same Name+Code always produces the same 17 bytes. Need to trace the serializer in Ghidra.
+- [ ] **R.6** Request body encoding — the igo-binary format for request bodies differs from responses (not simple length-prefixed strings). Need to trace the serializer vtable chain.

@@ -54,16 +54,12 @@ The Toolbox communicates with naviextras servers using a **custom binary protoco
 Byte 0:      0x01 (protocol version)
 Bytes 1-2:   0xC2 0xC2 (envelope marker)
 Byte 3:      Sub-type: 0x20 = unauthenticated, 0x30 = authenticated
-Byte 4:      0x00 (separator)
-Bytes 5-12:  SnakeOil key (8 bytes, big-endian uint64)
-Byte 13:     Service minor version (0x01=index, 0x0E=register, 0x19=market)
-Bytes 14-15: 0x00 0x00 (padding)
-Byte 16:     Encrypted payload starts here (NOT preceded by 0x3F — see note)
+Bytes 4-11:  SnakeOil key (8 bytes, big-endian uint64)
+Byte 12:     Service minor version (0x01=index, 0x0E=register, 0x19=market)
+Bytes 13-14: 0x00 0x00 (padding)
+Byte 15:     0x3F (end marker)
+Byte 16+:    Encrypted payload starts here
 ```
-
-> **Note**: Earlier analysis assumed byte 15 was `0x3F` marker with payload at byte 16.
-> Verified via decryption: payload at byte 16 decrypts correctly for RANDOM mode requests.
-> The `0x3F` at byte 15 is part of the header padding, not a separate marker.
 
 Response header (4 bytes):
 ```
@@ -96,8 +92,8 @@ def snakeoil(data, key_lo, key_hi):
 **Key split**: uint64 → `key_lo = key & 0xFFFFFFFF`, `key_hi = key >> 32`
 
 **Two modes:**
-- **RANDOM** (0x20): PRNG seed = key in wire header (random per request)
-- **DEVICE** (0x30): wire header has Code, PRNG seed = **Secret** (from registration)
+- **RANDOM** (0x20): PRNG seed = key in wire header (random per request). Same seed for request and response.
+- **DEVICE** (0x30): wire header has Code. Request PRNG seed = **Code**. Response PRNG seed = **Secret**.
 
 **Request**: payload at bytes 16+ encrypted with PRNG seed
 **Response**: payload at bytes 4+ encrypted with same PRNG seed
