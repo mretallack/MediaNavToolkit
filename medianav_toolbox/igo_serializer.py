@@ -12,21 +12,30 @@ DEVICE mode (subsequent requests, session established via JSESSIONID):
   [counter 1B] [flags 1B] [body...]
 
 The 17-byte credential block (D8...D9) contains the encoded credential Name.
-The encoding is a custom transform in the igo-binary serializer (nngine.dll):
-- D8 = open tag, D9 = close tag (paired markers, differ by 1 bit)
-- 15 inner bytes encode the 16-byte Name via a position-dependent transform
-- NOT XOR, SnakeOil, Blowfish, MD5, or any standard algorithm
-- Same Name always produces the same 17 bytes (deterministic, no random component)
-- Generated client-side; the block is stable across sessions
-
-For now, use extract_credential_block() to capture the block from a known-good
-request, then reuse it. The block only changes if the device is re-registered
-with a new Name.
+The encoding is: 0xD8 || (Name XOR IGO_CREDENTIAL_KEY).
+The 16-byte XOR key was extracted by comparing known Name/credential pairs
+across multiple captured sessions.
 
 Ref: toolbox.md §2, functions.md (FUN_100b3a60)
 """
 
 import struct
+
+IGO_CREDENTIAL_KEY = bytes.fromhex("6935b733a33d02588bb55424260a2fb5")
+
+
+def build_credential_block(name_bytes: bytes) -> bytes:
+    """Build the 17-byte credential block from a 16-byte Name.
+
+    Args:
+        name_bytes: 16-byte credential Name (from registration response)
+
+    Returns:
+        17-byte credential block: 0xD8 || (Name XOR IGO_CREDENTIAL_KEY)
+    """
+    if len(name_bytes) != 16:
+        raise ValueError(f"Name must be 16 bytes, got {len(name_bytes)}")
+    return b'\xd8' + bytes(a ^ b for a, b in zip(name_bytes, IGO_CREDENTIAL_KEY))
 
 
 def build_boot_request_body(counter: int = 0x06, country: int = 0) -> bytes:
