@@ -98,11 +98,14 @@ Credential block encoding:
 
 - [ ] **2.4** Implement authenticated API calls (DEVICE mode)
   - ✅ `POST /services/register/rest/1/hasActivatableService` — WORKING
-  - [ ] `POST /rest/1/login` (market) — **BLOCKED**: needs igo-binary request body encoder
-  - [ ] `POST /rest/1/sendfingerprint` — **BLOCKED**: needs igo-binary request body encoder
-  - [ ] `POST /services/register/rest/1/get_device_model_list` — **BLOCKED**: needs igo-binary request body encoder
-  - [ ] `POST /services/register/rest/1/get_device_descriptor_list` — **BLOCKED**: needs igo-binary request body encoder
+  - ✅ `POST /rest/1/login` (market) — WORKING (replayed captured body)
+  - ✅ `POST /rest/1/getprocess` — WORKING (empty body + credential block)
+  - [ ] `POST /rest/1/sendfingerprint` — needs replayed captured body
+  - [ ] `POST /services/register/rest/1/get_device_model_list` — needs replayed captured body
+  - [ ] `POST /services/register/rest/1/get_device_descriptor_list` — needs replayed captured body
   - All use Code in header and as encryption seed, Secret for response decryption
+  - **Workaround**: replay captured request bodies for calls with non-empty payloads
+  - **Full solution**: reverse the igo-binary request body encoder (R.6)
 
 ## Phase 3: Content Pipeline
 
