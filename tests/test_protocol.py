@@ -65,11 +65,11 @@ class TestBuildRequest:
         assert struct.unpack(">Q", req[4:12])[0] == DEVICE_CODE
         assert req[12] == SVC_REGISTER
 
-    def test_device_mode_encrypts_with_secret(self):
+    def test_device_mode_encrypts_with_code(self):
         payload = b"\x00"
         req = build_request(payload, SVC_REGISTER, code=DEVICE_CODE, secret=DEVICE_SECRET)
         encrypted = req[16:]
-        decrypted = snakeoil(encrypted, DEVICE_SECRET)
+        decrypted = snakeoil(encrypted, DEVICE_CODE)
         assert decrypted == payload
 
     def test_auto_random_seed(self):

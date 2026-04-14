@@ -14,7 +14,7 @@ from medianav_toolbox.crypto import snakeoil
 
 # Auth modes
 AUTH_RANDOM = 0x20  # pre-registration, random key
-AUTH_DEVICE = 0x30  # post-registration, Code in header / Secret as seed
+AUTH_DEVICE = 0x30  # post-registration, Code in header AND as encryption seed
 
 # Service minor versions
 SVC_INDEX = 0x01
@@ -50,8 +50,8 @@ def build_request(
         payload: igo-binary body to encrypt
         service_minor: SVC_INDEX, SVC_REGISTER, or SVC_MARKET
         seed: PRNG seed for RANDOM mode (auto-generated if None and no code/secret)
-        code: Credentials.Code for DEVICE mode header
-        secret: Credentials.Secret for DEVICE mode PRNG seed
+        code: Credentials.Code for DEVICE mode (header key AND encryption seed)
+        secret: Credentials.Secret for DEVICE mode response decryption
 
     Returns:
         Complete wire bytes ready to send
@@ -59,7 +59,7 @@ def build_request(
     if code is not None and secret is not None:
         auth_mode = AUTH_DEVICE
         header_key = code
-        prng_seed = secret
+        prng_seed = code
     else:
         auth_mode = AUTH_RANDOM
         prng_seed = seed if seed is not None else _generate_random_seed()
