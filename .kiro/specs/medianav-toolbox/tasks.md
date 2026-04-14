@@ -171,3 +171,76 @@
   - `black --check`, `isort --check-only`
   - `pytest tests/ -v --ignore=tests/integration`
   - Integration tests as separate job (needs secrets)
+
+## Phase 9: igo-binary Encoder & Live Market Calls
+
+> Based on field layouts traced from Ghidra vtables (toolbox.md §20)
+
+- [x] **9.1** Implement igo-binary field encoders in `api/igo_binary.py`
+  - `encode_byte`, `encode_int16`, `encode_int32`, `encode_int64`, `encode_string`
+  - `encode_bool`, `encode_array`, `encode_empty_array`
+  - `encode_container(type_id, fields)`, `encode_message(fields)`
+  - Tests: `tests/test_igo_binary.py` (31 tests total) ✅
+
+- [x] **9.2** Implement LOGIN encoder
+  - `encode_login(username, password, brand, device_type, appcid, ...)` → bytes
+  - 17 fields: 5 strings, 5 bytes, 2 int16, 2 int32, 1 array (toolbox.md §20.2)
+  - Tests: envelope, field count, contains username/password/brand/appcid ✅
+
+- [x] **9.3** Implement GET_PROCESS encoder
+  - `encode_get_process(flag=0)` → bytes
+  - 1 field: byte flag (toolbox.md §20.1)
+  - Tests: minimal encoding, correct length (14 bytes) ✅
+
+- [x] **9.4** Implement SEND_DRIVES encoder
+  - `encode_send_drives(drives)` → bytes
+  - 5 fields: byte, 2×int32, array of drive objects, byte (toolbox.md §20.4)
+  - Also implemented: `encode_send_fingerprint`, `encode_send_backups`,
+    `encode_send_error`, `encode_send_md5`, `encode_send_sgn_file_validity` ✅
+
+- [ ] **9.5** Test encoders against live API (LOGIN) — BLOCKED
+  - Our encoded LOGIN gets 412 from index v3 (valid format, missing device data)
+  - The container structure is parsed correctly (not 500)
+  - But the server can't find device identification in our payload
+  - Market call paths (`/login`, `/getprocess`) are NOT URL paths (all return 404)
+  - The call routing must be embedded in the binary structure
+  - **Blocker:** Need to determine how the serializer wraps the arg + path into
+    the final wire format. The Ghidra serializer uses virtual dispatch through
+    `FUN_101b41b0` lookup table — the actual encoder function is resolved at runtime.
+  - **Wine doesn't work:** The exe is PE32 (32-bit) but Wine 10.10 runs in wow64
+    mode which crashes on it. Docker with wine also fails. See toolbox.md §19.5.
+  - **Next steps:**
+    1. Install 32-bit Wine (not wow64) + Xvfb, or use a Windows VM with Wireshark
+    2. Or: deeper Ghidra tracing of the serializer vtable chain
+    3. Or: brute-force different binary structures against the live API
+
+## Phase 10: Response Decoders & Catalog
+
+- [ ] **10.1** Implement igo-binary response decoder
+  - Generic field decoder: read type tag → decode value
+  - Handle nested objects and arrays
+  - Tests: decode real boot response field-by-field
+
+- [ ] **10.2** Implement GET_PROCESS response parser
+  - Extract download URLs, content IDs, sizes, MD5s
+  - Build `ProcessInfo` with `list[DownloadItem]`
+  - Tests: parse mocked response, parse real response
+
+- [ ] **10.3** Update catalog to use real server data
+  - `catalog()` calls login → get_process → parse response
+  - Compare with installed .stm files
+  - Show available updates vs installed content
+  - Tests: end-to-end catalog with mocked market calls
+
+## Phase 11: End-to-End Download & Install
+
+- [ ] **11.1** Wire up full download pipeline
+  - `Toolbox.download()` uses real download URLs from GET_PROCESS
+  - Download with progress, MD5 verify, cache
+  - Tests: download single real item
+
+- [ ] **11.2** Wire up full install pipeline
+  - `Toolbox.install()` writes to USB
+  - `Toolbox.sync()` runs complete flow
+  - POST /sendprocessstatus and /sendbackups after install
+  - Tests: end-to-end sync dry run

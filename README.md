@@ -1,5 +1,24 @@
 # MediaNav Toolbox
 
+> **⚠️ WARNING — USE AT YOUR OWN RISK ⚠️**
+>
+> This software is **experimental** and **completely unofficial**. It was built by
+> reverse-engineering proprietary protocols and could behave in unexpected ways.
+>
+> **This tool could:**
+> - **Brick your head unit** — corrupted updates may render your MediaNav permanently inoperable
+> - **Void your warranty** — using unofficial tools to modify your head unit is not sanctioned by Dacia, Renault, or NNG
+> - **Damage your vehicle** — the head unit is connected to vehicle systems; a bad update could have unpredictable consequences
+> - **Violate terms of service** — using this tool may breach your naviextras.com account terms
+> - **Produce incorrect map/navigation data** — potentially leading to dangerous driving situations
+>
+> The authors accept **no responsibility whatsoever** for any damage to your head unit,
+> vehicle, naviextras.com account, or anything else that results from using this software.
+> If your car catches fire, your maps point you into a lake, or this somehow triggers
+> World War 3 — that's on you.
+>
+> **You have been warned. Seriously.**
+
 A Linux/Python replacement for the Windows-only **Dacia MediaNav Evolution Toolbox** — the official app for updating maps, POIs, speed cameras, and voice packs on Dacia/Renault MediaNav head units.
 
 This project reverse-engineers the NaviExtras API protocol used by the original Windows app and reimplements it as a Python library and CLI tool.

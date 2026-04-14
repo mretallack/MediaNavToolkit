@@ -26,7 +26,7 @@ download_cache/
 .DS_Store
 Thumbs.db
 
-# Analysis artifacts (large binaries, decompiled output)
+# Analysis artifacts (large binaries, decompiled output, user data)
 analysis/extracted/
 analysis/DaciaMediaNavEvolutionToolbox-inst.exe
 analysis/main_exe_decompiled.c
@@ -34,6 +34,16 @@ analysis/plugin_decompiled.c
 analysis/nngine_decompiled.c
 analysis/usb_drive/
 analysis/capture/
+analysis/DaciaAutomotive.zip
+analysis/DaciaAutomotive_extracted/
+analysis/flows/
+analysis/flows_decoded/
+analysis/http_dump_decrypted/
+analysis/native_serializer/
+analysis/usb-images/
+
+# Harness (Docker/Wine build artifacts)
+harness/
 
 # Capture artifacts (mitmproxy, wine logs)
 capture/

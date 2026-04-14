@@ -1,573 +1,442 @@
 # Dacia MediaNav Evolution Toolbox — Reverse Engineering Notes
 
-This document traces through the Ghidra decompiled output to understand exactly what the toolbox app does.
+## Data Sources
 
-**Source files:**
-- `main_exe_decompiled.c` — DaciaMediaNavEvolutionToolbox.exe (2,931 functions)
-- `plugin_decompiled.c` — plugin.dll (438 functions)
-- `nngine_decompiled.c` — nngine.dll (13,381 functions)
-
----
-
-## 1. Main EXE — Entry Point & Initialization
-
-**File:** `main_exe_decompiled.c`
-
-### 1.1 Plugin Loading (line 17–84)
-
-The exe's first action is loading `plugin.dll` and resolving its exports:
-
-```c
-// FUN_004011f0 (line 17)
-pHVar1 = LoadLibraryA("plugin.dll");
-
-// FUN_00401250 (line 50–84) — resolves 4 exported functions:
-GetProcAddress(DAT_004902f4, "brand_has_value");   // line 61
-GetProcAddress(DAT_004902f4, "brand_get_value");   // line 69
-GetProcAddress(DAT_004902f4, "brand_set_value");   // line 77
-GetProcAddress(DAT_004902f4, "brand_free_buffer"); // line 82
-```
-
-### 1.2 CEF Initialization (line 23154)
-
-```c
-iVar5 = cef_initialize(param_1, -(uint)(param_2 != 0) & param_2 + 4U, puVar4);
-```
-
-### 1.3 Main Loop (line 16107–16108)
-
-```c
-cef_run_message_loop();   // blocks until app exits
-cef_shutdown();
-```
-
-The exe is a thin CEF shell. All business logic lives in nngine.dll.
+| Source | Location | Description |
+|--------|----------|-------------|
+| Toolbox installer | `analysis/extracted/` | Extracted NSIS installer (nngine.dll, plugin.dll, exe) |
+| Ghidra decompile | `analysis/nngine_decompiled.c` | 13,381 functions from nngine.dll |
+| USB drive image | `analysis/usb_drive/disk/` | NaviSync data from head unit |
+| Windows AppData | `analysis/DaciaAutomotive_extracted/` | `%APPDATA%/DaciaAutomotive` cache |
+| HTTP dump (encrypted) | `analysis/DaciaAutomotive_extracted/DaciaAutomotive/http_dump/` | Blowfish-encrypted XML of every API call |
+| HTTP dump (decrypted) | `analysis/http_dump_decrypted/` | Decrypted XML from session 69BAC5EC |
+| mitmproxy flows | `analysis/flows/flows` (75 flows), `analysis/flows/flows-complete` (611 flows) | Live wire captures |
+| mitmproxy decoded | `analysis/flows_decoded/` | Raw request/response binaries |
+| Fingerprints | `analysis/DaciaAutomotive_extracted/DaciaAutomotive/tmp/fingerprints/` | device.nng, fingerprint.xml, licenses |
+| Toolbox logs | `analysis/DaciaAutomotive_extracted/DaciaAutomotive/log/` | Encrypted .tblog files |
 
 ---
 
-## 2. Plugin.dll — Configuration
+## 1. Application Architecture
 
-**File:** `plugin_decompiled.c`
+The Toolbox is a CEF (Chromium Embedded Framework) app:
 
-### 2.1 Exported Functions
+- `DaciaMediaNavEvolutionToolbox.exe` — thin CEF shell, loads plugin.dll
+- `plugin.dll` — brand configuration, registry access (`SOFTWARE\DaciaAutomotive\Toolbox4`)
+- `nngine.dll` — all business logic (13,381 functions), protocol handling, device management
 
-| Export | Line | Returns |
-|--------|------|---------|
-| `brand_group_mutex_name()` | 2 | `"Renault-Dacia.Agent.Mutex"` |
-| `brand_registry_root()` | 11 | `"SOFTWARE\\DaciaAutomotive\\Toolbox4"` |
-| `brand_window_class()` | 20 | `L"DaciaAutomotive.MsgWindow.Class"` |
-| `brand_window_title()` | 29 | `L"DaciaAutomotive.MsgWindow.Title"` |
-| `brand_has_value()` | 40 | Check if config key exists |
-| `brand_get_value()` | 94 | Get config value by key |
-| `brand_set_value()` | 154 | Set config value |
-| `brand_free_buffer()` | 237 | Free allocated buffer |
+### Brand Configuration (from plugin.dll)
 
-### 2.2 Configuration Tree (FUN_100015c0, line 444–1190)
-
-| Section | Key | Value | Line |
-|---------|-----|-------|------|
-| `naviextras` | `boot_service_address` | `https://zippy.naviextras.com/services/index/rest` | 486–537 |
-| `toolbox_ui` | `live_domain` | `naviextras.com` | 548–564 |
-| `services` | `brand` | `DaciaAutomotive` | 630–660 |
-| `services` | `device_type` | `DaciaToolbox` | 670–672 |
-| `services` | `timeout_idle` | `30000` | ~700 |
-| `device_manager` | `model_filter` | `Dacia_ULC` | ~740 |
-| `toolbox` | `display_version` | `5.28.2026041167` | ~770 |
-| `toolbox_ui` | `appname` | `Dacia Media Nav Evolution Toolbox` | ~1000 |
-| `self_update` | `address` | `https://zippy.naviextras.com/services/selfie/rest/1/update` | 1090 |
-| `toolbox_ui` | `background_color` | `0xFFF5F5F5` | ~1160 |
-| `toolbox` | `legacy_brand` | `Dacia` | ~1180 |
+| Key | Value |
+|-----|-------|
+| Brand | `DaciaAutomotive` |
+| Model filter | `Dacia_ULC` |
+| Registry | `SOFTWARE\DaciaAutomotive\Toolbox4` |
+| License file | `DaciaAutomotive_ToolboxAgent_win.lyc` |
+| Mutex | `Renault-Dacia.Agent.Mutex` |
+| Product name | `Dacia Media Nav Evolution Toolbox` |
 
 ---
 
-## 3. nngine.dll — Module Registration
+## 2. Wire Protocol
 
-### 3.1 Module Table (lines 100–2400)
+### Overview
 
-| Module Name | Factory Function | Line |
-|-------------|-----------------|------|
-| `TARGET_FS_FACTORY` | `FUN_10026640` | 175 |
-| `AUTH_HTTP_CLIENT` | `FUN_1008b2f0` | 422 |
-| `NAVIEXTRAS_INDEX_SERVICE` | `FUN_1008b350` | 403 |
-| `HTTP_SSE_CREATOR` | `FUN_10032660` | 2132 |
-| `HTTP_LOG_ASSISTANT` | `FUN_10056a10` | 2151 |
-| `SIMPLE_HTTP_CLIENT` | `FUN_100881d0` | 2170 |
-| `HTTP_AUTHENTICATION_MANAGER` | `FUN_1000dcf0` | 2189 |
-| `HTTP_PROXY_SETTINGS_MANAGER` | `FUN_100b3840` | 2208 |
-| `HTTP_COOKIE_SERVER` | `FUN_1008fa70` | 2227 |
-| `HTTP_CLIENT` | `FUN_100122f0` | 2246 |
-| `CERTIFICATE_CHECKER_PASSIVE` | `FUN_10196110` | 2265 |
+The Toolbox communicates with naviextras servers using a **custom binary protocol** with XML semantics. The protocol has three layers:
+
+1. **ProtocolEnvelopeRO** — binary header (16 bytes)
+2. **SnakeOil encryption** — custom cipher on the payload
+3. **igo-binary serialized XML** — the actual request/response data
+
+### Binary Header Format
+
+```
+Byte 0:      0x01 (protocol version)
+Bytes 1-2:   0xC2 0xC2 (envelope marker)
+Byte 3:      Sub-type: 0x20 = unauthenticated, 0x30 = authenticated
+Byte 4:      0x00 (separator)
+Bytes 5-12:  SnakeOil key (8 bytes, big-endian uint64)
+Byte 13:     Service minor version (0x01=index, 0x0E=register, 0x19=market)
+Bytes 14-15: 0x00 0x00 (padding)
+Byte 16:     Encrypted payload starts here (NOT preceded by 0x3F — see note)
+```
+
+> **Note**: Earlier analysis assumed byte 15 was `0x3F` marker with payload at byte 16.
+> Verified via decryption: payload at byte 16 decrypts correctly for RANDOM mode requests.
+> The `0x3F` at byte 15 is part of the header padding, not a separate marker.
+
+Response header (4 bytes):
+```
+Byte 0:    0x01 (protocol version)
+Byte 1:    0x00 (response flag)
+Byte 2:    0xC2 (envelope marker)
+Byte 3:    Mode byte: 0x6B = RANDOM, 0xBC = DEVICE
+Byte 4+:   Encrypted payload
+```
+
+### SnakeOil Encryption (FULLY REVERSED)
+
+**Algorithm**: xorshift128 PRNG stream cipher (`FUN_101b3e10` at 0x101b3e30).
+
+```python
+M = 0xFFFFFFFF
+def snakeoil(data, key_lo, key_hi):
+    result = bytearray(len(data))
+    eax, esi = key_lo, key_hi
+    for i in range(len(data)):
+        edx = (((esi << 21) | (eax >> 11)) ^ esi) & M
+        ecx = (((eax << 21) & M) ^ eax) & M
+        ecx = (ecx ^ (edx >> 3)) & M
+        esi = ((((edx << 4) | (ecx >> 28)) & M) ^ edx) & M
+        eax = (((ecx << 4) & M) ^ ecx) & M
+        result[i] = data[i] ^ (((esi << 32) | eax) >> 23) & 0xFF
+    return bytes(result)
+```
+
+**Key split**: uint64 → `key_lo = key & 0xFFFFFFFF`, `key_hi = key >> 32`
+
+**Two modes:**
+- **RANDOM** (0x20): PRNG seed = key in wire header (random per request)
+- **DEVICE** (0x30): wire header has Code, PRNG seed = **Secret** (from registration)
+
+**Request**: payload at bytes 16+ encrypted with PRNG seed
+**Response**: payload at bytes 4+ encrypted with same PRNG seed
+
+**Response header byte 3**: `0x6B` = RANDOM mode, `0xBC` = DEVICE mode
+
+**Verified decryptions:**
+- Boot response → service URLs (`https://zippy.naviextras.com/...`) ✓
+- Registration response → Credentials (Name, Code, Secret) ✓
+- Model list response → all 29 device model names ✓
+- hasActivatableService response → single `0x00` byte (false) ✓
+
+### XML Semantics (from decrypted http_dump)
+
+Each request has this XML structure:
+```xml
+<ProtocolEnvelopeRO>
+  <Type>BINARY</Type>
+  <Version>1</Version>
+  <Response>false</Response>
+  <SnakeOil>
+    <Crypt>RANDOM|DEVICE</Crypt>
+    <Key>{numeric_key}</Key>
+    <Secret>{secret}</Secret>  <!-- only in DEVICE mode -->
+  </SnakeOil>
+  <ServiceMinor>{version}</ServiceMinor>
+  <RequestId>{id}</RequestId>
+</ProtocolEnvelopeRO>
+<RequestEnvelopeRO>
+  <Credentials>  <!-- only in authenticated requests -->
+    <Name>{credential_name}</Name>
+    <Code>{credential_code}</Code>
+  </Credentials>
+</RequestEnvelopeRO>
+
+<{OperationName}Arg>
+  {request fields}
+</{OperationName}Arg>
+```
+
+### HTTP Headers
+
+```
+User-Agent: DaciaAutomotive-Toolbox-{version}
+Content-Length: {length}
+Host: {host}
+Cookie: JSESSIONID={session}  (after first response)
+```
+
+No `Content-Type` header is sent for the binary protocol.
 
 ---
 
-## 4. HTTP Communication
+## 3. API Endpoints & Flow
 
-### 4.1 Proxy & User-Agent (line 332887)
+### Service URLs (from boot cache)
 
-```c
-iVar5 = WinHttpOpen(L"WinHTTP ToolBox/1.0", 0, 0, 0, 0);
-iVar6 = WinHttpGetIEProxyConfigForCurrentUser(&local_58);
+| Service | URL |
+|---------|-----|
+| index | `https://zippy.naviextras.com/services/index/rest/3` |
+| register | `https://zippy.naviextras.com/services/register/rest/1` |
+| market | `https://dacia-ulc.naviextras.com/rest/1` |
+| selfie | `https://zippy.naviextras.com/services/selfie/rest/1` |
+| store | `https://zippy.naviextras.com/services/store/rest/1` |
+
+### Startup Flow (from mitmproxy capture)
+
+```
+1. POST /selfie/rest/1/update          (JSON, plaintext version check)
+2. POST /index/rest/3/boot             (get service URLs)
+3. POST /register/rest/1/device        (register device → get Credentials)
+4. POST /register/rest/1/hasActivatableService
+5. POST /index/rest/3                  (get full service catalog)
+6. POST /rest/1/login                  (market login)
+7. POST /register/rest/1/get_device_descriptor_list
+8. POST /rest/1/sendfingerprint        (send device fingerprint, ~13KB)
+9. POST /register/rest/1/get_device_model_list
 ```
 
-### 4.2 SSL/TLS
+### Selfie Update (plaintext JSON)
 
-Uses bundled OpenSSL (`libssl-1_1.dll`). Loads Windows root certificates into OpenSSL trust store (line 333194).
-
-### 4.3 HTTP Headers
-
-- `User-Agent: WinHTTP ToolBox/1.0`
-- `X-Device` header (line 111407)
-- `Content-Type: application/x-binary` (for market calls)
-- CONNECT tunneling for HTTPS through proxy (line 338581)
-
-### 4.4 Auth Modes (line 119090–119278)
-
-```c
-// Two modes:
-"full-auth"    // full authentication (default for LOGIN)
-"device-auth"  // device-only authentication (subsequent calls)
+```json
+// Request
+{"version": 2026041167, "alias": "Dacia_ULC", "platform": "win32", "lang": "en"}
+// Response
+null
 ```
+
+### Device Registration
+
+Request:
+```xml
+<RegisterDeviceArg>
+  <Device>
+    <BrandName>DaciaAutomotive</BrandName>
+    <ModelName>DaciaToolbox</ModelName>
+    <Swid>CK-153G-PF9R-KB6D-W8B0</Swid>
+    <Imei>x51x4Dx30x30x30x30x31</Imei>
+    <IgoVersion>9.35.2.0</IgoVersion>
+    <FirstUse>1970.01.01 00:00:00</FirstUse>
+    <Appcid>1107298750</Appcid>
+    <UniqId>BF7AE9C2D033892B19FB511A6F206AC9</UniqId>
+  </Device>
+</RegisterDeviceArg>
+```
+
+Response:
+```xml
+<RegisterDeviceRet>
+  <Credentials>
+    <Name>FB86ACD6EBA8F54A93C4286CE077D06C</Name>
+    <Code>3745651132643726</Code>
+    <Secret>3037636188661496</Secret>
+  </Credentials>
+  <LicenseInfo>
+    <MaxAge>300</MaxAge>
+  </LicenseInfo>
+</RegisterDeviceRet>
+```
+
+After registration, all subsequent requests use:
+- `Code` in the wire header (bytes 5-12) and in `RequestEnvelopeRO/Credentials`
+- `Secret` as the SnakeOil PRNG seed for encryption/decryption
+- `Name` + `Code` in the `RequestEnvelopeRO/Credentials` XML
 
 ---
 
-## 5. Boot & Catalog Flow
+## 4. SWID (Software ID)
 
-### 5.1 Boot Service (line 142100–142250)
+### Format
 
-```c
-FUN_10166560(&local_b4, "naviextras", "boot_service_address");
-FUN_101bad80("/boot");
-FUN_101bae20(L"service_boot_v3");
-```
+`CK-XXXX-XXXX-XXXX-XXXX` — 4 groups of 4 uppercase alphanumeric characters.
 
-Flow: Read config → append `/boot` → tag as `service_boot_v3` → send GET with `device_id`.
+Example: `CK-153G-PF9R-KB6D-W8B0`
 
-### 5.2 Boot Response (line 114250–114420)
+### Computation
 
-Parses response to extract `index_service_address` and connect server address.
+The SWID identifies the **PC running the Toolbox**, not the head unit. Derived from the PC's drive serial:
 
-### 5.3 Catalog Fetch (line 142287–142360)
+1. `FUN_100bd450` gets drive identifier:
+   - **Primary**: `DeviceIoControl(\\.\PhysicalDrive0, IOCTL_STORAGE_QUERY_PROPERTY)` → physical drive serial as hex
+   - **Fallback**: `GetVolumeInformationW("C:\\")` → volume serial as `sprintf("%u", serial)`
+2. `FUN_100bd380` wraps in `"SPEEDx%sCAM"` salt, computes MD5 → 16 bytes
+3. `FUN_1009c960` formats as `CK-XXXX-XXXX-XXXX-XXXX`
 
-```c
-FUN_101bae20(L"service_catalog_v3");
-```
+### Storage
 
-After boot, fetches catalog using the index URL from boot response.
-
----
-
-## 6. Market API Calls
-
-### 6.1 Call Sequence (lines 15591–22308)
-
-| Order | Call | Sent Line | Response Line |
-|-------|------|-----------|---------------|
-| 1 | `LOGIN` | 16339 | 26333 |
-| 2 | `SEND_DRIVES` | 18745 | 26750 |
-| 3 | `SEND_FINGERPRINT` | 22308 | — |
-| 4 | `SEND_MD5` | 18984 | — |
-| 5 | `SEND_SGN_FILE_VALIDITY` | 19182 | — |
-| 6 | `SEND_DEVICE_STATUS` | 22243 | — |
-| 7 | `GET_PROCESS` | 15591 | 26194 |
-| 8 | `SEND_BACKUPS` | 16918 | 26472 |
-| 9 | `SEND_PROCESS_STATUS` | 19317 | — |
-
-### 6.2 Error Handling (line 26217)
-
-```c
-"ERROR on response of market call \"%s\"! MainError: '%d' SubError: '%d (%s)'"
-```
+In `service_register_v1.sav`, SWIDs are stored **base32-encoded** with `CW`/`CP` prefix:
+- `CW-UQAQ-YAEQ-37QI-AA7A-QYQM` (5 groups of 4 chars, base32 of 12 bytes)
+- These decode to `CK{uint32}-{uint32}-{uint32}` format for server communication
 
 ---
 
-## 7. Device Recognition
+## 5. Device Recognition
 
-### 7.1 device.nng Reading (line 70730)
+### device.nng
 
-```c
-uVar3 = FUN_101c00a0(L"device.nng");
-```
-
-### 7.2 Recognition Flow
+Located at `NaviSync/license/device.nng` on the USB drive. Contains device identity encrypted with NNGE format.
 
 ```
-1. Read device.nng from USB: NaviSync/license/device.nng
-2. XOR-decode using 4096-byte table (see §17)
-3. Extract APPCID (offset 0x5C, LE 32-bit) → "APPCID found: %d" (line 77400)
-4. Extract SKU IDs (via filter_factory_sku) → "SKU IDs found: %s" (line 77758)
-5. Extract BrandMD5 → "BrandMD5 found in device.nng: %s" (line 77416)
-6. Match APPCID → "Device models based on APPCID: %s" (line 79640)
-7. Match SKU IDs → "Device models based on SKU IDs: %s" (line 79767)
-8. Match BrandMD5 → "Device models based on Brand MD5: %s" (line 79884)
-9. Result: "Device recognition success, recognized device ID: '%d' Name: '%s'" (line 77454)
+Offset 0x00-0x0F: NNG header
+Offset 0x10-0x2F: Device metadata
+Offset 0x30-0x3F: Timestamp data (LE16: 0x0312=786, 0x07EA=2026)
+Offset 0x40-0x4F: Encrypted data block (16 bytes)
+Offset 0x50-0x53: "NNGE" signature
+Offset 0x54-0x57: Version 0x20070619
+Offset 0x58-0x5B: Nonce 0x65FAB84A
+Offset 0x5C-0x5F: APPCID 0x42000B53 (1107299155)
+Offset 0x60-0x63: Checksum 0xC44D75AC
+Offset 0x82-0xB1: Extended encrypted data (48 bytes)
 ```
 
-### 7.3 Synctool Fingerprint Validation (line 78495–78608)
+### NNGE Encryption Keys (from DLL)
 
-```c
-"Invalid Synctool fingerprint: missing device checksum file"
-"Invalid Synctool fingerprint: MD5 mismatch"
-"Invalid Synctool fingerprint: missing drive info file"
-```
+- Key string: `m0$7j0n4(0n73n71I)` (18 bytes at 0x102c11e4)
+- Template: `ZXXXXXXXXXXXXXXXXXXZ` (at 0x102c11f8)
+
+### Model Matching
+
+The Toolbox matches device.nng against the model list using:
+1. **APPCID** — application content ID from NNGE header
+2. **SKU IDs** — factory SKU (`factorySku: 2020970` from synctool)
+3. **Brand MD5** — MD5 of `brand.txt` content
+
+Brand MD5 values:
+| Brand | MD5 |
+|-------|-----|
+| DaciaAutomotive | `1668ef160ef1fe7d41dc499bd65c1bde` |
+| LADA | `a362aa826cb7ed9facd3f0b0e9548d10` |
+| EV_Dacia | `e52acd6fd72c259a7450c476da35c477` |
 
 ---
 
-## 8. Device Registration
-
-### 8.1 Register Service (line 136314)
-
-```c
-FUN_101bad80("service_register_v1");
-```
-
-### 8.2 Register Endpoints
-
-| Path | Line | Arg Size | Purpose |
-|------|------|----------|---------|
-| `/get_device_model_list` | 66635 | 0x18 | Get known device models |
-| `/get_device_descriptor_list` | 66215 | 0x20 | Get device descriptors |
-| `/devinfo` | 124813 | 0x08 | Get device info by serial |
-| `/device` | 138401 | 0x7c | Register device (normal) |
-| `/registerdeviceandunbind` | 138307 | 0x7c | Register + unbind previous |
-
----
-
-## 9. Download Manager
-
-### 9.1 Cache Path (line 108986)
-
-```c
-FUN_10166580(local_8, "download_manager", "cache_path", "%app%/download_cache");
-```
-
-### 9.2 Download Batch (line 36694)
-
-```c
-"Download added to batch: ID = %d, Target path: %ls"
-```
-
-### 9.3 MD5 Verification
-
-```c
-"check_md5_during_file_update"   // config key
-"AcquireDownloader UpdateExpectedMD5Result: %s"
-```
-
-### 9.4 Alternative Host (line 37223)
-
-```c
-FUN_10166560(local_30, "debug", "alternative_download_host");
-```
-
----
-
-## 10. USB Drive Detection
-
-```c
-"USB drive [%ls] arrived"
-"Drive added (context ID: %d, root ID: %ls)"
-"Drive [%ls] removed"
-```
-
----
-
-## 11. Content Installation (Synctool)
-
-### 11.1 Synctool Types
-
-`CLASSIC_SYNCTOOL`, `EXTENDED_SYNCTOOL`, `EXTENDED_SYNCTOOL_WITHOUT_HU_MANAGE_CONTENT`, `LEGACY_SYNCTOOL`, `NO_SYNCTOOL`
-
-### 11.2 Shadow Files (*.stm)
-
-```c
-FUN_101bae20(L"*.stm");   // line 45941, 46465
-FUN_101bae20(L"*.md5");   // line 45936
-```
-
-### 11.3 Update Checksum
-
-```c
-FUN_101c0210(PTR_u_update_checksum_md5_1030b0ec);
-// Logs: "Update checksum: %s"
-```
-
-`update_checksum.md5` on USB root signals head unit that new content is available.
-
----
-
-## 12. Fingerprint Management (lines 53797–60729)
-
-```c
-FUN_101c00a0(L"fingerprints");
-FUN_101c0210(PTR_u_fingerprint_xml_1030b110);
-FUN_101baad0("encode_fingerprint");
-```
-
-Stored in `fingerprints/` on USB. Format: `fingerprint.xml`. Validated by MD5 + device checksum + drive info file.
-
----
-
-## 13. Self-Update
-
-Compares `engine_version.toolbox` with `current_version.self_update`.
-URL: `https://zippy.naviextras.com/services/selfie/rest/1/update`
-
----
-
-## 14. License Management
-
-```c
-"Failed to get new licenses after activation, error codes: %d/%d"
-"Cannot persist registration data to device: device id=%d"
-```
-
-License types: `BinaryLicense`, `ClientLicense`, `GetFactoryLicensesArg/Ret`, `GetLicenseInfoArg/Ret`.
-
----
-
-## 15. Market Call Implementation Pattern
-
-Each market call follows an identical pattern (lines 155950–156900+):
-
-```
-1. Check service available: (**(code **)*param_1)()
-2. Check serialization: FUN_101a98d0(0, 0)
-3. Create request arg: FUN_100baXXX(param_2) — specific factory per call
-4. Set URL path: FUN_101bad80("/sendXXX")
-5. Build request: FUN_10093010(session, &callback, connection+7, arg, buffer, 0)
-6. Send: FUN_100902e0(result, buffer)
-```
-
-### 15.1 Market Call → Function Mapping
-
-| Call | Path | Arg Factory | Arg Size | Line |
-|------|------|-------------|----------|------|
-| LOGIN | `/login` | `FUN_100ba130` | 76 bytes | 155845 |
-| GET_PROCESS | `/getprocess` | inline | 8 bytes | 155713 |
-| SEND_BACKUPS | `/sendbackups` | `FUN_100ba210` | 32 bytes | 155977 |
-| SEND_DEVICE_STATUS | `/senddevicestatus` | `FUN_100ba280` | 240 bytes | 156111 |
-| SEND_DRIVES | `/senddrives` | `FUN_100ba460` | 32 bytes | 156243 |
-| SEND_ERROR | `/senderror` | `FUN_100ba4d0` | 32 bytes | 156375 |
-| SEND_FILE_CONTENT | `/sendfilecontent` | `FUN_100ba530` | 80 bytes | 156507 |
-| SEND_FINGERPRINT | `/sendfingerprint` | `FUN_100ba070` | 76 bytes | 156646 |
-| SEND_MD5 | `/sendmd5` | `FUN_100ba600` | 40 bytes | 156779 |
-| SEND_PROCESS_STATUS | `/sendprocessstatus` | `FUN_100ba680` | 80 bytes | 156911 |
-| SEND_REPLACEMENT_DRIVES | `/sendreplacementdrives` | `FUN_100ba700` | 40 bytes | 157043 |
-| SEND_SGN_FILE_VALIDITY | `/sendsgnfilevalidity` | `FUN_100ba780` | 36 bytes | 157175 |
-| SETTINGS | `/settings` | — | — | 157319 |
-
-### 15.2 Complete API Path List
-
-**Index/Market service** (appended to index URL):
-`/boot`, `/login`, `/getprocess`, `/sendbackups`, `/senddevicestatus`, `/senddrives`, `/senderror`, `/sendfilecontent`, `/sendfingerprint`, `/sendmd5`, `/sendprocessstatus`, `/sendreplacementdrives`, `/sendsgnfilevalidity`, `/settings`
-
-**Register service** (`/services/register/rest/1`):
-`/get_device_model_list`, `/get_device_descriptor_list`, `/devinfo`, `/device`, `/registerdeviceandunbind`
-
-**License/Connected services**:
-`/license`, `/licenses`, `/licinfo`, `/activateService`, `/hasActivatableService`, `/delegator`, `/scratch`
-
----
-
-## 16. Application Lifecycle (PROGRAM_DIRECTOR)
-
-**Module:** `PROGRAM_DIRECTOR` (line 1809, factory `FUN_10014d00`)
-
-```
-1. INIT       → Load plugin.dll, CEF, nngine modules
-2. BOOT       → GET {boot_url}/boot → service URLs
-                 GET {index_url} → content catalog
-3. DETECT     → USB drive → device.nng → XOR decode → APPCID/SKU/BrandMD5
-4. REGISTER   → /get_device_model_list → /devinfo → /device
-5. MARKET     → /login → /senddrives → /sendfingerprint → /getprocess
-6. DOWNLOAD   → download_cache, batch, MD5 verify
-7. INSTALL    → .stm + .md5 + update_checksum.md5
-8. COMPLETE   → synctool validates, licenses updated, fingerprint updated
-```
-
-### 16.1 Task Types
-
-`RegisterDeviceTask`, `DrivesTask`, `SendFingerprintTask`, `SgnCheckTask`, `ComputeMd5Task`, `DownloadTask`, `InstallTask`, `BackupTask`, `RestoreTask`, `DeleteBackupTask`, `FileContentTask`, `ReplacementTask`, `LanguageTask`, `UploadTask`, `SendLogTask`, `PollTask`, `SleepTask`, `CancelProcessTask`
-
----
-
-## 17. XOR Tables & device.nng Decoding
-
-### 17.1 Table Locations (extracted from nngine.dll)
-
-| Table | Virtual Address | File Offset | Size |
-|-------|----------------|-------------|------|
-| Normal | `DAT_102b1260` | `0x002b0460` | 4096 bytes |
-| China | `DAT_102b2260` | `0x002b1460` | 4096 bytes |
-
-Both in `.rdata` section (image base `0x10000000`).
-Extracted to: `analysis/xor_table_normal.bin`, `analysis/xor_table_china.bin`
-
-### 17.2 Table Selection (line 33370–33440)
-
-```c
-"Switching XOR table, no China SKU IDs found"     → DAT_102b1260 (normal)
-"Switching XOR table, China SKU ID(s) found: %s"  → DAT_102b2260 (China)
-```
-
-### 17.3 XOR Algorithm (line 453880–453960)
-
-Operates on 32-bit words, NOT byte-by-byte:
-
-```c
-// Decode: word[i] = (xor_table[(i + offset) & 0x3ff] ^ word[i]) - iVar7
-// Encode: word[i] = (word[i] + iVar7) ^ xor_table[(i + offset) & 0x3ff]
-```
-
-- `xor_table` = 1024 uint32 values (4096 bytes)
-- `offset` = chunk index (0 for first 4096 bytes, increments per chunk)
-- `iVar7` = 0 for first chunk, then `word[3]` (offset 0xC) of decoded data
-- `& 0x3ff` = modulo 1024
-
-### 17.4 XOR Stream Wrapper (FUN_10144380, line 281468)
-
-First 12 bytes (0xC) are read as header before XOR begins. The NNGE marker at offset 0x50 and APPCID at offset 0x5C are in the RAW (un-XOR'd) data.
-
-### 17.5 Normal XOR Table (first 64 bytes)
-
-```
-aa 28 1e 16 6b c3 7f ce 9c 04 1b 16 2d 19 aa ed
-3c 8f 2a 99 d9 fa be 18 48 99 55 d8 7a ee 40 94
-ef 62 a6 c2 e1 6e bd fa c6 7d 56 5e 31 a4 b6 ba
-5c 06 09 0d a0 f4 88 40 26 86 8d e2 5c e0 0f 67
+## 6. Device Model List
+
+Retrieved from `/register/rest/1/get_device_model_list`. Version: `3.857`.
+
+Each model entry contains: Id, Name, DisplayName, BrandName, AgentBrands, Applications (with Appcid), Drives (with Checks), Connections, Paths.
+
+### Dacia Models (from cached data)
+
+| Server ID | Internal Name | Display Name |
+|-----------|--------------|--------------|
+| 100661 | DaciaAutomotiveDeviceCY17_ULC4 | Media Nav Evolution late 2018 |
+| — | DaciaAutomotiveDeviceCY20_ULC4dot1 | Media Nav Evolution late 2018 |
+| — | **DaciaAutomotiveDeviceCY20_ULC4dot5** | **Media Nav Evolution late 2018** |
+| — | DaciaAutomotiveDevice | Media Nav |
+| — | DaciaAutomotiveDeviceCY13 | Media Nav |
+| — | DaciaAutomotiveDeviceCY14 | Media Nav |
+| — | DaciaAutomotiveDeviceCY15 | Media Nav |
+| — | DaciaAutomotiveDeviceCY16 | Media Nav |
+| — | DaciaAutomotiveDeviceCY17 | Media Nav |
+| — | DaciaAutomotiveDeviceCY21_ULC4dot1 | Media Nav Evolution late 2018 |
+| — | DaciaAutomotiveDeviceCY21_ULC4dot5 | Media Nav Evolution late 2018 |
+| — | DaciaAutomotiveDeviceCY22_ULC4dot5 | Media Nav Evolution late 2018 |
+| — | DaciaAutomotiveDeviceCY23_ULC4dot5 | Media Nav Evolution late 2018 |
+| — | EV_Dacia_EEU | Electric Dacia Vehicle |
+| — | EV_Dacia_WEU | Electric Dacia Vehicle |
+| — | EV_Dacia_NBI | Electric Dacia Vehicle |
+
+Our device: **DaciaAutomotiveDeviceCY20_ULC4dot5** (APPCID 0x42000B53)
+
+### Model Matching Checks
+
+Each model specifies drive checks:
+```xml
+<Checks>
+  <Method>MD5CHECK</Method>
+  <Parameters>/NaviSync/CONTENT/brand.txt</Parameters>
+  <Parameters>1668ef160ef1fe7d41dc499bd65c1bde</Parameters>
+</Checks>
+<Checks>
+  <Method>DEVICENNG</Method>
+  <Parameters>/NaviSync/license/device.nng</Parameters>
+</Checks>
 ```
 
 ---
 
-## 18. igo-binary Serialization Format
+## 7. Encryption & Keys
 
-### 18.1 Source
+### Blowfish (http_dump encryption)
 
-```
-engine\libraries\nbtapi\NNGAPI\API\Serializer.cpp  (line 482673)
-engine\libraries\nbtapi\NNGAPI\API\UnitValue.cpp   (line 510687)
-```
+- **Key**: `b0caba3df8a23194f2a22f59cd0b39ab` (16 bytes)
+- **Mode**: ECB
+- **Location in DLL**: `DAT_102af9e8`
+- **Usage**: Encrypts the http_dump XML files stored in `%APPDATA%/DaciaAutomotive/http_dump/`
 
-No public documentation exists. NNG's proprietary protocol.
-
-### 18.2 Primitive Functions
-
-| Function | Line | Operation |
-|----------|------|-----------|
-| `FUN_10242e10` | 514852 | Read uint32 (4 bytes LE) |
-| `FUN_10242e60` | 514870 | Read null-terminated string |
-| `FUN_10242dd0` | 514834 | Read N raw bytes |
-| `FUN_10056ad0` | 69206 | Write N bytes to buffer |
-
-### 18.3 Serializer Header/Footer
-
-Header (`FUN_1021ee00`, line 483311):
-```c
-write(type_byte, 1);     // 1 byte: type tag
-write(expected_count, 4); // 4 bytes: count (LE32)
+Decrypt with:
+```python
+from Crypto.Cipher import Blowfish
+key = bytes.fromhex('b0caba3df8a23194f2a22f59cd0b39ab')
+cipher = Blowfish.new(key, Blowfish.MODE_ECB)
+plaintext = cipher.decrypt(open('file.xml.enc', 'rb').read())
 ```
 
-Footer (`FUN_1021eee0`):
-```c
-write(type_byte, 1);     // 1 byte: type tag
-write(actual_count, 4);  // 4 bytes: actual count (LE32)
-```
+### SnakeOil (wire protocol encryption)
 
-### 18.4 UnitValue Type System
+See Section 2 for the full algorithm. xorshift128 PRNG stream cipher, fully reversed.
 
-Lower 6 bits (`& 0x3f`) = type ID. Upper 2 bits = flags.
+- Pre-registration (`RANDOM`): PRNG seed = random key in wire header
+- Post-registration (`DEVICE`): wire header has Code, PRNG seed = Secret
+- Encrypt function: `FUN_101b3e10` (line 382511)
+- Decrypt function: `FUN_101b3e80` (line 382540)
 
-| Type ID | Name | Notes |
-|---------|------|-------|
-| 0x00 | null/container | |
-| 0x01 | int8 | numeric |
-| 0x03 | int32 | numeric |
-| 0x04 | int64 | numeric |
-| 0x07 | string | |
-| 0x09 | bool/byte | |
-| 0x0f | array | |
-| 0x11 | object | 0x51 in boot = 0x11 + flag 0x40 |
-| 0x12 | map | |
-| 0x15 | embedded object | length-prefixed |
-| 0x16 | list | with child elements |
-| 0x47 | object reference | |
+### NNGE (device.nng encryption)
 
-Flags: `0x40` = flag bit 1, `0x80` = flag bit 2 (container/continuation)
+- Key: `m0$7j0n4(0n73n71I)` with template `ZXXXXXXXXXXXXXXXXXXZ`
+- Custom algorithm in decoder plugin chain
 
-### 18.5 Request Serialization (FUN_10093010, line 123012)
+### MD5 Usage
 
-```
-1. Initialize 240-byte request structure
-2. Increment global request counter (DAT_1031497c)
-3. FUN_101b41b0 → look up serializer for service+arg type
-4. Serializer converts arg object → igo-binary bytes
-5. FUN_10091bf0 → queue request
-```
-
-### 18.6 Content Types
-
-| Direction | Content-Type |
-|-----------|-------------|
-| Request (market calls) | `application/x-binary` |
-| Response (from server) | `application/vnd.igo-binary; v=1` |
-| Request (boot v3) | `application/json` (empty `{}`) |
-| Request (boot v2) | none (GET request) |
+- `FUN_10157d40` — standard MD5 with optional salt via param_4
+- SWID computation: MD5 of `"SPEEDx{drive_serial}CAM"`
+- Brand verification: MD5 of `brand.txt` content
+- Fingerprint: MD5 of `"toolbox_{brand}"` as UTF-16LE → hex string
 
 ---
 
-## 19. igo-binary Wire Format (Empirical)
-
-Tested against live API at `zippy.naviextras.com`.
-
-### 19.1 Minimum Valid Request
+## 8. USB Drive Structure
 
 ```
-< 6 bytes → 500 (parse error)
-≥ 6 bytes → 412 (valid format, missing device data)
-
-Format: [2 bytes envelope] [4 bytes type/version]
-Byte 5 is validated (0xFF → 500). Envelope bytes can be any value.
+NaviSync/
+├── content/
+│   └── brand.txt              ("dacia")
+├── license/
+│   ├── device.nng             (device identity, NNGE encrypted)
+│   ├── *.lyc                  (license files)
+│   ├── *.lyc.md5              (license checksums)
+│   └── *.lyc.stm              (license timestamps)
+├── save/                      (device state backups)
+│   ├── driving_log_*.dat
+│   ├── route_*.dat
+│   ├── fm_cache.txt
+│   └── ...
+└── CONTENT/
+    └── brand.txt              (uppercase path variant)
 ```
-
-### 19.2 Boot Response (350 bytes)
-
-```
-Header (11 bytes):
-  [0-1]   0x80 0x80           Envelope
-  [2-3]   0x69 0x8f           Message type ID
-  [4-7]   0x05 0x0d 0x00 0x01 Flags/version
-  [8]     0x51                Entry type (object 0x11 | flag 0x40)
-  [9]     0x80                Array marker
-  [10]    0x06                Entry count = 6
-
-Entry × 6:
-  [1B] version  [1B] name_len  [NB] name  [1B] 0x00  [1B] url_len  [NB] url
-```
-
-All 350 bytes consumed exactly by header + 6 entries. Zero remaining.
-
-### 19.3 Model List Response (10 bytes)
-
-```
-[0] 0x80  [1] 0x00  [2] 0x05  [3-7] "3.857"  [8-9] 0x00 0x00
-```
-
-### 19.4 Server Endpoint Behavior
-
-| Endpoint | 500 | 412 | 417 | 200 |
-|----------|-----|-----|-----|-----|
-| Index v3 POST | < 6 bytes | ≥ 6 bytes | — | boot `{}` |
-| Register /get_device_model_list | — | — | — | JSON `{}` |
-| Register /get_device_descriptor_list | igo-binary | — | JSON `{}` | — |
-| Register /devinfo | — | any format | — | — |
-| Register /device | igo-binary | — | — | — |
 
 ---
 
-## TODO
+## 9. Windows AppData Structure
 
-- [ ] Capture real traffic (Wine + mitmproxy) to get exact igo-binary request bytes
-- [ ] Trace LOGIN arg factory (`FUN_100ba130`, 76 bytes) field-by-field
-- [ ] Trace GET_PROCESS response parser to understand download URL format
-- [ ] Trace fingerprint.xml format
-- [ ] Trace MTP communication path (mtp.dll)
+```
+%APPDATA%/DaciaAutomotive/
+├── browser_cache/             (CEF browser cache)
+├── cache/
+│   ├── license_info/cached_license_info
+│   ├── preloads/              (zip directory caches)
+│   └── stored_bingo_cacheable/
+│       ├── service_boot_v3    (igo-binary, service URLs)
+│       └── service_catalog_v3 (igo-binary, full service catalog)
+├── download_cache/            (downloaded update files)
+│   ├── {id}/Lang_*.zip
+│   ├── {id}/*.tgz
+│   └── {id}/*.zip.md5
+├── http_dump/                 (Blowfish-encrypted XML of every API call)
+│   └── {session_id}/xml/
+│       ├── {seq}-{service}-{Operation}Arg.xml.enc
+│       └── {seq}-{service}-{Operation}Ret.xml.enc
+├── log/                       (encrypted .tblog files)
+├── save/
+│   ├── service_register_v1.sav   (SWIDs, credentials)
+│   ├── service_device_info_v1.sav (model list cache)
+│   ├── dlm_files_v2.sav
+│   └── url_address_file.sav
+└── tmp/
+    └── fingerprints/{id}/
+        ├── device.nng
+        ├── fingerprint.xml
+        └── license/           (copied license files)
+```
+
+---
+
+## 10. Open Questions
+
+1. **DEVICE mode request encryption** — DEVICE mode requests don't decrypt with the Secret key. The request PRNG seed for DEVICE mode may be different from the response seed. Need to trace the exact key used for request encryption in DEVICE mode.
+
+2. **NNGE decryption** — the device.nng encryption using key `m0$7j0n4(0n73n71I)`. The decoder plugin chain in nngine.dll handles this.
+
+3. **igo-binary format** — the decrypted payloads are igo-binary serialized. Need to build a parser for the type-tagged format (0x01=int32, 0x02=byte, 0x05=string, 0x80=envelope, etc.).
