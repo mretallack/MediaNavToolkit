@@ -4,13 +4,13 @@
 
 ## Status Summary
 
-The protocol has been fully reverse-engineered:
+The protocol has been fully reverse-engineered and verified against the live server:
 - SnakeOil cipher: **cracked** (xorshift128 PRNG stream cipher)
-- Wire format: **understood** (16-byte request header, 4-byte response header, SnakeOil-encrypted igo-binary payload)
-- Registration flow: **documented** (from decrypted http_dump XML and mitmproxy captures)
-- Model list, credentials, SWID format: **known**
-
-The existing codebase has scaffolding (CLI, device parsing, download/install stubs) but the API layer was built on incorrect protocol assumptions (raw igo-binary without SnakeOil envelope). It needs reworking.
+- Wire format: **understood** (16-byte request header, 4-byte response header)
+- DEVICE mode keys: **solved** (Code for request encryption, Secret for response decryption)
+- Credential block: **solved** (`0xD8 || (Name XOR IGO_CREDENTIAL_KEY)`)
+- Full login flow: **working** (boot → login → getprocess all return 200 from live server)
+- Request body encoding: **partially solved** (empty bodies work, complex bodies use captured replay)
 
 ---
 
@@ -76,6 +76,11 @@ PRNG seed per mode:
 Credential block encoding:
 - `credential_block = 0xD8 || (Name XOR 6935b733a33d02588bb55424260a2fb5)`
 - Verified against live server ✅
+
+RANDOM mode seed generation:
+- Derived from `_time64()` using xorshift128 (see toolbox.md §12)
+- Server validates seed against current time
+- Old captured seeds continue to work indefinitely
 
 ## Phase 2: Server Communication
 

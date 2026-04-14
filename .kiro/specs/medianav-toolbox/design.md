@@ -52,7 +52,7 @@ Existing modules (✓) and planned modules (○):
 └──────────────────────────────────────────────────────────────┘
 ```
 
-**Key gap**: `protocol.py` and `crypto.py` don't exist yet. The SnakeOil cipher is fully reversed (see §2) but not yet implemented as a module. The existing `api/` modules were built on incorrect protocol assumptions (raw igo-binary without SnakeOil envelope) and need reworking.
+**Status**: `protocol.py` and `crypto.py` are implemented and tested. The `api/` modules have working boot, igo-binary encoding/decoding, and market login. The igo-binary request body encoder is partially implemented (empty bodies work, complex bodies use captured replay).
 
 ---
 
@@ -98,7 +98,7 @@ class SnakeOil:
 
     Key management:
     - RANDOM mode (pre-registration): seed = random uint64 in wire header
-    - DEVICE mode (post-registration): wire header has Code, seed = Secret
+    - DEVICE mode (post-registration): request seed = Code, response seed = Secret
     """
     M = 0xFFFFFFFF
 
@@ -200,7 +200,7 @@ def register_device(session: Session, device: DeviceInfo, swid: str) -> Credenti
 ```python
 def login(session: Session, credentials: Credentials) -> MarketSession:
     """POST /rest/1/login (on dacia-ulc.naviextras.com)
-    Uses DEVICE mode SnakeOil (Code in header, Secret as PRNG seed)."""
+    Uses DEVICE mode SnakeOil (Code in header AND as request seed, Secret for response)."""
 ```
 
 ---
@@ -248,10 +248,16 @@ NNGE_TEMPLATE = b'ZXXXXXXXXXXXXXXXXXXZ'
 
 ## 8. Remaining Work
 
-1. **igo-binary parser** — build a parser/serializer for the type-tagged binary format. We have decrypted payloads from both the http_dump XML and the mitmproxy flows to validate against.
+1. ~~**igo-binary parser**~~ — **DONE**: Parser implemented for boot, register, and model list responses.
 
-2. **DEVICE mode request encryption** — DEVICE mode responses decrypt correctly with Secret as PRNG seed. Requests need verification (the request payload for RANDOM mode decrypts correctly with the header key).
+2. ~~**DEVICE mode request encryption**~~ — **SOLVED**: Request seed = Code, response seed = Secret. Verified against live server.
 
-3. **NNGE decryption** — device.nng uses key `m0$7j0n4(0n73n71I)` with template `ZXXXXXXXXXXXXXXXXXXZ`. The decoder plugin chain in nngine.dll needs further tracing.
+3. **igo-binary request body encoder** — Request bodies use a custom bitstream serializer with mixed MSB/LSB bit ordering. **Workaround**: replay captured request bodies for known operations (login, sendfingerprint, etc.). Full encoder not yet reversed.
 
-4. **SWID format_swid()** — the exact byte-to-character mapping for `CK-XXXX-XXXX-XXXX-XXXX` needs to be extracted from `FUN_1009c960`.
+4. **NNGE decryption** — device.nng uses key `m0$7j0n4(0n73n71I)` with template `ZXXXXXXXXXXXXXXXXXXZ`. Not yet reversed.
+
+5. **SWID format_swid()** — the exact byte-to-character mapping for `CK-XXXX-XXXX-XXXX-XXXX` needs to be extracted from `FUN_1009c960`.
+
+6. **Credential block XOR key universality** — Unknown whether `IGO_CREDENTIAL_KEY` is the same for all devices. Needs testing with a second device.
+
+7. **Content download and installation** — Download manager and USB installer are stubs.

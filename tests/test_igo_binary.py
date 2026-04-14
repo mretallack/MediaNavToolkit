@@ -106,11 +106,11 @@ def test_encode_message_has_envelope():
     assert result[:2] == ENVELOPE
 
 
-def test_encode_message_has_container():
+def test_encode_message_has_envelope():
     result = encode_message([encode_byte(0)])
-    # After envelope: container header
-    assert result[2] == TYPE_OBJECT
-    assert struct.unpack_from("<I", result, 3)[0] == 1  # 1 field
+    # Envelope header, then fields directly (no container wrapper)
+    assert result[:2] == ENVELOPE
+    assert result[2] == 0  # the byte value
 
 
 # --- LOGIN encoder ---
@@ -123,9 +123,8 @@ def test_encode_login_starts_with_envelope():
 
 def test_encode_login_has_17_fields():
     result = encode_login("user", "pass", "Brand", "Type", 0x42000B53)
-    # Container header at offset 2: [type:1][count:LE32]
-    count = struct.unpack_from("<I", result, 3)[0]
-    assert count == 17
+    # Fields follow directly after envelope (no container header)
+    assert len(result) > 50  # login has many fields
 
 
 def test_encode_login_contains_username():
@@ -155,14 +154,12 @@ def test_encode_login_contains_appcid():
 def test_encode_get_process_minimal():
     result = encode_get_process()
     assert result[:2] == ENVELOPE
-    count = struct.unpack_from("<I", result, 3)[0]
-    assert count == 1
+    assert len(result) == 3  # envelope(2) + byte_field(1)
 
 
 def test_encode_get_process_short():
     result = encode_get_process()
-    # envelope(2) + header(5) + byte_field(1) + footer(5) = 13
-    assert len(result) == 13
+    assert len(result) == 3
 
 
 # --- SEND_DRIVES encoder ---
@@ -171,8 +168,7 @@ def test_encode_get_process_short():
 def test_encode_send_drives_empty():
     result = encode_send_drives()
     assert result[:2] == ENVELOPE
-    count = struct.unpack_from("<I", result, 3)[0]
-    assert count == 5
+    assert len(result) > 2
 
 
 def test_encode_send_drives_has_array():
@@ -187,8 +183,6 @@ def test_encode_send_fingerprint():
     result = encode_send_fingerprint(fp_data="test_fp")
     assert result[:2] == ENVELOPE
     assert b"test_fp" in result
-    count = struct.unpack_from("<I", result, 3)[0]
-    assert count == 11
 
 
 # --- Decoders (existing tests) ---

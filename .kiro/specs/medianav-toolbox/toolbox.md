@@ -96,7 +96,7 @@ def snakeoil(data, key_lo, key_hi):
 - **DEVICE** (0x30): wire header has Code. Request PRNG seed = **Code**. Response PRNG seed = **Secret**.
 
 **Request**: payload at bytes 16+ encrypted with PRNG seed
-**Response**: payload at bytes 4+ encrypted with same PRNG seed
+**Response**: payload at bytes 4+ encrypted with response PRNG seed
 
 **Response header byte 3**: `0x6B` = RANDOM mode, `0xBC` = DEVICE mode
 
@@ -215,9 +215,9 @@ Response:
 ```
 
 After registration, all subsequent requests use:
-- `Code` in the wire header (bytes 5-12) and in `RequestEnvelopeRO/Credentials`
-- `Secret` as the SnakeOil PRNG seed for encryption/decryption
-- `Name` + `Code` in the `RequestEnvelopeRO/Credentials` XML
+- `Code` in the wire header (bytes 4-11) AND as the SnakeOil PRNG seed for request encryption
+- `Secret` as the SnakeOil PRNG seed for response decryption
+- `Name` encoded as a 17-byte credential block in the request payload
 
 ---
 
@@ -354,8 +354,8 @@ plaintext = cipher.decrypt(open('file.xml.enc', 'rb').read())
 
 See Section 2 for the full algorithm. xorshift128 PRNG stream cipher, fully reversed.
 
-- Pre-registration (`RANDOM`): PRNG seed = random key in wire header
-- Post-registration (`DEVICE`): wire header has Code, PRNG seed = Secret
+- Pre-registration (`RANDOM`): PRNG seed = random key in wire header (same for request and response)
+- Post-registration (`DEVICE`): wire header has Code. Request seed = **Code**, response seed = **Secret**
 - Encrypt function: `FUN_101b3e10` (line 382511)
 - Decrypt function: `FUN_101b3e80` (line 382540)
 
@@ -431,8 +431,56 @@ NaviSync/
 
 ## 10. Open Questions
 
-1. **DEVICE mode request encryption** — DEVICE mode requests don't decrypt with the Secret key. The request PRNG seed for DEVICE mode may be different from the response seed. Need to trace the exact key used for request encryption in DEVICE mode.
+1. ~~**DEVICE mode request encryption**~~ — **SOLVED**: Request seed = Code, response seed = Secret. Verified against live server.
 
 2. **NNGE decryption** — the device.nng encryption using key `m0$7j0n4(0n73n71I)`. The decoder plugin chain in nngine.dll handles this.
 
-3. **igo-binary format** — the decrypted payloads are igo-binary serialized. Need to build a parser for the type-tagged format (0x01=int32, 0x02=byte, 0x05=string, 0x80=envelope, etc.).
+3. ~~**igo-binary response format**~~ — **SOLVED**: Type-tagged format (0x01=int32, 0x05=string, 0x11=object, 0x17=array, 0x80=envelope). Parser implemented.
+
+4. **igo-binary request body encoding** — Request bodies use a custom bitstream serializer (FUN_101a8e80) with mixed MSB/LSB bit ordering and compound type descriptors. The serializer's core is an optimized switch statement that Ghidra couldn't fully decompile. **Workaround**: replay captured request bodies for known operations.
+
+5. **Credential block XOR key universality** — The credential block encoding is `0xD8 || (Name XOR 6935b733a33d02588bb55424260a2fb5)`. Verified against live server. Unknown whether the XOR key is the same for all devices or device-specific.
+
+---
+
+## 11. Credential Block Encoding
+
+The 17-byte credential block in DEVICE mode request payloads encodes the 16-byte Name:
+
+```
+credential_block = 0xD8 || (Name XOR IGO_CREDENTIAL_KEY)
+```
+
+Where `IGO_CREDENTIAL_KEY = 6935b733a33d02588bb55424260a2fb5` (16 bytes).
+
+**Verified**: Generated credential blocks are accepted by the live NaviExtras server.
+
+The decrypted DEVICE mode payload format:
+```
+[counter 1B] [flags 1B] [0xD8 + 16B encoded Name] [request body...]
+```
+
+For empty-body requests (hasActivatableService, getProcess), the request body is omitted.
+
+---
+
+## 12. RANDOM Mode Seed Generation
+
+The Toolbox generates the RANDOM mode seed from `_time64()` using xorshift128:
+
+```python
+M = 0xFFFFFFFF
+t = int(time.time())
+t_lo = t & M
+esi = (t_lo >> 11) & M
+ecx = (t_lo << 21) & M
+edx = esi
+edi = (t_lo ^ ecx) & M
+ecx2 = (edx >> 3) & M
+edi2 = (edi ^ ecx2) & M
+ecx3 = ((edx << 4) | (edi2 >> 28)) & M
+eax = (edi2 << 4) & M
+seed = (((ecx3 ^ edx) & M) << 32) | ((eax ^ edi2) & M)
+```
+
+The server validates the seed against the current time (tight window). Old seeds from captured sessions continue to work indefinitely.
