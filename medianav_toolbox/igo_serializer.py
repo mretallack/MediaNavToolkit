@@ -12,7 +12,16 @@ DEVICE mode (subsequent requests, session established via JSESSIONID):
   [counter 1B] [flags 1B] [body...]
 
 The 17-byte credential block (D8...D9) contains the encoded credential Name.
-The exact encoding is not yet reversed — for now, use a captured credential block.
+The encoding is a custom transform in the igo-binary serializer (nngine.dll):
+- D8 = open tag, D9 = close tag (paired markers, differ by 1 bit)
+- 15 inner bytes encode the 16-byte Name via a position-dependent transform
+- NOT XOR, SnakeOil, Blowfish, MD5, or any standard algorithm
+- Same Name always produces the same 17 bytes (deterministic, no random component)
+- Generated client-side; the block is stable across sessions
+
+For now, use extract_credential_block() to capture the block from a known-good
+request, then reuse it. The block only changes if the device is re-registered
+with a new Name.
 
 Ref: toolbox.md §2, functions.md (FUN_100b3a60)
 """
