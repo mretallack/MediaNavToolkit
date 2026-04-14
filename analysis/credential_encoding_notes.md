@@ -158,19 +158,40 @@ Descriptor 0x1030de5c (RequestEnvelopeRO):
   sub3 (0x102cfef4): exists but not analyzed
 ```
 
-## Key Insight: Bitstream Format
+## Current Status
 
-The igo-binary format is a **bitstream** with:
-- Type tags and field IDs interleaved with data
-- Variable bit widths per field type (4 bits for string elements, 8 bits for integers)
-- Nested compound objects with recursive serialization
-- MSB-first bitmap writing (FUN_101a9a80) for individual values
-- LSB-first byte packing (FUN_101a9e80) for the output buffer
+The igo-binary credential encoding has been traced to the bitstream serializer
+but the exact bit layout remains unresolved. Key findings:
 
-The 17-byte credential block (136 bits) contains:
-- Structural overhead (type tags, field IDs, nesting markers) = 8 bits
-- Name data = 128 bits (16 bytes × 8 bits, or 32 hex chars × 4 bits)
+1. The format is a **bitstream** (not byte-level)
+2. The serializer uses **presence bits** before each field
+3. The Name is NOT stored as raw bytes or hex nibbles in the bitstream
+4. Brute-force search for 8 overhead bits at regular positions found no match
+5. The compound serializer (FUN_101a8e80) has an optimized switch that Ghidra
+   couldn't decompile — the "unreachable blocks" contain the actual logic
+6. The string serializer (FUN_101a1f80) writes 4 bits via FUN_101a8310,
+   but this may be a length prefix, not the data itself
 
-The exact bit layout requires tracing the compound serializer's iteration
-over the descriptor chain, which Ghidra couldn't fully decompile due to
-the optimized switch statement in FUN_101a8e80.
+### Field Names (from descriptor chain)
+```
+RequestEnvelopeRO:
+  [0] "Credentials" (compound) — getter: this+0x08
+  [1] "Device" (compound) — getter: this+0x38
+    [0] "Version" (string, 4 bits/elem) — the Name field
+    [1] "Value" (unknown type)
+  [2] "Action" (int8) — getter: this+0x60
+  [3] sub3 (compound):
+    [0] "Cellid"
+    [1] "Horizontal"
+    [2] "Vertical"
+```
+
+### Next Steps (in priority order)
+1. **DLL harness**: Load nngine.dll, call the serializer with a known Name,
+   capture the bitstream output. This bypasses the need to understand the
+   optimized switch statement.
+2. **Dynamic tracing**: Use a debugger (x32dbg) on the Toolbox exe to set
+   breakpoints on FUN_101a9e80 and FUN_101a8310, log every bit/value written
+   during credential serialization.
+3. **Deeper static analysis**: Disassemble the "unreachable blocks" in
+   FUN_101a8e80 to reconstruct the switch statement logic.
