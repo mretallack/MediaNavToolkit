@@ -187,11 +187,20 @@ RequestEnvelopeRO:
 ```
 
 ### Next Steps (in priority order)
-1. **DLL harness**: Load nngine.dll, call the serializer with a known Name,
-   capture the bitstream output. This bypasses the need to understand the
-   optimized switch statement.
-2. **Dynamic tracing**: Use a debugger (x32dbg) on the Toolbox exe to set
-   breakpoints on FUN_101a9e80 and FUN_101a8310, log every bit/value written
-   during credential serialization.
-3. **Deeper static analysis**: Disassemble the "unreachable blocks" in
-   FUN_101a8e80 to reconstruct the switch statement logic.
+1. **Dynamic tracing on Windows**: Run the Toolbox exe on a real Windows machine
+   with x32dbg. Set breakpoints on FUN_101a9e80, FUN_101a8150, FUN_101a8310,
+   and FUN_10056ad0. Log every bit/byte written during credential serialization.
+   This will reveal the exact bit layout in minutes.
+2. **Trace FUN_100a73d0**: This copies a large structure to query_this+0x7c.
+   It might populate fields used by the serializer that we haven't mapped.
+3. **Find the XOR key source**: The credential block XOR'd with the Name
+   (at byte offset 1) consistently produces `6935b733a33d02588bb55424260a2fb5`.
+   This 16-byte key might be derived from a hash, PRNG, or lookup table
+   in one of the intermediate functions.
+
+### Bit Ordering Discovery
+- FUN_101a9e80 (presence bit writer): **LSB-first** per byte
+- FUN_101a8150 (value writer): **MSB-first** per byte  
+- FUN_101a8310 (alternative value writer): **LSB-first** per byte
+- The choice between 8150/8310 depends on a flag at output_stream+0x10
+- For the binary serializer, the flag = &DAT_102af3e1 (non-zero) → MSB-first
