@@ -114,13 +114,63 @@ Reads bits from the input stream (deserializer counterpart).
 - The serializer uses descriptor chains (linked lists of field descriptors)
   that determine the encoding for each field type
 
-### Serializer Vtable Chain
+## Serializer Type System
+
+From the descriptor chain, the igo-binary serializer has these type handlers:
+
+| Vtable | Function | Type | Bit width |
+|--------|----------|------|-----------|
+| 0x102d21cc | FUN_101a8e80 | Compound/nested object | recursive |
+| 0x102d1e8c | FUN_101a5730 | Integer | N bits (from type_data[4]) |
+| 0x102ce850 | FUN_101a1f80 | String/bytes | 4 bits per element |
+| 0x102d23ac | FUN_101a6b90 | Unknown | ? |
+
+### String Serializer (FUN_101a1f80)
+- Calls `FUN_101a8310(value, 4)` — writes 4 bits per call
+- The `4` comes from `(char)param_1[1]` where `param_1[1] = 0x0104`
+- The value converter `vtable[8]` = `FUN_101a2030` (identity function)
+- Called once per field, NOT per character — iteration happens at compound level
+
+### Integer Serializer (FUN_101a5730)
+- Uses `*(byte*)(param_1 + 4)` as bit width (e.g., 8 bits)
+- Writes the value in the specified number of bits
+
+### Compound Serializer (FUN_101a8e80)
+- Iterates over field descriptors via linked list (FUN_101a9da0)
+- For each field: calls getter to get value, then calls type-specific serializer
+- Ghidra removed most code as "unreachable blocks" (optimized switch statement)
+
+## RequestEnvelopeRO Descriptor Chain
+
 ```
-PTR_FUN_102bb1bc (query object vtable)
-  → vtable[1] = FUN_100b4d70 → returns descriptor at 0x1030de5c
-    → descriptor vtable = 0x102d21cc
-      → vtable[7] = FUN_101a8bf0 → write header (calls FUN_101a9da0)
-      → vtable[2] = FUN_101a8e80 → write fields (complex switch, many unreachable blocks)
-    → sub-descriptors at 0x102cfeb8, 0x102cfecc, 0x102cfee0
-      → each has callback FUN_101a2bd0 and field-specific serializer
+Descriptor 0x1030de5c (RequestEnvelopeRO):
+  sub0 (0x102cfeb8): compound, 3 fields
+    [0] offset +0x08: compound (recursive)
+    [1] offset +0x38: compound (recursive)  
+    [2] offset +0x60: integer, 8 bits
+  sub1 (0x102cfecc): compound, 2 fields  ← Device object
+    [0] offset +0x08: STRING, 4 bits/elem ← Name field!
+    [1] offset +0x10: unknown type
+  sub2 (0x102cfee0): compound, 3 fields
+    [0] offset +0x08: compound (recursive)
+    [1] offset +0x38: integer, 8 bits
+    [2] offset +0x3c: compound (recursive)
+  sub3 (0x102cfef4): exists but not analyzed
 ```
+
+## Key Insight: Bitstream Format
+
+The igo-binary format is a **bitstream** with:
+- Type tags and field IDs interleaved with data
+- Variable bit widths per field type (4 bits for string elements, 8 bits for integers)
+- Nested compound objects with recursive serialization
+- MSB-first bitmap writing (FUN_101a9a80) for individual values
+- LSB-first byte packing (FUN_101a9e80) for the output buffer
+
+The 17-byte credential block (136 bits) contains:
+- Structural overhead (type tags, field IDs, nesting markers) = 8 bits
+- Name data = 128 bits (16 bytes × 8 bits, or 32 hex chars × 4 bits)
+
+The exact bit layout requires tracing the compound serializer's iteration
+over the descriptor chain, which Ghidra couldn't fully decompile due to
+the optimized switch statement in FUN_101a8e80.
