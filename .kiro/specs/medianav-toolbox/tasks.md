@@ -54,10 +54,12 @@ The existing codebase has scaffolding (CLI, device parsing, download/install stu
 - [x] **1.4** Implement igo-binary serializer in `medianav_toolbox/igo_serializer.py`
   - `build_boot_request_body()` — builds IndexArg payload (RANDOM mode)
   - `build_empty_device_request()` — builds empty DEVICE mode requests (hasActSvc, getProcess, etc.)
-  - `extract_credential_block()` — extracts 17-byte D8...D9 credential block from captured requests
-  - 9 tests including DEVICE mode encrypt-to-wire verification ✅
-  - **Partial**: credential block encoding (D8...D9) not yet reversible from Name alone
-  - **Partial**: non-empty request bodies (login, register, model list) not yet buildable
+  - `build_credential_block()` — generates 17-byte credential block from 16-byte Name
+  - `extract_credential_block()` — extracts credential block from captured requests
+  - 13 tests including live server verification ✅
+  - **Credential block encoding SOLVED**: `0xD8 || (Name XOR 6935b733a33d02588bb55424260a2fb5)`
+  - **Verified against live NaviExtras server** — server accepts generated credential blocks
+  - **Partial**: non-empty request bodies (login, sendfingerprint, etc.) not yet buildable — these use the igo-binary bitstream serializer which is not yet reversed
 
 ### Key Protocol Findings (from Phase 1)
 
@@ -67,9 +69,13 @@ Request payload format (after decryption):
 
 PRNG seed per mode:
 - RANDOM requests: seed = key in wire header
-- DEVICE requests: seed = **Code** (not Secret!)
+- DEVICE requests: seed = **Code** (header also contains Code)
 - RANDOM responses: seed = same key as request
 - DEVICE responses: seed = **Secret**
+
+Credential block encoding:
+- `credential_block = 0xD8 || (Name XOR 6935b733a33d02588bb55424260a2fb5)`
+- Verified against live server ✅
 
 ## Phase 2: Server Communication
 
@@ -91,12 +97,12 @@ PRNG seed per mode:
   - Tests: known serial → known SWID
 
 - [ ] **2.4** Implement authenticated API calls (DEVICE mode)
-  - `POST /services/register/rest/1/hasActivatableService`
-  - `POST /rest/1/login` (market)
-  - `POST /rest/1/sendfingerprint`
-  - `POST /services/register/rest/1/get_device_model_list`
-  - `POST /services/register/rest/1/get_device_descriptor_list`
-  - All use Code in header, Secret as PRNG seed
+  - ✅ `POST /services/register/rest/1/hasActivatableService` — WORKING
+  - [ ] `POST /rest/1/login` (market) — **BLOCKED**: needs igo-binary request body encoder
+  - [ ] `POST /rest/1/sendfingerprint` — **BLOCKED**: needs igo-binary request body encoder
+  - [ ] `POST /services/register/rest/1/get_device_model_list` — **BLOCKED**: needs igo-binary request body encoder
+  - [ ] `POST /services/register/rest/1/get_device_descriptor_list` — **BLOCKED**: needs igo-binary request body encoder
+  - All use Code in header and as encryption seed, Secret for response decryption
 
 ## Phase 3: Content Pipeline
 
@@ -120,5 +126,6 @@ PRNG seed per mode:
 - [ ] **R.2** NNGE decryption — device.nng encryption algorithm (key: `m0$7j0n4(0n73n71I)`, template: `ZXXXXXXXXXXXXXXXXXXZ`)
 - [ ] **R.3** SWID format_swid() — extract exact byte-to-char mapping from Ghidra (`FUN_1009c960`)
 - [ ] **R.4** Imei field — understand the `x51x4Dx30x30x30x30x31` encoding
-- [ ] **R.5** DEVICE mode credential encoding — the 17-byte credential block in request payloads. Same Name+Code always produces the same 17 bytes. Need to trace the serializer in Ghidra.
-- [ ] **R.6** Request body encoding — the igo-binary format for request bodies differs from responses (not simple length-prefixed strings). Need to trace the serializer vtable chain.
+- [x] **R.5** ~~DEVICE mode credential encoding~~ — RESOLVED: `0xD8 || (Name XOR 6935b733a33d02588bb55424260a2fb5)`. Verified against live server.
+- [ ] **R.6** Request body encoding — the igo-binary bitstream serializer for request bodies. **THIS IS THE MAIN BLOCKER.** The serializer uses a custom bitstream format with mixed MSB/LSB bit ordering, two-pass presence-then-values architecture, and compound type descriptors. Static analysis in Ghidra hit a wall (optimized switch statement). The ARM64 `liblib_nng_sdk.so` from the Android app may decompile better. Alternatively, captured request bodies could be replayed directly for known operations.
+- [ ] **R.7** XOR key universality — is `IGO_CREDENTIAL_KEY` the same for all devices, or derived from device-specific data? Needs testing with a second device.
