@@ -84,23 +84,43 @@ The actual binary serializer vtable may be set dynamically or may be a different
 object entirely. The `FUN_101b2910` function sets `*param_1 = &PTR_FUN_102d8d68`
 but this might be overwritten later.
 
-## What We Know About the Encoding
+## Binary Serializer Architecture (KEY DISCOVERY)
 
-- Input: 16-byte Name (e.g., FB86ACD6EBA8F54A93C4286CE077D06C)
-- Output: 17 bytes (D8 + 15 inner bytes + D9)
-- D8/D9 are paired open/close markers
-- The 15 inner bytes are a position-dependent transform of the Name
-- Same Name always produces the same output (deterministic)
-- NOT: XOR, SnakeOil, Blowfish, MD5, base encoding, or any standard algorithm
+The igo-binary format is a **bitstream**, not a byte stream!
 
-## Next Steps
+### Bit Writer: FUN_101a9e80 (line 371900)
+Writes individual bits to the output buffer. Tracks bit position within each byte.
+Bits are packed LSB-first within each byte (shifted left by bit position).
 
-1. **Trace FUN_101b3cb0** (vtable[0x38]) — this is the value writer that dispatches
-   to type-specific serializers. The credential Name goes through this path.
+### Bitmap Writer: FUN_101a9a80 (line 371633)
+Writes a bitmap MSB-first (from highest bit index down to 0).
+Each bit is extracted from a uint32 array and written via FUN_101a9e80.
+```c
+// Iterates from param_1[3]-1 down to 0
+// Extracts bit from: *(uint*)(*param_1 + (uVar1 >> 5) * 4) & (1 << (uVar1 & 0x1f))
+// Writes each bit via FUN_101a9e80
+```
 
-2. **Find the ACTUAL binary serializer** — the vtable at PTR_FUN_102d8d68 appears
-   to be the XML text serializer. The binary serializer may use a different vtable
-   that's set up in a different code path.
+### Bit Reader: FUN_101a9ae0 (line 371660)
+Reads bits from the input stream (deserializer counterpart).
 
-3. **Run nngine.dll in a harness** — call the serializer directly with a known Name
-   and capture the output. This would bypass the need to understand the vtable chain.
+### Implications
+- 17 bytes = 136 bits = 128 bits (Name) + 8 bits (type tags/field markers)
+- The D8/D9 bytes are NOT simple byte-level markers — they're the first/last bytes
+  of the bitstream that contains type tags + Name data + end markers
+- The encoding includes field IDs, type tags, and possibly variable-length prefixes
+  mixed into the bitstream alongside the Name data
+- Simple bit-shifting of the Name does NOT produce the credential block
+- The serializer uses descriptor chains (linked lists of field descriptors)
+  that determine the encoding for each field type
+
+### Serializer Vtable Chain
+```
+PTR_FUN_102bb1bc (query object vtable)
+  → vtable[1] = FUN_100b4d70 → returns descriptor at 0x1030de5c
+    → descriptor vtable = 0x102d21cc
+      → vtable[7] = FUN_101a8bf0 → write header (calls FUN_101a9da0)
+      → vtable[2] = FUN_101a8e80 → write fields (complex switch, many unreachable blocks)
+    → sub-descriptors at 0x102cfeb8, 0x102cfecc, 0x102cfee0
+      → each has callback FUN_101a2bd0 and field-specific serializer
+```
