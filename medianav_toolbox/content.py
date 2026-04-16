@@ -69,10 +69,11 @@ def select_content(
 
     resp = client.post(
         f"{BASE_URL}/rest/managecontent/supermarket/v1/updateselection",
-        data={"selectedIds": json.dumps(content_ids)},
+        content=f"selectedIds={json.dumps(content_ids)}".encode(),
         headers={
             **_web_headers(jsessionid),
-            "Content-Type": "application/x-www-form-urlencoded",
+            "Content-Type": "application/json",
+            "X-Requested-With": "XMLHttpRequest",
         },
     )
     resp.raise_for_status()

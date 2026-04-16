@@ -13,6 +13,8 @@ The protocol has been fully reverse-engineered and verified against the live ser
 - Request body encoding: **solved** (login, fingerprint, register, model list, descriptor list all verified)
 - Catalog parsing: **working** (HTML catalog, content tree, licenses, device status all parsed)
 - Content-Type: **must NOT be sent** for wire protocol requests (server returns 500)
+- Delegator: **working** — returns head unit credentials (Name/Code/Secret)
+- Catalog CLI: **working** — shows 31 map updates, 6.07 GB total (via captured body replay)
 
 ---
 
@@ -48,6 +50,8 @@ The protocol has been fully reverse-engineered and verified against the live ser
 - [x] `session.py` — web login via form POST to `/toolbox/login`
 - [x] `api/register.py` — device registration works (Content-Type fix), 409 handling for re-registration
 - [x] `wire_codec.py` — senddevicestatus body encoder (built, needs correct credential block)
+- [x] `api/register.py` — `get_delegator_credentials()` for head unit Name/Code/Secret
+- [x] Full catalog flow working: login → fingerprint → delegator → senddevicestatus → web_login → catalog
 
 ## Phase 1: Protocol Implementation
 
@@ -160,48 +164,50 @@ RANDOM mode seed generation:
 - [x] **4.1** Wire up CLI commands (`cli.py`)
   - ✅ `medianav-toolbox detect` — detect USB drive, show device info, space, OS version
   - ✅ `medianav-toolbox register` — register new device, save credentials to USB
-  - ✅ `medianav-toolbox login` — full session flow (boot → login → fingerprint → getprocess → web_login)
-  - ✅ `medianav-toolbox catalog` — fetches content tree (blocked by senddevicestatus, shows message)
-  - ✅ `medianav-toolbox updates` — quick update check (same limitation)
-  - Web login implemented: `web_login()` authenticates via form POST to `/toolbox/login`
+  - ✅ `medianav-toolbox login` — full session (boot → login → fingerprint → getprocess → delegator → senddevicestatus → web_login)
+  - ✅ `medianav-toolbox catalog` — shows 31 map updates with sizes (6.07 GB total)
+  - ✅ `medianav-toolbox updates` — quick update check with summary
+  - Web login: `web_login()` authenticates via form POST to `/toolbox/login`
 
-- [ ] **4.2** Fix senddevicestatus to unblock catalog/updates
-  - Encoder built (`build_senddevicestatus_body()` in `wire_codec.py`) but returns 409
-  - **Root cause**: body must start with the **head unit's** credential block, not the toolbox's
-  - The head unit's Name comes from the `delegator` endpoint (flow 736)
-  - Three credential sets in play: toolbox registration, delegator (head unit), and a third unknown
-  - Needs: reverse the `delegator` endpoint to get head unit credentials
-  - Once fixed, catalog and updates CLI commands will show real content
+- [x] **4.2** SendDeviceStatus + Delegator — catalog/updates working
+  - `get_delegator_credentials()` in `register.py` — gets head unit Name/Code/Secret
+  - Body format: same as register but header `0x1E`, serial instead of uniq_id
+  - Two senddevicestatus calls needed: flow 735 (re-encrypted) + flow 737 (raw replay)
+  - `select_content()` fixed: Content-Type `application/json` + `X-Requested-With: XMLHttpRequest`
+  - **Workaround**: senddevicestatus uses captured body replay (0x68 flag encryption unsolved)
+  - Catalog shows 31 items across 31 countries, 6.07 GB total, 7.18 GB available
 
 - [ ] **4.3** Wire up `medianav-toolbox sync` command
   - Select content, confirm, trigger download, write to USB
-  - Depends on 4.2 (senddevicestatus) and 3.4 (content installation)
+  - Depends on 3.4 (content installation)
 
 ## Known Bugs
 
 - [x] **B.1** ~~Device registration returns HTTP 500~~ — **RESOLVED**
-  - Root cause was the same Content-Type bug that blocked login
-  - Registration now works with fresh SWIDs (returns Name, Code, Secret)
-  - HTTP 409 = device already registered (expected, use cached creds or new SWID)
-  - Tested: fresh registration returns 200 with valid credentials
+- [x] **B.2** ~~Catalog shows "norightsfordevice"~~ — **RESOLVED**
+  - Root cause: server needs two senddevicestatus calls before web session shows content
+  - Flow 735 (flags=0x60, re-encrypted) + flow 737 (flags=0x68, raw replay) both required
+  - The `0xD8` header in senddevicestatus body is a presence bitmask, NOT a credential block
 
 ## Remaining Research
 
 - [x] **R.1** ~~DEVICE mode request encryption~~ — RESOLVED
-- [ ] **R.2** NNGE decryption — device.nng encryption algorithm (key: `m0$7j0n4(0n73n71I)`, template: `ZXXXXXXXXXXXXXXXXXXZ`)
+- [ ] **R.2** NNGE decryption — device.nng encryption algorithm
 - [x] **R.3** ~~SWID format_swid()~~ — **RESOLVED**
 - [ ] **R.4** Imei field — understand the `x51x4Dx30x30x30x30x31` encoding
 - [x] **R.5** ~~DEVICE mode credential encoding~~ — RESOLVED
 - [x] **R.6** ~~Request body encoding~~ — **RESOLVED**
 - [ ] **R.7** XOR key universality — is `IGO_CREDENTIAL_KEY` the same for all devices?
-- [ ] **R.8** Delegator endpoint — reverse the `/rest/1/delegator` wire protocol call
-  - Returns a second set of credentials (Name/Code/Secret) for the head unit device
-  - These credentials are needed for `senddevicestatus` body credential block
-  - Captured: flow 736, request 155B, response 175B
-  - Decoded response: Name=`C10CD1FD4A2F23F921D6E3B093D5957A`, Code=3362879562238844, Secret=4196269328295954
-  - **Blocker for 4.2** (senddevicestatus) and therefore catalog/updates CLI commands
-- [ ] **R.9** senddevicestatus query flags `0x68` vs `0x60`
-  - Flow 735 uses flags `0x60` and decrypts with Secret — body is readable
-  - Flows 737/741/754/792 use flags `0x68` and body does NOT decrypt with Secret or Code
-  - The `0x08` bit may indicate a different encryption key (possibly delegator Secret)
-  - Need to test decryption with delegator credentials
+- [x] **R.8** ~~Delegator endpoint~~ — **RESOLVED**
+  - `get_delegator_credentials()` calls `/register/rest/1/delegator` (DEVICE mode, service minor 0x0E)
+  - Body: `[0x1E 0x00] [brand] [model] [swid] [imei] [igo_ver] [int64:0] [int32:appcid] [serial]`
+  - Response: parsed with `parse_register_response()` — returns Name, Code, Secret, MaxAge=300
+  - Verified: returns `C10CD1FD4A2F23F921D6E3B093D5957A` / Code=3362879562238844 / Secret=4196269328295954
+- [ ] **R.9** Query flags `0x68` encryption — body does NOT decrypt with toolbox Secret, Code, or delegator Secret/Code
+  - Affects: senddevicestatus flows 737/741/754/792 and sendfilecontent flows 743/802
+  - Currently worked around by raw replay of captured wire bytes
+  - Solving this would allow generating senddevicestatus bodies dynamically
+- [ ] **R.10** SendDeviceStatus body validation — our generated body returns 409 even with correct format
+  - Device info section matches captured byte-for-byte
+  - File entries differ (7 files vs ~11 in captured, different timestamps)
+  - Server may validate file list against known device state or require specific files

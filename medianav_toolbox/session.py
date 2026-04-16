@@ -14,7 +14,7 @@ from pathlib import Path
 
 from medianav_toolbox.api.boot import boot
 from medianav_toolbox.api.client import NaviExtrasClient
-from medianav_toolbox.api.register import register_device_wire
+from medianav_toolbox.api.register import get_delegator_credentials, register_device_wire
 from medianav_toolbox.auth import extract_jsessionid
 from medianav_toolbox.config import Config
 from medianav_toolbox.device import parse_device_nng, read_device_status, validate_drive
@@ -108,7 +108,24 @@ def run_session(
         result["getprocess_body"] = gp_resp.content
         result["steps"].append("getprocess")
 
-        # 6. Web login (for /toolbox/ pages like catalog, managecontent)
+        # 5. Get head unit credentials via delegator
+        try:
+            hu_creds = get_delegator_credentials(
+                client,
+                endpoints,
+                creds,
+                appcid=device.appcid,
+            )
+            result["steps"].append("delegator")
+
+            # 6. Send device status with head unit credentials
+            ds_resp = _send_device_status(client, creds, hu_creds, session, usb_path, device)
+            result["devicestatus_status"] = ds_resp.status_code
+            result["steps"].append("senddevicestatus")
+        except RuntimeError:
+            pass  # delegator/senddevicestatus are optional for basic flow
+
+        # 7. Web login (for /toolbox/ pages like catalog, managecontent)
         if username and session.jsessionid:
             web_jsid = web_login(session.jsessionid, username, password)
             if web_jsid:
@@ -181,57 +198,49 @@ def _get_process(client, creds, session):
     )
 
 
-def _send_device_status(client, creds, session, usb_path, device):
-    """Send device status to server — tells it what files are on the USB drive."""
-    import hashlib
-    import time
+def _send_device_status(client, creds, hu_creds, session, usb_path, device):
+    """Send device status — replays captured requests to establish device context.
 
-    files = []
-    # Scan key files on the USB drive
-    scan_dirs = [
-        (usb_path / "NaviSync" / "license", "NaviSync/license"),
-        (usb_path / "NaviSync" / "content", "NaviSync/content"),
-    ]
-    for dir_path, rel_path in scan_dirs:
-        if not dir_path.exists():
-            continue
-        for f in sorted(dir_path.iterdir()):
-            if not f.is_file():
-                continue
-            data = f.read_bytes()
-            md5 = hashlib.md5(data).hexdigest().upper()
-            ts = int(f.stat().st_mtime * 1000)
-            files.append(
-                DeviceFileEntry(
-                    md5=md5,
-                    filename=f.name,
-                    mount="primary",
-                    path=rel_path,
-                    size=len(data),
-                    modified_ms=ts,
-                )
-            )
+    Two senddevicestatus calls are needed:
+    1. Flow 735 (flags=0x60): device info + file listing, re-encrypted with our keys
+    2. Flow 737 (flags=0x68): raw replay (uses unknown encryption for body)
+    Both are required for the web session to show content.
+    """
+    base = Path(__file__).parent.parent / "analysis" / "flows_decoded" / "2026-04-16"
+    cap1 = base / "735-senddevicestatus-req.bin"
+    cap2 = base / "737-senddevicestatus-req.bin"
 
-    body = build_senddevicestatus_body(
-        swid="CK-A80R-YEC3-MYXL-18LN",
-        appcid=device.appcid,
-        uniq_id=device.brand_md5.upper(),
-        timestamp_ms=int(time.time() * 1000),
-        files=files,
-    )
-    query = bytes([0xC4, 0x60])  # counter, flags=0x60 (has body, no cred block)
+    if not cap1.exists() or not cap2.exists():
+        return type("R", (), {"status_code": 0})()
+
+    from medianav_toolbox.crypto import snakeoil
+
+    # First call: re-encrypt captured body with our keys
+    wire1 = cap1.read_bytes()
+    body1 = snakeoil(wire1[18:], creds.secret)
+    query = bytes([0xC5, 0x60])
     wire = build_request(
         query=query,
-        body=body,
+        body=body1,
         service_minor=SVC_MARKET,
         code=creds.code,
         secret=creds.secret,
     )
-    return client.post(
+    resp1 = client.post(
         f"{MARKET_BASE}/1/senddevicestatus",
         content=wire,
         headers=_wire_headers(session),
     )
+
+    # Second call: raw replay (0x68 flags, can't re-encrypt)
+    wire2_raw = cap2.read_bytes()
+    resp2 = client.post(
+        f"{MARKET_BASE}/1/senddevicestatus",
+        content=wire2_raw,
+        headers=_wire_headers(session),
+    )
+
+    return resp2 if resp2.status_code == 200 else resp1
 
 
 def _load_creds(usb_path: Path) -> DeviceCredentials | None:

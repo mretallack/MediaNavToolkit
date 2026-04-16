@@ -1,9 +1,10 @@
-"""Device registration service.
+"""Device registration and delegator service.
 
-Ref: toolbox.md §2 (wire protocol), §8 (register service)
+Ref: toolbox.md §2 (wire protocol), §8 (register service), §14 (delegator)
 
 Register endpoints (on {register_url}):
   /device                      — register device (RANDOM mode)
+  /delegator                   — get head unit credentials (DEVICE mode)
   /get_device_model_list       — get model list
   /get_device_descriptor_list  — get descriptors
   /devinfo                     — get device info
@@ -13,6 +14,7 @@ Register endpoints (on {register_url}):
 from medianav_toolbox.api.client import NaviExtrasClient
 from medianav_toolbox.api.igo_binary import decode_model_list_response
 from medianav_toolbox.igo_parser import parse_register_response
+from medianav_toolbox.igo_serializer import build_credential_block
 from medianav_toolbox.models import (
     DeviceCredentials,
     DeviceInfo,
@@ -20,7 +22,12 @@ from medianav_toolbox.models import (
     ServiceEndpoints,
 )
 from medianav_toolbox.protocol import SVC_REGISTER, build_request, parse_response
-from medianav_toolbox.wire_codec import build_register_device_body
+from medianav_toolbox.wire_codec import (
+    build_register_device_body,
+    encode_int32,
+    encode_int64,
+    encode_string,
+)
 
 IGO_BINARY = "application/vnd.igo-binary; v=1"
 # Wire protocol requests must NOT include Content-Type (server returns 500).
@@ -69,6 +76,64 @@ def register_device_wire(
         raise RuntimeError(f"Registration failed: HTTP {resp.status_code}")
 
     decrypted = parse_response(resp.content, seed)
+    parsed = parse_register_response(decrypted)
+
+    return DeviceCredentials(
+        name=bytes.fromhex(parsed["name"]),
+        code=parsed["code"],
+        secret=parsed["secret"],
+    )
+
+
+def get_delegator_credentials(
+    client: NaviExtrasClient,
+    endpoints: ServiceEndpoints,
+    creds: DeviceCredentials,
+    brand_name: str = "DaciaAutomotive",
+    model_name: str = "DaciaAutomotiveDeviceCY20_ULC4dot5",
+    swid: str = "CK-A80R-YEC3-MYXL-18LN",
+    imei: str = "32483158423731362D42323938353431",
+    igo_version: str = "9.12.179.821558",
+    appcid: int = 0x42000B53,
+    serial: str = "",
+) -> DeviceCredentials:
+    """Get head unit credentials via the delegator endpoint (DEVICE mode).
+
+    Uses the toolbox credentials to authenticate, returns a separate set of
+    credentials for the head unit device. These are needed for senddevicestatus.
+
+    Ref: toolbox.md §14
+    """
+    body = (
+        b"\x1e\x00"
+        + encode_string(brand_name)
+        + encode_string(model_name)
+        + encode_string(swid)
+        + encode_string(imei)
+        + encode_string(igo_version)
+        + encode_int64(0)
+        + encode_int32(appcid)
+        + encode_string(serial)
+    )
+    cred_block = build_credential_block(creds.name)
+    query = bytes([0xC4, 0x20]) + cred_block
+    wire = build_request(
+        query=query,
+        body=body,
+        service_minor=SVC_REGISTER,
+        code=creds.code,
+        secret=creds.secret,
+    )
+
+    resp = client.post(
+        f"{endpoints.register}/delegator",
+        content=wire,
+        headers=WIRE_HEADERS,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(f"Delegator failed: HTTP {resp.status_code}")
+
+    decrypted = parse_response(resp.content, creds.secret)
     parsed = parse_register_response(decrypted)
 
     return DeviceCredentials(

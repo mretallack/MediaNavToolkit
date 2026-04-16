@@ -492,21 +492,40 @@ NaviSync/
 
 ---
 
-## 14. Delegator Endpoint
+## 14. Delegator Endpoint — SOLVED
 
-The `/rest/1/delegator` endpoint returns a **second set of credentials** for the head unit device (distinct from the toolbox registration credentials).
+The `/register/rest/1/delegator` endpoint returns a **second set of credentials** for the head unit device (distinct from the toolbox registration credentials).
 
-**Request**: DEVICE mode wire protocol, ~155 bytes. Body contains device info (brand, model, SWID, IMEI, IGO version, APPCID, serial, UniqId).
+**Endpoint**: `POST {register_url}/delegator` (service minor `0x0E`, DEVICE mode)
 
-**Response**: 175 bytes. Contains:
-- Name: `C10CD1FD4A2F23F921D6E3B093D5957A`
-- Code: `3362879562238844`
-- Secret: `4196269328295954`
-- SWID: `CW-UQAQ-YAEQ-37QI-AA7A-QYQM` (base32-encoded)
+**Request body** (155 bytes, identical format to register but header `0x1E`):
+```
+[0x1E 0x00]                     header (presence bitmask — differs from register's 0x1D)
+[len] "DaciaAutomotive"          BrandName
+[len] "DaciaAutomotiveDeviceCY20_ULC4dot5"  ModelName
+[len] "CK-A80R-YEC3-MYXL-18LN"  SWID (head unit's SWID)
+[len] "3248315842373133..."      IMEI
+[len] "9.12.179.821558"          IGO Version (head unit firmware)
+[int64] 0                        Timestamp
+[int32] 0x42000B53               AppCID
+[len] "UU1DJF00869579646"        Serial (VIN — present in delegator, absent in register)
+```
 
-These credentials are used in the `senddevicestatus` body credential block. The toolbox credentials (from registration) are used for the wire protocol header/query encryption, but the body starts with the head unit's credential block.
+**Key difference from register**: Header `0x1E` vs `0x1D`. Delegator has `serial` field; register has `uniq_id` field. The header byte is a presence bitmask encoding which fields are included.
 
-**Status**: Response decoded, but we cannot yet call this endpoint ourselves. Blocker for senddevicestatus.
+**Query**: `[counter] [0x20] [17B credential_block]` — uses toolbox credentials (DEVICE mode).
+
+**Response** (175 bytes): Parsed with `parse_register_response()`.
+```
+Name:   C10CD1FD4A2F23F921D6E3B093D5957A
+Code:   3362879562238844
+Secret: 4196269328295954
+MaxAge: 300
+SWIDs:  CW-UQAQ-YAEQ-37QI-AA7A-QYQM, CP-3IE3-EEMQ-MQAA-I7U3-E7M7,
+        CW-YUEM-E7QU-UEA3-UUMM-UYY7, CW-AUM3-777Q-3IQM-ME7Y-QQ7M
+```
+
+**Implementation**: `get_delegator_credentials()` in `api/register.py`. Verified against live API.
 
 ---
 
@@ -572,7 +591,22 @@ primary/NaviSync
 
 ### Status
 
-Encoder built (`build_senddevicestatus_body()` in `wire_codec.py`), but returns HTTP 409 because the body credential block uses the wrong Name. Needs the head unit's Name from the delegator endpoint.
+- Body format decoded: device info matches captured byte-for-byte ✓
+- Encoder built: `build_senddevicestatus_body()` in `wire_codec.py` ✓
+- **Captured body replay returns 200** — server accepts the full captured body
+- **Generated body returns 409** — file entries differ from expected (R.10)
+- **Two calls required**: flow 735 (flags=0x60) + flow 737 (flags=0x68) needed for web content
+- The `0xD8` header byte is a **presence bitmask**, NOT a credential block marker
+- Workaround: replay captured wire bytes for both calls
+
+### Presence Bitmask Headers
+
+The first bytes of request bodies encode which fields are present:
+```
+0x1D 0x00 = RegisterDevice    (brand, model, swid, imei, igo_ver, ts, appcid, [0x00], uniq_id)
+0x1E 0x00 = Delegator         (brand, model, swid, imei, igo_ver, ts, appcid, serial)
+0xD8 0x02 0x1F 0x40 = SendDeviceStatus (all fields + file entries)
+```
 
 ---
 
@@ -708,6 +742,60 @@ Contains 3 license entries, each with:
 
 ---
 
+## 20. Complete Working Session Flow
+
+The full flow to get from cold start to browsing available content updates:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    WIRE PROTOCOL (binary)                        │
+│                                                                 │
+│  1. POST /index/rest/3/boot          → service URLs (RANDOM)    │
+│  2. POST /register/rest/1/device     → Toolbox creds (RANDOM)   │
+│  3. POST /rest/1/login               → JSESSIONID (DEVICE)      │
+│  4. POST /rest/1/sendfingerprint     → 200 (DEVICE)             │
+│  5. POST /rest/1/getprocess          → 200 (DEVICE)             │
+│  6. POST /register/rest/1/delegator  → Head unit creds (DEVICE) │
+│  7. POST /rest/1/senddevicestatus    → 200 (flags=0x60)         │
+│  8. POST /rest/1/senddevicestatus    → 200 (flags=0x68)         │
+│                                                                 │
+├─────────────────────────────────────────────────────────────────┤
+│                    WEB SESSION (HTTP)                            │
+│                                                                 │
+│  9. GET  /toolbox/device?workingMode=TOOLBOX  (with JSESSIONID) │
+│ 10. POST /toolbox/login              → 302 (email + password)   │
+│                                                                 │
+├─────────────────────────────────────────────────────────────────┤
+│                    CONTENT BROWSING (HTTP)                       │
+│                                                                 │
+│ 11. GET  /toolbox/managecontentinitwithhierarchy/install         │
+│     → HTML jstree with 31 content IDs                           │
+│ 12. POST /rest/managecontent/supermarket/v1/updateselection      │
+│     → JSON with content sizes and space indicator                │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Credential flow:**
+```
+Registration (step 2)  → Toolbox creds (Name₁, Code₁, Secret₁)
+                          Used for: login, fingerprint, getprocess, delegator
+                          Wire header key = Code₁
+                          Response decryption = Secret₁
+
+Delegator (step 6)     → Head unit creds (Name₂, Code₂, Secret₂)
+                          Used for: senddevicestatus body (flags=0x68)
+                          The 0x68 flag encryption is NOT yet reversed
+
+Web login (step 10)    → Same JSESSIONID, now authenticated for /toolbox/ pages
+```
+
+**Key discovery**: Steps 7 AND 8 are both required. Step 7 alone returns 200 but the web session still shows "norightsfordevice". Step 8 (flags=0x68, raw replay) is what actually grants content access.
+
+**Implementation**: `run_session()` in `session.py` performs steps 1-10. The CLI `catalog` command then performs steps 11-12.
+
+---
+
 ## 10. Open Questions
 
 1. ~~**DEVICE mode request encryption**~~ — **SOLVED**: Request seed = Code, response seed = Secret.
@@ -720,11 +808,13 @@ Contains 3 license entries, each with:
 
 5. **Credential block XOR key universality** — Unknown whether the XOR key is the same for all devices.
 
-6. **Delegator endpoint** — How to call `/rest/1/delegator` to get head unit credentials. Request body structure partially decoded but not yet reproducible. Blocker for senddevicestatus and catalog.
+6. ~~**Delegator endpoint**~~ — **SOLVED**: `get_delegator_credentials()` calls `/register/rest/1/delegator`. Body format identical to register but header `0x1E` and serial field. Returns head unit Name/Code/Secret.
 
-7. **senddevicestatus query flags 0x68** — The `0x08` bit may indicate body encryption with delegator Secret instead of toolbox Secret. Needs testing.
+7. **senddevicestatus query flags 0x68** — The `0x08` bit uses unknown encryption. Body does NOT decrypt with toolbox Secret, toolbox Code, delegator Secret, or delegator Code. Currently worked around by raw replay of captured wire bytes.
 
-8. **Imei field encoding** — The `x51x4Dx30x30x30x30x31` format. Appears to be hex-encoded ASCII but purpose unclear.
+8. **Imei field encoding** — The `x51x4Dx30x30x30x30x31` format.
+
+9. **SendDeviceStatus body validation** — Our generated body (correct device info, different file entries) returns 409. The captured body (with its specific file list) returns 200. Server may validate file list against known device state.
 
 ---
 

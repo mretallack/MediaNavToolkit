@@ -262,7 +262,7 @@ def build_senddevicestatus_body(
     """Build SendDeviceStatus request body.
 
     Structure (from captured traffic flow 735, flags=0x60):
-      [4B header: D8 02 1F 40]
+      [4B header: D8 02 1F 40] — presence bitmask (NOT a credential block)
       [len] brand [len] model [len] swid [len] imei [len] igo_version
       [int64] timestamp [int32] appcid [len] serial [len] uniq_id
       [0x00] separator
@@ -274,6 +274,8 @@ def build_senddevicestatus_body(
     File entry types:
       0xa0: [len] md5 [len] filename [len] mount [len] path [int64] size [int64] ts1 [int64] ts2
       0x22: directory [len] name [len] mount [len] path [int64:0] [int64] ts1 [int64] ts2
+
+    Ref: toolbox.md §15
     """
     if files is None:
         files = []
@@ -307,6 +309,6 @@ def build_senddevicestatus_body(
         )
 
     # Separator + metadata before file entries
-    separator = b"\x00" + encode_int32(0x018BB5) + encode_int32(1) + encode_int32(0)
+    separator = b"\x00" + b"\x01\x8b\xb5" + encode_int32(1) + encode_int32(0)
 
     return header + device_info + separator + file_data
