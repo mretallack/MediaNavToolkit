@@ -18,6 +18,7 @@ Ref: toolbox.md §2 (split encryption), credential_encoding_notes.md
 """
 
 import struct
+from dataclasses import dataclass
 
 
 def encode_string(value: str) -> bytes:
@@ -232,3 +233,80 @@ def build_sendfingerprint_body(
         + storage
         + encode_string(info)
     )
+
+
+@dataclass
+class DeviceFileEntry:
+    """A file on the USB drive for senddevicestatus."""
+
+    md5: str  # 32-char hex MD5 of file content
+    filename: str
+    mount: str  # "primary"
+    path: str  # e.g. "NaviSync/license"
+    size: int
+    modified_ms: int  # epoch milliseconds
+
+
+def build_senddevicestatus_body(
+    brand_name: str = "DaciaAutomotive",
+    model_name: str = "DaciaAutomotiveDeviceCY20_ULC4dot5",
+    swid: str = "",
+    imei: str = "32483158423731362D42323938353431",
+    igo_version: str = "9.12.179.821558",
+    timestamp_ms: int = 0,
+    appcid: int = 0x42000B53,
+    serial: str = "",
+    uniq_id: str = "",
+    files: list[DeviceFileEntry] | None = None,
+) -> bytes:
+    """Build SendDeviceStatus request body.
+
+    Structure (from captured traffic flow 735, flags=0x60):
+      [4B header: D8 02 1F 40]
+      [len] brand [len] model [len] swid [len] imei [len] igo_version
+      [int64] timestamp [int32] appcid [len] serial [len] uniq_id
+      [0x00] separator
+      [int32] content_version
+      [int32] file_count_or_flags
+      [int32] zero
+      [file_entries...]
+
+    File entry types:
+      0xa0: [len] md5 [len] filename [len] mount [len] path [int64] size [int64] ts1 [int64] ts2
+      0x22: directory [len] name [len] mount [len] path [int64:0] [int64] ts1 [int64] ts2
+    """
+    if files is None:
+        files = []
+
+    header = b"\xd8\x02\x1f\x40"
+
+    device_info = (
+        encode_string(brand_name)
+        + encode_string(model_name)
+        + encode_string(swid)
+        + encode_string(imei)
+        + encode_string(igo_version)
+        + encode_int64(timestamp_ms)
+        + encode_int32(appcid)
+        + encode_string(serial)
+        + encode_string(uniq_id)
+    )
+
+    # File entries
+    file_data = b""
+    for f in files:
+        file_data += (
+            b"\xa0"
+            + encode_string(f.md5)
+            + encode_string(f.filename)
+            + encode_string(f.mount)
+            + encode_string(f.path)
+            + encode_int64(f.size)
+            + encode_int64(f.modified_ms)
+            + encode_int64(f.modified_ms)
+        )
+
+    # Separator + metadata before file entries
+    separator = b"\x00" + encode_int32(0x018BB5) + encode_int32(1) + encode_int32(0)
+
+    return header + device_info + separator + file_data

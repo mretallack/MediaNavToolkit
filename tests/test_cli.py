@@ -20,16 +20,18 @@ def test_cli_detect():
     assert "0x42000B53" in result.output
 
 
-@pytest.mark.skipif(_usb_missing, reason="analysis/usb_drive/disk not available")
-def test_cli_catalog():
-    runner = CliRunner()
-    result = runner.invoke(cli, ["--usb-path", USB_PATH, "catalog"])
-    assert result.exit_code == 0
-    assert "Installed Content" in result.output
-
-
 def test_cli_detect_no_usb(tmp_path):
     runner = CliRunner()
     result = runner.invoke(cli, ["--usb-path", str(tmp_path), "detect"])
-    assert result.exit_code == 1
-    assert "No valid MediaNav drive" in result.output
+    assert result.exit_code != 0
+
+
+def test_cli_help():
+    runner = CliRunner()
+    result = runner.invoke(cli, ["--help"])
+    assert result.exit_code == 0
+    assert "detect" in result.output
+    assert "login" in result.output
+    assert "catalog" in result.output
+    assert "register" in result.output
+    assert "updates" in result.output

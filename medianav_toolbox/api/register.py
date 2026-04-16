@@ -61,6 +61,10 @@ def register_device_wire(
     url = f"{endpoints.register}/device"
     resp = client.post(url, content=wire, headers=WIRE_HEADERS)
 
+    if resp.status_code == 409:
+        raise RuntimeError(
+            "Device already registered (HTTP 409). Use cached credentials or a new SWID."
+        )
     if resp.status_code != 200:
         raise RuntimeError(f"Registration failed: HTTP {resp.status_code}")
 

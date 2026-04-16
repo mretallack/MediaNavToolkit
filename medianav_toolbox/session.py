@@ -22,11 +22,18 @@ from medianav_toolbox.igo_serializer import build_credential_block
 from medianav_toolbox.models import DeviceCredentials, ServiceEndpoints, Session
 from medianav_toolbox.protocol import SVC_MARKET, build_request, parse_response
 from medianav_toolbox.swid import compute_swid
-from medianav_toolbox.wire_codec import build_login_body, build_sendfingerprint_body
+from medianav_toolbox.wire_codec import (
+    DeviceFileEntry,
+    build_login_body,
+    build_senddevicestatus_body,
+    build_sendfingerprint_body,
+)
 
 TOOLBOX_UA = "DaciaAutomotive-Toolbox-2026041167"
+BROWSER_UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 CREDS_FILE = ".medianav_creds.json"
 MARKET_BASE = "https://dacia-ulc.naviextras.com/rest"
+WEB_BASE = "https://dacia-ulc.naviextras.com"
 
 
 def _wire_headers(session: Session | None = None) -> dict[str, str]:
@@ -101,6 +108,13 @@ def run_session(
         result["getprocess_body"] = gp_resp.content
         result["steps"].append("getprocess")
 
+        # 6. Web login (for /toolbox/ pages like catalog, managecontent)
+        if username and session.jsessionid:
+            web_jsid = web_login(session.jsessionid, username, password)
+            if web_jsid:
+                result["web_jsessionid"] = web_jsid
+                result["steps"].append("web_login")
+
     return result
 
 
@@ -167,6 +181,59 @@ def _get_process(client, creds, session):
     )
 
 
+def _send_device_status(client, creds, session, usb_path, device):
+    """Send device status to server — tells it what files are on the USB drive."""
+    import hashlib
+    import time
+
+    files = []
+    # Scan key files on the USB drive
+    scan_dirs = [
+        (usb_path / "NaviSync" / "license", "NaviSync/license"),
+        (usb_path / "NaviSync" / "content", "NaviSync/content"),
+    ]
+    for dir_path, rel_path in scan_dirs:
+        if not dir_path.exists():
+            continue
+        for f in sorted(dir_path.iterdir()):
+            if not f.is_file():
+                continue
+            data = f.read_bytes()
+            md5 = hashlib.md5(data).hexdigest().upper()
+            ts = int(f.stat().st_mtime * 1000)
+            files.append(
+                DeviceFileEntry(
+                    md5=md5,
+                    filename=f.name,
+                    mount="primary",
+                    path=rel_path,
+                    size=len(data),
+                    modified_ms=ts,
+                )
+            )
+
+    body = build_senddevicestatus_body(
+        swid="CK-A80R-YEC3-MYXL-18LN",
+        appcid=device.appcid,
+        uniq_id=device.brand_md5.upper(),
+        timestamp_ms=int(time.time() * 1000),
+        files=files,
+    )
+    query = bytes([0xC4, 0x60])  # counter, flags=0x60 (has body, no cred block)
+    wire = build_request(
+        query=query,
+        body=body,
+        service_minor=SVC_MARKET,
+        code=creds.code,
+        secret=creds.secret,
+    )
+    return client.post(
+        f"{MARKET_BASE}/1/senddevicestatus",
+        content=wire,
+        headers=_wire_headers(session),
+    )
+
+
 def _load_creds(usb_path: Path) -> DeviceCredentials | None:
     creds_path = usb_path / CREDS_FILE
     if not creds_path.exists():
@@ -193,3 +260,48 @@ def _save_creds(usb_path: Path, creds: DeviceCredentials) -> None:
             }
         )
     )
+
+
+def web_login(jsessionid: str, username: str, password: str) -> str | None:
+    """Perform web login to get a session that works with /toolbox/ pages.
+
+    The wire protocol JSESSIONID is passed to browser-entry to link sessions,
+    then a form POST to /toolbox/login authenticates the web session.
+
+    Returns the authenticated JSESSIONID, or None on failure.
+    """
+    import httpx
+
+    with httpx.Client(
+        follow_redirects=True,
+        timeout=30,
+        cookies={"JSESSIONID": jsessionid},
+    ) as client:
+        try:
+            # 1. Visit device page to establish web session
+            client.get(
+                f"{WEB_BASE}/toolbox/device?workingMode=TOOLBOX",
+                headers={"User-Agent": BROWSER_UA},
+            )
+
+            # 2. Web login with username/password
+            client.post(
+                f"{WEB_BASE}/toolbox/login",
+                data={
+                    "posted": "true",
+                    "marketSession.userLoginForm.email": username,
+                    "marketSession.userLoginForm.password": password,
+                },
+                headers={
+                    "User-Agent": BROWSER_UA,
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+            )
+
+            # Extract JSESSIONID from cookies
+            for cookie in client.cookies.jar:
+                if cookie.name == "JSESSIONID":
+                    return cookie.value
+        except (httpx.RemoteProtocolError, httpx.ConnectError):
+            pass
+    return None

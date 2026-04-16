@@ -44,6 +44,10 @@ The protocol has been fully reverse-engineered and verified against the live ser
 - [x] `download.py` — download manager with cache, resume, MD5 verification (tested)
 - [x] Offline test fixtures from captured traffic (7 fixture files)
 - [x] 201 unit tests, all passing
+- [x] `cli.py` — working CLI: detect, register, login, catalog, updates commands
+- [x] `session.py` — web login via form POST to `/toolbox/login`
+- [x] `api/register.py` — device registration works (Content-Type fix), 409 handling for re-registration
+- [x] `wire_codec.py` — senddevicestatus body encoder (built, needs correct credential block)
 
 ## Phase 1: Protocol Implementation
 
@@ -151,12 +155,53 @@ RANDOM mode seed generation:
   - Update .lyc, .stm, .md5 files
   - Write update_checksum.md5 to trigger head unit sync
 
+## Phase 4: CLI and Polish
+
+- [x] **4.1** Wire up CLI commands (`cli.py`)
+  - ✅ `medianav-toolbox detect` — detect USB drive, show device info, space, OS version
+  - ✅ `medianav-toolbox register` — register new device, save credentials to USB
+  - ✅ `medianav-toolbox login` — full session flow (boot → login → fingerprint → getprocess → web_login)
+  - ✅ `medianav-toolbox catalog` — fetches content tree (blocked by senddevicestatus, shows message)
+  - ✅ `medianav-toolbox updates` — quick update check (same limitation)
+  - Web login implemented: `web_login()` authenticates via form POST to `/toolbox/login`
+
+- [ ] **4.2** Fix senddevicestatus to unblock catalog/updates
+  - Encoder built (`build_senddevicestatus_body()` in `wire_codec.py`) but returns 409
+  - **Root cause**: body must start with the **head unit's** credential block, not the toolbox's
+  - The head unit's Name comes from the `delegator` endpoint (flow 736)
+  - Three credential sets in play: toolbox registration, delegator (head unit), and a third unknown
+  - Needs: reverse the `delegator` endpoint to get head unit credentials
+  - Once fixed, catalog and updates CLI commands will show real content
+
+- [ ] **4.3** Wire up `medianav-toolbox sync` command
+  - Select content, confirm, trigger download, write to USB
+  - Depends on 4.2 (senddevicestatus) and 3.4 (content installation)
+
+## Known Bugs
+
+- [x] **B.1** ~~Device registration returns HTTP 500~~ — **RESOLVED**
+  - Root cause was the same Content-Type bug that blocked login
+  - Registration now works with fresh SWIDs (returns Name, Code, Secret)
+  - HTTP 409 = device already registered (expected, use cached creds or new SWID)
+  - Tested: fresh registration returns 200 with valid credentials
+
 ## Remaining Research
 
-- [x] **R.1** ~~DEVICE mode request encryption~~ — RESOLVED: DEVICE mode requests use **Code** as PRNG seed, responses use **Secret**
+- [x] **R.1** ~~DEVICE mode request encryption~~ — RESOLVED
 - [ ] **R.2** NNGE decryption — device.nng encryption algorithm (key: `m0$7j0n4(0n73n71I)`, template: `ZXXXXXXXXXXXXXXXXXXZ`)
-- [x] **R.3** ~~SWID format_swid()~~ — **RESOLVED**: Crockford base32 encoding of first 10 bytes of MD5. Implemented in `swid.py`.
+- [x] **R.3** ~~SWID format_swid()~~ — **RESOLVED**
 - [ ] **R.4** Imei field — understand the `x51x4Dx30x30x30x30x31` encoding
-- [x] **R.5** ~~DEVICE mode credential encoding~~ — RESOLVED: `0xD8 || (Name XOR 6935b733a33d02588bb55424260a2fb5)`. Verified against live server.
-- [x] **R.6** ~~Request body encoding~~ — **RESOLVED**: Request bodies use the same igo-binary tagged format as responses (length-prefixed strings, type tags). The body appeared as random data because query and body are encrypted as **separate SnakeOil streams**: DEVICE mode uses Code for query, Secret for body. RANDOM mode uses the same random seed but independent PRNG state. `protocol.py` updated with `build_request(query, body, ...)` API. Verified byte-for-byte against all 8 captured requests.
-- [ ] **R.7** XOR key universality — is `IGO_CREDENTIAL_KEY` the same for all devices, or derived from device-specific data? Needs testing with a second device.
+- [x] **R.5** ~~DEVICE mode credential encoding~~ — RESOLVED
+- [x] **R.6** ~~Request body encoding~~ — **RESOLVED**
+- [ ] **R.7** XOR key universality — is `IGO_CREDENTIAL_KEY` the same for all devices?
+- [ ] **R.8** Delegator endpoint — reverse the `/rest/1/delegator` wire protocol call
+  - Returns a second set of credentials (Name/Code/Secret) for the head unit device
+  - These credentials are needed for `senddevicestatus` body credential block
+  - Captured: flow 736, request 155B, response 175B
+  - Decoded response: Name=`C10CD1FD4A2F23F921D6E3B093D5957A`, Code=3362879562238844, Secret=4196269328295954
+  - **Blocker for 4.2** (senddevicestatus) and therefore catalog/updates CLI commands
+- [ ] **R.9** senddevicestatus query flags `0x68` vs `0x60`
+  - Flow 735 uses flags `0x60` and decrypts with Secret — body is readable
+  - Flows 737/741/754/792 use flags `0x68` and body does NOT decrypt with Secret or Code
+  - The `0x08` bit may indicate a different encryption key (possibly delegator Secret)
+  - Need to test decryption with delegator credentials
