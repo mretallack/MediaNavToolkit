@@ -91,3 +91,41 @@ class TestBuildRegisterDeviceBody:
     def test_contains_brand(self):
         body = build_register_device_body("TestBrand", "M", "S", "I", "V", 0, 1, "U")
         assert b"TestBrand" in body
+
+
+# Captured get_device_descriptor_list body (decrypted)
+DESCRIPTOR_LIST_BODY = bytes.fromhex("8069bbb52d010944616369615f554c43")
+
+
+class TestBuildGetDeviceModelListBody:
+    def test_basic_structure(self):
+        from medianav_toolbox.wire_codec import build_get_device_model_list_body
+
+        body = build_get_device_model_list_body([(0, 100125), (0, 100661)])
+        assert body[0] == 0x00  # header
+        assert body[1] == 2  # count
+        assert body[2] == 0x80  # first entry marker
+        assert len(body) == 2 + 2 * 9  # header + 2 entries * 9 bytes
+
+    def test_entry_format(self):
+        from medianav_toolbox.wire_codec import build_get_device_model_list_body
+
+        body = build_get_device_model_list_body([(0, 100661)])
+        # Entry: 0x80 + version(4B BE) + id(4B BE)
+        assert body[2] == 0x80
+        assert body[3:7] == b"\x00\x00\x00\x00"  # version=0
+        assert body[7:11] == bytes.fromhex("00018935")  # id=100661
+
+
+class TestBuildGetDeviceDescriptorListBody:
+    def test_matches_capture(self):
+        from medianav_toolbox.wire_codec import build_get_device_descriptor_list_body
+
+        body = build_get_device_descriptor_list_body(0x69BBB52D, "Dacia_ULC")
+        assert body == DESCRIPTOR_LIST_BODY
+
+    def test_contains_alias(self):
+        from medianav_toolbox.wire_codec import build_get_device_descriptor_list_body
+
+        body = build_get_device_descriptor_list_body(1, "TestAlias")
+        assert b"TestAlias" in body

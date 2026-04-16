@@ -260,7 +260,7 @@ The SWID identifies the **PC running the Toolbox**, not the head unit. Derived f
    - **Primary**: `DeviceIoControl(\\.\PhysicalDrive0, IOCTL_STORAGE_QUERY_PROPERTY)` → physical drive serial as hex
    - **Fallback**: `GetVolumeInformationW("C:\\")` → volume serial as `sprintf("%u", serial)`
 2. `FUN_100bd380` wraps in `"SPEEDx%sCAM"` salt, computes MD5 → 16 bytes
-3. `FUN_1009c960` formats as `CK-XXXX-XXXX-XXXX-XXXX`
+3. `FUN_1009c960` formats as `CK-XXXX-XXXX-XXXX-XXXX` — **SOLVED**: Crockford base32 encoding of first 10 MD5 bytes (80 bits → 16 chars at 5 bits each). Alphabet: `0123456789ABCDEFGHJKMNPQRSTVWXYZ`. Implemented in `swid.py`.
 
 ### Storage
 

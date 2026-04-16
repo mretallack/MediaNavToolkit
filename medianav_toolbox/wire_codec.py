@@ -134,3 +134,37 @@ def build_login_body(
         encode_string(language),
         encode_byte(agent_type),
     )
+
+
+def build_get_device_model_list_body(
+    models: list[tuple[int, int]],
+) -> bytes:
+    """Build GetDeviceModelListArg body.
+
+    From captured request (272 bytes):
+      [0x00] [count:1] [entry * count]
+      Entry: [0x80] [version:4B BE] [id:4B BE]
+
+    Args:
+        models: list of (version, model_id) tuples
+    """
+    entries = b""
+    for version, model_id in models:
+        entries += b"\x80" + encode_int32(version) + encode_int32(model_id)
+    return b"\x00" + encode_byte(len(models)) + entries
+
+
+def build_get_device_descriptor_list_body(
+    device_context_id: int,
+    agent_alias: str = "Dacia_ULC",
+) -> bytes:
+    """Build GetDeviceDescriptorListArg body.
+
+    From captured request (16 bytes):
+      [0x80] [device_context_id:4B BE] [0x01] [len] "Dacia_ULC"
+    """
+    return encode_body(
+        encode_int32(device_context_id),
+        encode_byte(0x01),
+        encode_string(agent_alias),
+    )

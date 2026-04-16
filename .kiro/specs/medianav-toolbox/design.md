@@ -256,7 +256,7 @@ NNGE_TEMPLATE = b'ZXXXXXXXXXXXXXXXXXXZ'
 
 4. **NNGE decryption** — device.nng uses key `m0$7j0n4(0n73n71I)` with template `ZXXXXXXXXXXXXXXXXXXZ`. Not yet reversed.
 
-5. **SWID format_swid()** — the exact byte-to-character mapping for `CK-XXXX-XXXX-XXXX-XXXX` needs to be extracted from `FUN_1009c960`.
+5. ~~**SWID format_swid()**~~ — **SOLVED**: Crockford base32 encoding of first 10 bytes of MD5("SPEEDx{serial}CAM"). Implemented in `swid.py`.
 
 6. **Credential block XOR key universality** — Unknown whether `IGO_CREDENTIAL_KEY` is the same for all devices. Needs testing with a second device.
 

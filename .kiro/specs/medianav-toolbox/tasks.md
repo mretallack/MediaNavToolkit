@@ -98,21 +98,19 @@ RANDOM mode seed generation:
   - Returns: `DeviceCredentials` (Name, Code, Secret) for authenticated calls
   - Body format verified byte-for-byte against captured traffic
 
-- [ ] **2.3** Implement SWID generation
-  - Compute from drive serial: `MD5("SPEEDx{serial}CAM")` → `CK-XXXX-XXXX-XXXX-XXXX`
-  - Extract `format_swid()` byte-to-char mapping from `FUN_1009c960`
-  - Linux: get drive serial from `/dev/disk/by-id/` or `lsblk`
-  - Tests: known serial → known SWID
+- [x] **2.3** Implement SWID generation
+  - `compute_swid(serial)` in `swid.py` — MD5("SPEEDx{serial}CAM") → Crockford base32
+  - `get_drive_serial(path)` — Linux drive serial via lsblk / /dev/disk/by-id/
+  - Format: CK-XXXX-XXXX-XXXX-XXXX (16 Crockford base32 chars from first 10 MD5 bytes)
 
 - [x] **2.4** Implement authenticated API calls (DEVICE mode)
   - ✅ `POST /rest/1/login` — `login_wire()` in `api/market.py`, DEVICE mode (Code for query, Secret for body)
   - ✅ `POST /services/register/rest/1/hasActivatableService` — WORKING
   - ✅ `POST /rest/1/getprocess` — WORKING (empty body + credential block)
-  - [ ] `POST /rest/1/sendfingerprint` — needs wire_codec encoder
-  - [ ] `POST /services/register/rest/1/get_device_model_list` — needs wire_codec encoder
-  - [ ] `POST /services/register/rest/1/get_device_descriptor_list` — needs wire_codec encoder
+  - ✅ `POST /services/register/rest/1/get_device_model_list` — `build_get_device_model_list_body()` verified
+  - ✅ `POST /services/register/rest/1/get_device_descriptor_list` — `build_get_device_descriptor_list_body()` verified
+  - ⏳ `POST /rest/1/sendfingerprint` — wire format decoded (13KB), needs USB drive scanner (Phase 3)
   - All use Code in header and as query encryption seed, Secret for body encryption
-  - Request bodies use igo-binary tagged format (same as responses) — R.6 SOLVED
 
 ## Phase 3: Content Pipeline
 
@@ -134,7 +132,7 @@ RANDOM mode seed generation:
 
 - [x] **R.1** ~~DEVICE mode request encryption~~ — RESOLVED: DEVICE mode requests use **Code** as PRNG seed, responses use **Secret**
 - [ ] **R.2** NNGE decryption — device.nng encryption algorithm (key: `m0$7j0n4(0n73n71I)`, template: `ZXXXXXXXXXXXXXXXXXXZ`)
-- [ ] **R.3** SWID format_swid() — extract exact byte-to-char mapping from Ghidra (`FUN_1009c960`)
+- [x] **R.3** ~~SWID format_swid()~~ — **RESOLVED**: Crockford base32 encoding of first 10 bytes of MD5. Implemented in `swid.py`.
 - [ ] **R.4** Imei field — understand the `x51x4Dx30x30x30x30x31` encoding
 - [x] **R.5** ~~DEVICE mode credential encoding~~ — RESOLVED: `0xD8 || (Name XOR 6935b733a33d02588bb55424260a2fb5)`. Verified against live server.
 - [x] **R.6** ~~Request body encoding~~ — **RESOLVED**: Request bodies use the same igo-binary tagged format as responses (length-prefixed strings, type tags). The body appeared as random data because query and body are encrypted as **separate SnakeOil streams**: DEVICE mode uses Code for query, Secret for body. RANDOM mode uses the same random seed but independent PRNG state. `protocol.py` updated with `build_request(query, body, ...)` API. Verified byte-for-byte against all 8 captured requests.
