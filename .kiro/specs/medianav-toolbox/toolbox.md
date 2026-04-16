@@ -796,6 +796,72 @@ Web login (step 10)    → Same JSESSIONID, now authenticated for /toolbox/ page
 
 ---
 
+## 21. Content Installation — USB Layout
+
+### .stm Shadow Files
+
+Every content file on the USB has a corresponding `.stm` metadata file. The head unit's synctool reads these to determine what's installed.
+
+```ini
+purpose = shadow
+size = 109490688
+content_id = 7341211
+header_id = 117863961
+timestamp = 1580666002
+md5 = EAC5E8CCCC4A28792251535B55A7B182
+```
+
+- `size`: file size in bytes
+- `content_id`: server content ID (matches catalog)
+- `header_id`: package header ID
+- `timestamp`: Unix epoch seconds of last update
+- `md5`: MD5 hex of the content file (present for `.zip` files, absent for `.fbl`)
+
+### Content Directories
+
+```
+NaviSync/content/
+├── map/           *.fbl + *.fbl.stm     (map data — largest files)
+├── poi/           *.poi + *.poi.stm     (points of interest)
+├── speedcam/      *.spc + *.spc.stm     (speed cameras)
+├── tmc/           *.tmc + *.tmc.stm     (traffic message channel)
+├── lang/          *.zip + *.zip.stm     (language packs)
+├── voice/         *.zip + *.zip.stm     (voice guidance)
+├── global_cfg/    *.zip + *.zip.stm     (global config)
+└── userdata/POI/  *.zip + *.zip.stm     (dealer POIs)
+```
+
+### License Files
+
+```
+NaviSync/license/
+├── device.nng                           (device identity, NNGE encrypted)
+├── {name}.lyc                           (license file from server)
+└── {name}.lyc.md5                       (MD5 hex of .lyc file)
+```
+
+### Update Trigger
+
+The synctool checks for `update_checksum.md5` in the USB root on insertion:
+- **Present**: synctool processes the update (copies content to internal storage)
+- **After processing**: synctool **deletes** `update_checksum.md5`
+- **Content**: MD5 of all `.stm` files concatenated (sorted alphabetically)
+
+### Install Process
+
+```
+1. Download content files from NaviExtras CDN to local cache
+2. Copy content files to NaviSync/content/{type}/
+3. Write .stm shadow files with metadata
+4. Update .lyc license files in NaviSync/license/
+5. Write update_checksum.md5 to USB root
+6. Insert USB into head unit → synctool reads and applies update
+```
+
+**Implementation**: `installer.py` — `install_content()`, `install_license()`, `write_update_checksum()`
+
+---
+
 ## 10. Open Questions
 
 1. ~~**DEVICE mode request encryption**~~ — **SOLVED**: Request seed = Code, response seed = Secret.

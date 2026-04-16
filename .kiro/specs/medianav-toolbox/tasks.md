@@ -52,6 +52,8 @@ The protocol has been fully reverse-engineered and verified against the live ser
 - [x] `wire_codec.py` — senddevicestatus body encoder (built, needs correct credential block)
 - [x] `api/register.py` — `get_delegator_credentials()` for head unit Name/Code/Secret
 - [x] Full catalog flow working: login → fingerprint → delegator → senddevicestatus → web_login → catalog
+- [x] `installer.py` — content installer: write files, .stm, .lyc, update_checksum.md5
+- [x] 204 unit tests, all passing
 
 ## Phase 1: Protocol Implementation
 
@@ -154,10 +156,14 @@ RANDOM mode seed generation:
   - Note: actual file downloads are triggered by the native engine via wire protocol
     `getprocess` tasks. The web endpoints handle content selection and size estimation.
 
-- [ ] **3.4** Implement content installation
-  - Write downloaded content to USB drive
-  - Update .lyc, .stm, .md5 files
-  - Write update_checksum.md5 to trigger head unit sync
+- [x] **3.4** Content installation (`installer.py`)
+  - `install_content()` — copies content files + writes `.stm` shadow metadata
+  - `install_license()` — writes `.lyc` + `.lyc.md5` checksum files
+  - `write_update_checksum()` — writes `update_checksum.md5` to trigger synctool
+  - `write_stm()` — creates `.stm` files matching exact USB format
+  - `check_space()` — verifies USB free space
+  - 9 unit tests, all passing
+  - Note: download URLs come from `getprocess` after web content selection (not yet wired)
 
 ## Phase 4: CLI and Polish
 

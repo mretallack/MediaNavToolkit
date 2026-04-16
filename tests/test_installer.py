@@ -1,77 +1,122 @@
-"""Tests for installer.py."""
+"""Tests for content installer."""
 
 from pathlib import Path
 
-from medianav_toolbox.installer import ContentInstaller
-from medianav_toolbox.models import ContentItem, ContentType
+import pytest
+
+from medianav_toolbox.installer import (
+    InstallItem,
+    check_space,
+    compute_md5,
+    install_content,
+    install_license,
+    write_stm,
+    write_update_checksum,
+)
 
 
-def _make_usb(tmp_path):
-    (tmp_path / "NaviSync" / "content").mkdir(parents=True)
-    return tmp_path
+def test_write_stm(tmp_path):
+    stm = tmp_path / "test.fbl.stm"
+    write_stm(stm, 109490688, 7341211, 117863961)
+    text = stm.read_text()
+    assert "purpose = shadow" in text
+    assert "size = 109490688" in text
+    assert "content_id = 7341211" in text
+    assert "header_id = 117863961" in text
+    assert "timestamp = " in text
+    assert "md5" not in text
 
 
-def _item(name="TestMap", ctype=ContentType.MAP, cid=100, size=1000):
-    return ContentItem(
-        content_id=cid, name=name, content_type=ctype, size=size, timestamp=1700000000
-    )
+def test_write_stm_with_md5(tmp_path):
+    stm = tmp_path / "test.zip.stm"
+    write_stm(stm, 124146, 1090520534, 1514622542, md5="EAC5E8CCCC4A28792251535B55A7B182")
+    text = stm.read_text()
+    assert "md5 = EAC5E8CCCC4A28792251535B55A7B182" in text
 
 
-def test_install_writes_stm(tmp_path):
-    usb = _make_usb(tmp_path)
-    inst = ContentInstaller(usb)
-    result = inst.install([_item()], [tmp_path / "dummy.dat"])
-    assert result.installed_count == 1
-    stm_files = list((usb / "NaviSync" / "content" / "map").glob("*.stm"))
-    assert len(stm_files) == 1
+def test_compute_md5(tmp_path):
+    f = tmp_path / "test.bin"
+    f.write_bytes(b"hello world")
+    assert compute_md5(f) == "5EB63BBBE01EEED093CB22BB8F5ACDC3"
 
 
-def test_install_stm_content(tmp_path):
-    usb = _make_usb(tmp_path)
-    inst = ContentInstaller(usb)
-    inst.install([_item(name="UK", cid=42, size=9999)], [tmp_path / "dummy.dat"])
-    stm = (usb / "NaviSync" / "content" / "map" / "UK.fbl.stm").read_text()
-    assert "content_id = 42" in stm
-    assert "size = 9999" in stm
-    assert "purpose = shadow" in stm
+def test_install_content_with_file(tmp_path):
+    usb = tmp_path / "usb"
+    usb.mkdir()
+    src = tmp_path / "UnitedKingdom.fbl"
+    src.write_bytes(b"map data here")
 
-
-def test_install_writes_update_checksum(tmp_path):
-    usb = _make_usb(tmp_path)
-    inst = ContentInstaller(usb)
-    inst.install([_item()], [tmp_path / "dummy.dat"])
-    checksum = usb / "update_checksum.md5"
-    assert checksum.exists()
-    assert len(checksum.read_text()) == 32  # MD5 hex
-
-
-def test_install_check_space(tmp_path):
-    usb = _make_usb(tmp_path)
-    inst = ContentInstaller(usb)
-    assert inst.check_space(1) is True
-    assert inst.check_space(10**18) is False  # 1 exabyte
-
-
-def test_install_preserves_existing(tmp_path):
-    usb = _make_usb(tmp_path)
-    existing = usb / "NaviSync" / "content" / "map"
-    existing.mkdir(parents=True, exist_ok=True)
-    (existing / "OldMap.fbl.stm").write_text("purpose = shadow\nsize = 500\n")
-    inst = ContentInstaller(usb)
-    inst.install([_item(name="NewMap")], [tmp_path / "dummy.dat"])
-    assert (existing / "OldMap.fbl.stm").exists()
-    assert (existing / "NewMap.fbl.stm").exists()
-
-
-def test_install_content_type_dirs(tmp_path):
-    usb = _make_usb(tmp_path)
-    inst = ContentInstaller(usb)
     items = [
-        _item(name="A", ctype=ContentType.MAP, cid=1),
-        _item(name="B", ctype=ContentType.POI, cid=2),
-        _item(name="C", ctype=ContentType.SPEEDCAM, cid=3),
+        InstallItem(filename="UnitedKingdom.fbl", subdir="map", content_id=7341211, source_path=src)
     ]
-    inst.install(items, [tmp_path / "d"] * 3)
-    assert (usb / "NaviSync" / "content" / "map" / "A.fbl.stm").exists()
-    assert (usb / "NaviSync" / "content" / "poi" / "B.poi.stm").exists()
-    assert (usb / "NaviSync" / "content" / "speedcam" / "C.spc.stm").exists()
+    errors = install_content(usb, items)
+
+    assert errors == []
+    assert (usb / "NaviSync" / "content" / "map" / "UnitedKingdom.fbl").exists()
+    stm = usb / "NaviSync" / "content" / "map" / "UnitedKingdom.fbl.stm"
+    assert stm.exists()
+    text = stm.read_text()
+    assert "size = 13" in text
+    assert "content_id = 7341211" in text
+
+
+def test_install_content_zip_has_md5(tmp_path):
+    usb = tmp_path / "usb"
+    usb.mkdir()
+    src = tmp_path / "Lang_English-uk.zip"
+    src.write_bytes(b"zip content")
+
+    items = [
+        InstallItem(
+            filename="Lang_English-uk.zip", subdir="lang", content_id=1090520530, source_path=src
+        )
+    ]
+    errors = install_content(usb, items)
+
+    assert errors == []
+    stm = usb / "NaviSync" / "content" / "lang" / "Lang_English-uk.zip.stm"
+    assert "md5 = " in stm.read_text()
+
+
+def test_install_content_stm_only(tmp_path):
+    usb = tmp_path / "usb"
+    usb.mkdir()
+
+    items = [InstallItem(filename="France.fbl", subdir="map", content_id=6816923)]
+    errors = install_content(usb, items)
+
+    assert errors == []
+    stm = usb / "NaviSync" / "content" / "map" / "France.fbl.stm"
+    assert stm.exists()
+    assert "size = 0" in stm.read_text()
+
+
+def test_install_license(tmp_path):
+    usb = tmp_path / "usb"
+    usb.mkdir()
+
+    install_license(usb, "test.lyc", b"license data")
+
+    assert (usb / "NaviSync" / "license" / "test.lyc").read_bytes() == b"license data"
+    md5_file = usb / "NaviSync" / "license" / "test.lyc.md5"
+    assert md5_file.exists()
+    assert len(md5_file.read_text()) == 32
+
+
+def test_write_update_checksum(tmp_path):
+    usb = tmp_path / "usb"
+    content = usb / "NaviSync" / "content" / "map"
+    content.mkdir(parents=True)
+    (content / "test.fbl.stm").write_text("purpose = shadow\nsize = 100\n")
+
+    path = write_update_checksum(usb)
+
+    assert path == usb / "update_checksum.md5"
+    assert path.exists()
+    assert len(path.read_text()) == 32
+
+
+def test_check_space(tmp_path):
+    ok, free = check_space(tmp_path, 1)
+    assert ok is True
+    assert free > 0
