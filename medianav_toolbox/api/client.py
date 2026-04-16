@@ -31,7 +31,7 @@ class NaviExtrasClient:
                     time.sleep(2**attempt)
                     continue
                 return resp
-            except (httpx.TimeoutException, httpx.ConnectError) as e:
+            except (httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError) as e:
                 last_exc = e
                 if attempt < self.config.max_retries - 1:
                     time.sleep(2**attempt)

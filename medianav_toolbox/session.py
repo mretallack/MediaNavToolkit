@@ -133,7 +133,8 @@ def _login_wire(client, creds):
 
 
 def _send_fingerprint(client, creds, session):
-    query = bytes([0x53, 0x60])
+    cred_block = build_credential_block(creds.name)
+    query = bytes([0xC2, 0x20]) + cred_block
     body = build_sendfingerprint_body()
     wire = build_request(
         query=query,
@@ -151,7 +152,7 @@ def _send_fingerprint(client, creds, session):
 
 def _get_process(client, creds, session):
     cred_block = build_credential_block(creds.name)
-    query = bytes([0x54, 0x20]) + cred_block
+    query = bytes([0xC3, 0x20]) + cred_block
     wire = build_request(
         query=query,
         body=b"",

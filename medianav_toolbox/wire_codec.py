@@ -170,54 +170,65 @@ def build_get_device_descriptor_list_body(
     )
 
 
+def _encode_varint(n: int) -> bytes:
+    """Encode integer as varint (high bit = continuation, big-endian order)."""
+    if n < 0x80:
+        return bytes([n])
+    # Multi-byte: high bytes first, continuation bit on all but last
+    parts = []
+    while n >= 0x80:
+        parts.append(n & 0x7F)
+        n >>= 7
+    parts.append(n)
+    # Reverse: high bits first, set continuation bit on all but last byte
+    result = []
+    for i, p in enumerate(reversed(parts)):
+        result.append(p | 0x80 if i < len(parts) - 1 else p)
+    return bytes(result)
+
+
 def build_sendfingerprint_body(
     device_context_id: int = 0,
-    checksum: str = "N/A",
     cache_path: str = "/tmp/medianav_cache",
     total_space: int = 0,
     free_space: int = 0,
     info: str = "0_0",
 ) -> bytes:
-    """Build SendFingerprintArg body (minimal version).
+    """Build SendFingerprintArg body.
 
-    Sends a minimal fingerprint with one dummy file entry and one storage entry.
-    The server accepts this and returns tasks (FINGERPRINT, BROWSER, SSE).
-
-    From captured traffic, the structure is:
+    Structure (from captured traffic, verified byte-for-byte):
       [int32 BE] DeviceContextId
-      [byte] flags (0xC0 = Partial=false, Synctool=false)
-      [len] checksum string
-      [file_entries...]
-      [storage_entry]
+      [0xC0] flags (Partial=false, Synctool=false)
+      [len] "N/A" checksum
+      [varint] file_entry_count
+      [entries...] — 0x22=directory, 0x28=file
+      [0x01 0x00] storage (count=1, readonly=false)
+      [len] path [int64] total [int64] free [int64] minfree
+      [int32] blocksize [len] mountpath
       [len] info string
+
+    Ref: toolbox.md §12
     """
-    # File entry for "dummy" (minimal, matches captured XML)
-    dummy_entry = (
-        b"\x22"  # flags: directory=false, synctool=false
-        + encode_string("dummy")
-        + encode_string(cache_path)
-        + b"\x00\x00\x00\x00\x00\x00\x00\x00"  # size=0
-        + b"\x00\x00\x00\x00\x00\x00\x00\x00"  # create_timestamp=0
-        + b"\x00\x00\x00\x00\x00\x00\x00\x00"  # modify_timestamp=0
+    dir_entry = (
+        b"\x22" + encode_string("0") + encode_string(cache_path) + b"\x00" * 24  # size + ts1 + ts2
     )
 
-    # Storage entry
-    storage_entry = (
-        b"\x01"  # count=1
-        + b"\x00"  # ReadOnly=false
+    storage = (
+        b"\x01\x00"  # count=1, readonly=false
         + encode_string(cache_path)
         + encode_int64(total_space)
         + encode_int64(free_space)
-        + encode_int64(0)  # MinFreeSpace
-        + encode_int32(4096)  # BlockSize
-        + encode_string("/")  # MountPath
+        + encode_int64(0)
+        + encode_int32(4096)
+        + encode_string("/")
     )
 
     return (
         encode_int32(device_context_id)
-        + b"\xc0"  # flags
-        + encode_string(checksum)
-        + dummy_entry
-        + storage_entry
+        + b"\xc0"
+        + encode_string("N/A")
+        + _encode_varint(1)
+        + dir_entry
+        + storage
         + encode_string(info)
     )
