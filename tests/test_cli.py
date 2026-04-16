@@ -2,13 +2,16 @@
 
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from medianav_toolbox.cli import cli
 
 USB_PATH = str(Path(__file__).parent.parent / "analysis" / "usb_drive" / "disk")
+_usb_missing = not Path(USB_PATH).exists()
 
 
+@pytest.mark.skipif(_usb_missing, reason="analysis/usb_drive/disk not available")
 def test_cli_detect():
     runner = CliRunner()
     result = runner.invoke(cli, ["--usb-path", USB_PATH, "detect"])
@@ -17,6 +20,7 @@ def test_cli_detect():
     assert "0x42000B53" in result.output
 
 
+@pytest.mark.skipif(_usb_missing, reason="analysis/usb_drive/disk not available")
 def test_cli_catalog():
     runner = CliRunner()
     result = runner.invoke(cli, ["--usb-path", USB_PATH, "catalog"])

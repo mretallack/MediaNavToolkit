@@ -116,8 +116,13 @@ def test_detect_drive_invalid(tmp_path):
 # --- device_status.ini ---
 
 
+_USB_DIR = DATA_DIR.parent.parent / "analysis" / "usb_drive" / "disk"
+_usb_missing = not _USB_DIR.exists()
+
+
+@pytest.mark.skipif(_usb_missing, reason="analysis/usb_drive/disk not available")
 def test_read_device_status():
-    info = read_device_status(DATA_DIR.parent.parent / "analysis" / "usb_drive" / "disk")
+    info = read_device_status(_USB_DIR)
     assert info.free_space == 2312216576
     assert info.total_space == 4407054336
     assert info.os_version == "6.0.12.2.1166_r2"
@@ -136,8 +141,9 @@ def test_parse_stm_file():
     assert stm.purpose == "shadow"
 
 
+@pytest.mark.skipif(_usb_missing, reason="analysis/usb_drive/disk not available")
 def test_read_installed_content():
-    usb = DATA_DIR.parent.parent / "analysis" / "usb_drive" / "disk"
+    usb = _USB_DIR
     content = read_installed_content(usb)
     assert len(content) > 0
     types = {c.content_type for c in content}
