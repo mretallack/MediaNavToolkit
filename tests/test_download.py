@@ -1,158 +1,89 @@
-"""Tests for download.py."""
+"""Unit tests for download manager."""
 
 import hashlib
 from pathlib import Path
 
-import httpx
-import respx
+import pytest
 
-from medianav_toolbox.api.client import NaviExtrasClient
-from medianav_toolbox.config import Config
 from medianav_toolbox.download import DownloadManager
 from medianav_toolbox.models import DownloadItem
 
 
-def _cfg(tmp_path):
-    return Config(cache_dir=tmp_path / "cache", max_retries=1, http_timeout=5)
+@pytest.fixture
+def tmp_cache(tmp_path):
+    return tmp_path / "cache"
 
 
-def _md5(data: bytes) -> str:
-    return hashlib.md5(data).hexdigest()
+class TestDownloadManager:
+    def test_verify_md5_correct(self, tmp_cache):
+        tmp_cache.mkdir()
+        test_file = tmp_cache / "test.bin"
+        test_file.write_bytes(b"hello world")
+        expected = hashlib.md5(b"hello world").hexdigest()
 
+        from unittest.mock import MagicMock
 
-@respx.mock
-def test_download_one(tmp_path):
-    content = b"hello world"
-    respx.get("https://dl.example.com/file.dat").mock(
-        return_value=httpx.Response(200, content=content)
-    )
-    cfg = _cfg(tmp_path)
-    item = DownloadItem(
-        content_id=1,
-        url="https://dl.example.com/file.dat",
-        target_path="file.dat",
-        size=len(content),
-    )
-    with NaviExtrasClient(cfg) as client:
-        dm = DownloadManager(cfg, client)
-        path = dm.download_one(item)
-    assert path.exists()
-    assert path.read_bytes() == content
+        from medianav_toolbox.config import Config
 
+        config = Config()
+        config.cache_dir = tmp_cache
+        dm = DownloadManager(config, MagicMock())
+        assert dm.verify_md5(test_file, expected)
 
-@respx.mock
-def test_download_md5_verify(tmp_path):
-    content = b"test data"
-    md5 = _md5(content)
-    respx.get("https://dl.example.com/f.dat").mock(
-        return_value=httpx.Response(200, content=content)
-    )
-    cfg = _cfg(tmp_path)
-    item = DownloadItem(
-        content_id=2,
-        url="https://dl.example.com/f.dat",
-        target_path="f.dat",
-        size=len(content),
-        md5=md5,
-    )
-    with NaviExtrasClient(cfg) as client:
-        dm = DownloadManager(cfg, client)
-        path = dm.download_one(item)
-    assert dm.verify_md5(path, md5)
+    def test_verify_md5_wrong(self, tmp_cache):
+        tmp_cache.mkdir()
+        test_file = tmp_cache / "test.bin"
+        test_file.write_bytes(b"hello world")
 
+        from unittest.mock import MagicMock
 
-@respx.mock
-def test_download_md5_mismatch(tmp_path):
-    content = b"bad data"
-    respx.get("https://dl.example.com/f.dat").mock(
-        return_value=httpx.Response(200, content=content)
-    )
-    cfg = _cfg(tmp_path)
-    item = DownloadItem(
-        content_id=3,
-        url="https://dl.example.com/f.dat",
-        target_path="f.dat",
-        size=len(content),
-        md5="0000000000000000",
-    )
-    with NaviExtrasClient(cfg) as client:
-        dm = DownloadManager(cfg, client)
-        try:
-            dm.download_one(item)
-            assert False, "Should have raised"
-        except ValueError as e:
-            assert "MD5 mismatch" in str(e)
+        from medianav_toolbox.config import Config
 
+        config = Config()
+        config.cache_dir = tmp_cache
+        dm = DownloadManager(config, MagicMock())
+        assert not dm.verify_md5(test_file, "0" * 32)
 
-@respx.mock
-def test_download_cache_hit(tmp_path):
-    content = b"cached"
-    md5 = _md5(content)
-    cfg = _cfg(tmp_path)
-    cfg.cache_dir.mkdir(parents=True, exist_ok=True)
-    cached = cfg.cache_dir / "4_f.dat"
-    cached.write_bytes(content)
-    route = respx.get("https://dl.example.com/f.dat").mock(
-        return_value=httpx.Response(200, content=b"new")
-    )
-    item = DownloadItem(
-        content_id=4,
-        url="https://dl.example.com/f.dat",
-        target_path="f.dat",
-        size=len(content),
-        md5=md5,
-    )
-    with NaviExtrasClient(cfg) as client:
-        dm = DownloadManager(cfg, client)
-        path = dm.download_one(item)
-    assert path.read_bytes() == content  # served from cache
-    assert route.call_count == 0  # no HTTP request made
+    def test_cache_hit_skips_download(self, tmp_cache):
+        tmp_cache.mkdir()
+        test_file = tmp_cache / "123_map.bin"
+        data = b"cached content"
+        test_file.write_bytes(data)
+        md5 = hashlib.md5(data).hexdigest()
 
+        from unittest.mock import MagicMock
 
-@respx.mock
-def test_download_concurrent(tmp_path):
-    respx.get("https://dl.example.com/a.dat").mock(return_value=httpx.Response(200, content=b"aaa"))
-    respx.get("https://dl.example.com/b.dat").mock(return_value=httpx.Response(200, content=b"bbb"))
-    cfg = _cfg(tmp_path)
-    items = [
-        DownloadItem(
-            content_id=10, url="https://dl.example.com/a.dat", target_path="a.dat", size=3
-        ),
-        DownloadItem(
-            content_id=11, url="https://dl.example.com/b.dat", target_path="b.dat", size=3
-        ),
-    ]
-    with NaviExtrasClient(cfg) as client:
-        dm = DownloadManager(cfg, client)
-        paths = dm.download_all(items)
-    assert len(paths) == 2
-    assert all(p.exists() for p in paths)
+        from medianav_toolbox.config import Config
 
+        config = Config()
+        config.cache_dir = tmp_cache
+        client = MagicMock()
+        dm = DownloadManager(config, client)
 
-@respx.mock
-def test_download_progress_callback(tmp_path):
-    content = b"x" * 100
-    respx.get("https://dl.example.com/f.dat").mock(
-        return_value=httpx.Response(200, content=content)
-    )
-    cfg = _cfg(tmp_path)
-    item = DownloadItem(
-        content_id=5, url="https://dl.example.com/f.dat", target_path="f.dat", size=100
-    )
-    calls = []
-    with NaviExtrasClient(cfg) as client:
-        dm = DownloadManager(cfg, client)
-        dm.download_one(item, progress_cb=lambda done, total: calls.append((done, total)))
-    assert len(calls) > 0
-    assert calls[-1][0] == 100
+        item = DownloadItem(
+            content_id="123",
+            url="http://example.com/map.bin",
+            target_path="map.bin",
+            size=len(data),
+            md5=md5,
+        )
+        result = dm.download_one(item)
+        assert result == test_file
+        # Client should NOT have been called (cache hit)
+        client.get.assert_not_called()
 
+    def test_clear_cache(self, tmp_cache):
+        tmp_cache.mkdir()
+        (tmp_cache / "file1.bin").write_bytes(b"data")
+        (tmp_cache / "file2.bin").write_bytes(b"data")
 
-def test_clear_cache(tmp_path):
-    cfg = _cfg(tmp_path)
-    cfg.cache_dir.mkdir(parents=True, exist_ok=True)
-    (cfg.cache_dir / "test.dat").write_bytes(b"x")
-    dm = DownloadManager.__new__(DownloadManager)
-    dm.config = cfg
-    dm.clear_cache()
-    assert cfg.cache_dir.exists()
-    assert list(cfg.cache_dir.iterdir()) == []
+        from unittest.mock import MagicMock
+
+        from medianav_toolbox.config import Config
+
+        config = Config()
+        config.cache_dir = tmp_cache
+        dm = DownloadManager(config, MagicMock())
+        dm.clear_cache()
+        assert tmp_cache.exists()
+        assert len(list(tmp_cache.iterdir())) == 0

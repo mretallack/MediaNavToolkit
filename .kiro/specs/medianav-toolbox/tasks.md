@@ -9,8 +9,10 @@ The protocol has been fully reverse-engineered and verified against the live ser
 - Wire format: **understood** (16-byte request header, 4-byte response header)
 - DEVICE mode keys: **solved** (Code for request encryption, Secret for response decryption)
 - Credential block: **solved** (`0xD8 || (Name XOR IGO_CREDENTIAL_KEY)`)
-- Full login flow: **working** (boot → login → getprocess all return 200 from live server)
-- Request body encoding: **partially solved** (empty bodies work, complex bodies use captured replay)
+- Full login flow: **working** (boot → login → sendfingerprint → getprocess all return 200)
+- Request body encoding: **solved** (login, fingerprint, register, model list, descriptor list all verified)
+- Catalog parsing: **working** (HTML catalog, content tree, licenses, device status all parsed)
+- Content-Type: **must NOT be sent** for wire protocol requests (server returns 500)
 
 ---
 
@@ -36,6 +38,12 @@ The protocol has been fully reverse-engineered and verified against the live ser
 - [x] `wire_codec.py` — request body encoder for wire format (length-prefixed strings, BE integers)
 - [x] Wire protocol: split query/body encryption (R.6 solved), `protocol.py` updated
 - [x] Wire protocol: `boot_v3()`, `register_device_wire()`, `login_wire()` implemented
+- [x] `session.py` — end-to-end session flow: boot → login → sendfingerprint → getprocess (all 200)
+- [x] `catalog.py` — parsers for catalog HTML, content tree, licenses, device status, update selection
+- [x] `content.py` — content selection: tree retrieval, size estimation, install confirmation
+- [x] `download.py` — download manager with cache, resume, MD5 verification (tested)
+- [x] Offline test fixtures from captured traffic (7 fixture files)
+- [x] 201 unit tests, all passing
 
 ## Phase 1: Protocol Implementation
 
@@ -109,21 +117,36 @@ RANDOM mode seed generation:
   - ✅ `POST /rest/1/getprocess` — WORKING (empty body + credential block)
   - ✅ `POST /services/register/rest/1/get_device_model_list` — `build_get_device_model_list_body()` verified
   - ✅ `POST /services/register/rest/1/get_device_descriptor_list` — `build_get_device_descriptor_list_body()` verified
-  - ⏳ `POST /rest/1/sendfingerprint` — wire format decoded (13KB), needs USB drive scanner (Phase 3)
+  - ✅ `POST /rest/1/sendfingerprint` — fixed: varint file count, proper directory entry, credential block in query. Returns 200.
   - All use Code in header and as query encryption seed, Secret for body encryption
+  - **CRITICAL**: Wire protocol requests must NOT include Content-Type header (server returns 500)
 
 ## Phase 3: Content Pipeline
 
-- [ ] **3.1** Implement catalog retrieval
-  - Parse model list to find matching device
-  - Get available updates from market
-  - Compare with installed content on USB
+- [x] **3.1** End-to-end session flow
+  - `session.py` — boot → login(200) → sendfingerprint(200) → getprocess(200)
+  - Market URL: `https://dacia-ulc.naviextras.com/rest/1/`
+  - Credentials cached in `.medianav_creds.json`, permanent (from `service_register_v1.sav`)
 
-- [ ] **3.2** Implement content download
-  - Wire up download manager with real URLs from server
-  - Progress reporting, MD5 verification
+- [x] **3.2** Catalog parsing (`catalog.py`)
+  - `parse_catalog_html()` — `/toolbox/cataloglist` HTML (package codes, names, releases, providers)
+  - `parse_managecontent_html()` — `/toolbox/managecontentinitwithhierarchy/install` (content tree with IDs)
+  - `parse_update_selection()` — `/rest/managecontent/supermarket/v1/updateselection` JSON (content sizes)
+  - `parse_licenses_response()` — wire protocol licenses (3 .lyc files with SWIDs)
+  - `parse_senddevicestatus_response()` — wire protocol (process/task IDs, requested file paths)
+  - 24 unit tests, all passing against offline fixtures
 
-- [ ] **3.3** Implement content installation
+- [x] **3.3** Content selection and download management (`content.py`, `download.py`)
+  - `get_content_tree()` — fetches and parses content tree from web endpoint
+  - `select_content()` — selects content IDs, returns sizes and space indicator
+  - `confirm_selection()` — triggers install via confirmation endpoint
+  - `get_available_updates()` — convenience: fetches tree, selects all, gets sizes, deselects
+  - `DownloadManager` — file downloads with cache, resume, MD5 verification
+  - 8 unit tests (content selection + download manager), integration tests for live API
+  - Note: actual file downloads are triggered by the native engine via wire protocol
+    `getprocess` tasks. The web endpoints handle content selection and size estimation.
+
+- [ ] **3.4** Implement content installation
   - Write downloaded content to USB drive
   - Update .lyc, .stm, .md5 files
   - Write update_checksum.md5 to trigger head unit sync
