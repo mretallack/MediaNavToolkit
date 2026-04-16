@@ -35,3 +35,12 @@ def test_cli_help():
     assert "catalog" in result.output
     assert "register" in result.output
     assert "updates" in result.output
+    assert "sync" in result.output
+
+
+def test_cli_sync_help():
+    runner = CliRunner()
+    result = runner.invoke(cli, ["sync", "--help"])
+    assert result.exit_code == 0
+    assert "--country" in result.output
+    assert "--dry-run" in result.output

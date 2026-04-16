@@ -300,3 +300,119 @@ def updates(ctx):
         if len(nodes) > 10:
             console.print(f"  ... and {len(nodes) - 10} more")
         console.print(f"\nRun [bold]medianav-toolbox catalog[/bold] for details.")
+
+
+@cli.command()
+@click.option(
+    "--country", "-c", multiple=True, help="Country name to update (can repeat). Omit for all."
+)
+@click.option("--dry-run", is_flag=True, help="Show what would be downloaded without confirming.")
+@click.pass_context
+def sync(ctx, country, dry_run):
+    """Select content, confirm with server, and prepare USB for update.
+
+    Selects content for installation, confirms with the NaviExtras server,
+    and shows the download status. Content is downloaded by the native engine
+    after confirmation.
+
+    Examples:
+        medianav-toolbox sync --usb-path /media/usb
+        medianav-toolbox sync --usb-path /media/usb -c "United Kingdom" -c France
+        medianav-toolbox sync --usb-path /media/usb --dry-run
+    """
+    from medianav_toolbox.api.client import NaviExtrasClient
+    from medianav_toolbox.config import Config
+    from medianav_toolbox.content import (
+        confirm_selection,
+        get_content_tree,
+        select_content,
+    )
+    from medianav_toolbox.installer import check_space
+    from medianav_toolbox.session import run_session
+
+    usb = ctx.obj["usb_path"]
+    username = os.environ.get("NAVIEXTRAS_USER", "")
+    password = os.environ.get("NAVIEXTRAS_PASS", "")
+
+    if not username or not password:
+        console.print("[red]Set NAVIEXTRAS_USER and NAVIEXTRAS_PASS environment variables[/red]")
+        sys.exit(1)
+
+    console.print("Connecting...")
+    result = run_session(usb, username, password)
+    if result["errors"]:
+        for e in result["errors"]:
+            console.print(f"[red]✗ {e}[/red]")
+        sys.exit(1)
+
+    jsid = result.get("web_jsessionid")
+    if not jsid:
+        console.print("[red]Web login failed — cannot sync[/red]")
+        sys.exit(1)
+
+    with NaviExtrasClient(Config()) as client:
+        hc = client._client
+
+        # Get content tree
+        console.print("Fetching content tree...")
+        nodes = get_content_tree(hc, jsid)
+        if not nodes:
+            console.print("[green]✓ No updates available[/green]")
+            return
+
+        # Filter by country if specified
+        if country:
+            country_lower = {c.lower() for c in country}
+            selected_nodes = [n for n in nodes if (n.name or "").lower() in country_lower]
+            if not selected_nodes:
+                console.print(f"[red]No matching content for: {', '.join(country)}[/red]")
+                console.print("Available:")
+                for n in sorted(nodes, key=lambda x: x.name or ""):
+                    console.print(f"  • {n.name}")
+                sys.exit(1)
+        else:
+            selected_nodes = nodes
+
+        # Select content and get sizes
+        selected_ids = [n.content_id for n in selected_nodes]
+        console.print(f"Selecting {len(selected_ids)} items...")
+        sizes, indicator = select_content(hc, jsid, selected_ids)
+
+        size_map = {s.content_id: s.size for s in sizes}
+        total_size = sum(s.size for s in sizes)
+
+        # Show selection
+        table = Table(title="Selected Content")
+        table.add_column("Content", style="cyan")
+        table.add_column("Size", justify="right")
+        for n in sorted(selected_nodes, key=lambda x: x.name or ""):
+            size = size_map.get(n.content_id, 0)
+            table.add_row(n.name, f"{size / 1024 / 1024:.1f} MB")
+        console.print(table)
+        console.print(f"\nTotal download: {total_size / 1024 / 1024 / 1024:.2f} GB")
+
+        if indicator:
+            avail = indicator.get("fullSize", 0)
+            required = indicator.get("required", 0)
+            console.print(f"USB space: {avail / 1024 / 1024 / 1024:.2f} GB available")
+            if required > avail:
+                console.print("[red]✗ Not enough space on USB drive[/red]")
+                select_content(hc, jsid, [])
+                sys.exit(1)
+
+        if dry_run:
+            console.print("\n[yellow]Dry run — not confirming.[/yellow]")
+            select_content(hc, jsid, [])
+            return
+
+        # Confirm
+        console.print("\nConfirming selection with server...")
+        confirm_selection(hc, jsid)
+        console.print("[green]✓ Selection confirmed[/green]")
+        console.print(
+            "\n[dim]The server has queued the update. In the original Windows Toolbox,"
+            "\nthe native engine (nngine.dll) would now download the files."
+            "\nDirect download from this CLI is not yet implemented (needs R.9/R.10)."
+            "\n\nTo complete the update, run the Windows Toolbox once to download,"
+            "\nor check back when direct download support is added.[/dim]"
+        )
