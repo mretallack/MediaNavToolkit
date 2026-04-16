@@ -10,8 +10,8 @@
 | Windows AppData | `analysis/DaciaAutomotive_extracted/` | `%APPDATA%/DaciaAutomotive` cache |
 | HTTP dump (encrypted) | `analysis/DaciaAutomotive_extracted/DaciaAutomotive/http_dump/` | Blowfish-encrypted XML of every API call |
 | HTTP dump (decrypted) | `analysis/http_dump_decrypted/` | Decrypted XML from session 69BAC5EC |
-| mitmproxy flows | `analysis/flows/flows` (75 flows), `analysis/flows/flows-complete` (611 flows) | Live wire captures |
-| mitmproxy decoded | `analysis/flows_decoded/` | Raw request/response binaries |
+| mitmproxy flows | `analysis/flows/flows` (75 flows), `analysis/flows/flows-complete` (611 flows), `analysis/flows/flows16-04-2026` (892 flows) | Live wire captures |
+| mitmproxy decoded | `analysis/flows_decoded/`, `analysis/flows_decoded/2026-04-16/` | Raw request/response binaries |
 | Fingerprints | `analysis/DaciaAutomotive_extracted/DaciaAutomotive/tmp/fingerprints/` | device.nng, fingerprint.xml, licenses |
 | Toolbox logs | `analysis/DaciaAutomotive_extracted/DaciaAutomotive/log/` | Encrypted .tblog files |
 
@@ -206,6 +206,35 @@ No `Content-Type` header is sent for the binary protocol. **The server returns H
 8. POST /rest/1/sendfingerprint        (send device fingerprint, ~13KB)
 9. POST /register/rest/1/get_device_model_list
 ```
+
+### Full Session Lifecycle (from 2026-04-16 capture, 892 flows)
+
+```
+ 1. POST /index/rest/3/boot             → service URLs (RANDOM mode)
+ 2. POST /register/rest/1/device        → Credentials: Name, Code, Secret (RANDOM mode)
+ 3. POST /rest/1/login                  → JSESSIONID cookie (DEVICE mode, Code/Secret)
+ 4. POST /rest/1/sendfingerprint        → 200 (DEVICE mode, ~46KB body)
+ 5. POST /rest/1/getprocess             → empty (no updates pending)
+ 6. POST /rest/1/senddevicestatus       → 200 (DEVICE mode, ~1.5KB, lists USB files)
+ 7. POST /rest/1/delegator              → second Credentials for head unit device
+ 8. POST /rest/1/senddevicestatus       → 200 (repeated with head unit creds)
+ 9. POST /rest/1/sendfilecontent        → 200 (sends device_status.ini to server)
+10. POST /rest/1/senddevicestatus       → 200 (with updated file list)
+11. GET  /toolbox/browser-entry         → 302 (links wire JSESSIONID to web session)
+12. GET  /toolbox/device?workingMode=TOOLBOX → 302
+13. GET  /toolbox/startlogin            → 200 (login form)
+14. POST /toolbox/login                 → 302 (web login with email/password)
+15. GET  /toolbox/selector              → 200 (main menu)
+16. POST /rest/1/licenses               → 200 (3 .lyc files with SWIDs)
+17. POST /rest/1/sendfingerprint        → 200 (second fingerprint, ~46KB)
+18. GET  /toolbox/managecontentinitwithhierarchy/install → 200 (content tree HTML)
+19. POST /rest/managecontent/supermarket/v1/updateselection → JSON (content sizes)
+```
+
+**Three credential sets are in play:**
+1. **Toolbox credentials** — from `/register/rest/1/device`, used for login/fingerprint/getprocess
+2. **Head unit credentials** — from `/rest/1/delegator`, used for senddevicestatus body credential block
+3. **Unknown third set** — decoded from senddevicestatus body, origin unclear
 
 ### Selfie Update (plaintext JSON)
 
@@ -463,17 +492,239 @@ NaviSync/
 
 ---
 
+## 14. Delegator Endpoint
+
+The `/rest/1/delegator` endpoint returns a **second set of credentials** for the head unit device (distinct from the toolbox registration credentials).
+
+**Request**: DEVICE mode wire protocol, ~155 bytes. Body contains device info (brand, model, SWID, IMEI, IGO version, APPCID, serial, UniqId).
+
+**Response**: 175 bytes. Contains:
+- Name: `C10CD1FD4A2F23F921D6E3B093D5957A`
+- Code: `3362879562238844`
+- Secret: `4196269328295954`
+- SWID: `CW-UQAQ-YAEQ-37QI-AA7A-QYQM` (base32-encoded)
+
+These credentials are used in the `senddevicestatus` body credential block. The toolbox credentials (from registration) are used for the wire protocol header/query encryption, but the body starts with the head unit's credential block.
+
+**Status**: Response decoded, but we cannot yet call this endpoint ourselves. Blocker for senddevicestatus.
+
+---
+
+## 15. SendDeviceStatus
+
+The `/rest/1/senddevicestatus` endpoint tells the server what files are on the USB drive. The server uses this to determine what updates are available and what files to request.
+
+### Request Body Structure (from flow 735, flags=0x60)
+
+```
+[credential_block: 17B]     — 0xD8 + (head_unit_Name XOR IGO_CREDENTIAL_KEY)
+[0x40]                      — marker
+[len] brand_name             "DaciaAutomotive"
+[len] model_name             "DaciaAutomotiveDeviceCY20_ULC4dot5"
+[len] swid                   "CK-A80R-YEC3-MYXL-18LN"
+[len] imei                   "32483158423731362D42323938353431"
+[len] igo_version            "9.12.179.821558"
+[int64] timestamp_ms         epoch milliseconds
+[int32] appcid               0x42000B53
+[len] serial                 "UU1DJF00869579646"
+[len] uniq_id                "9DF60F15136D64AC7E234644DD228027"
+[0x00] separator
+[int32] content_version      0x018BB5 = 101301
+[int32] flags                1
+[int32] zero                 0
+[file_entries...]
+```
+
+### File Entry Types
+
+**0xa0 — File entry** (single MD5):
+```
+[0xa0] [len] md5 [len] filename [len] mount [len] path [int64] size [int64] ts1 [int64] ts2
+```
+
+**0xe0 — File entry** (two MD5s, content + file):
+```
+[0xe0] [len] md5_content [0x0a] [0xa0] [len] md5_file [len] filename [len] mount [len] path [int64] size [int64] ts1 [int64] ts2
+```
+
+**0x22 — Directory entry**:
+```
+[0x22] [len] name [len] mount [len] path [int64:0] [int64] ts1 [int64] ts2
+```
+
+### Response
+
+Returns process ID, task ID, and a list of file paths the server wants:
+```
+primary/*.nng
+primary/R-LINK
+primary/NaviSync/device_status.ini
+primary/emptycard.emptycard
+primary/NaviSync/content
+primary/NaviSync/license
+primary/NaviSync
+```
+
+### Query Flags
+
+- `0x60` — body encrypted with Secret (standard). Only flow 735 uses this.
+- `0x68` — body encrypted with unknown key (possibly delegator Secret). Flows 737/741/754/792 use this. The `0x08` bit may indicate delegator credentials for body encryption.
+
+### Status
+
+Encoder built (`build_senddevicestatus_body()` in `wire_codec.py`), but returns HTTP 409 because the body credential block uses the wrong Name. Needs the head unit's Name from the delegator endpoint.
+
+---
+
+## 16. SendFingerprint Body Structure
+
+The `/rest/1/sendfingerprint` body lists files in the PC's download cache.
+
+### Structure (verified byte-for-byte)
+
+```
+[int32] DeviceContextId      0 (always)
+[0xC0]  flags                Partial=false, Synctool=false
+[len]   checksum             "N/A"
+[varint] file_entry_count    e.g. 114 (old capture) or 471 (new capture)
+[entries...]                 0x22=directory, 0x28=file
+[0x01 0x00] storage          count=1, readonly=false
+[len] path [int64] total [int64] free [int64] minfree
+[int32] blocksize [len] mountpath
+[len] info_string            e.g. "1776158679_0"
+```
+
+### Varint Encoding
+
+File count uses a varint: if high bit set, next byte continues.
+- `0x72` = 114 (single byte)
+- `0x83 0x57` = (0x03 << 7) | 0x57 = 471 (two bytes)
+
+### Query
+
+Must include credential block: `[counter] [0x20] [17B credential_block]`.
+The old code used `[0x53] [0x60]` (no cred block) which returned 409.
+
+---
+
+## 17. Web Login Flow
+
+The wire protocol JSESSIONID authenticates `/rest/` API calls, but `/toolbox/` web pages require a separate web login.
+
+### Flow
+
+```
+1. Wire protocol login → JSESSIONID (for /rest/ endpoints)
+2. GET /toolbox/device?workingMode=TOOLBOX (with JSESSIONID cookie)
+3. POST /toolbox/login (form POST with email + password)
+   → 302 redirect to /toolbox/checkuserstatements/selector
+4. GET /toolbox/selector → 200 (main menu, web session authenticated)
+```
+
+### Form POST
+
+```
+POST /toolbox/login
+Content-Type: application/x-www-form-urlencoded
+
+posted=true
+&marketSession.userLoginForm.email={email}
+&marketSession.userLoginForm.password={password}
+```
+
+### Limitation
+
+The web session shows "norightsfordevice" until `senddevicestatus` has been called with the correct head unit credentials. Without this, `/toolbox/cataloglist` and `/toolbox/managecontentinitwithhierarchy/install` return empty content.
+
+---
+
+## 18. Catalog and Content Management
+
+### Web Endpoints (require authenticated web session + senddevicestatus)
+
+| Endpoint | Method | Returns |
+|----------|--------|---------|
+| `/toolbox/cataloglist` | GET | HTML table of all available content (package codes, names, releases) |
+| `/toolbox/managecontentinitwithhierarchy/install` | GET | HTML jstree of installable content with IDs and sizes |
+| `/rest/managecontent/supermarket/v1/updateselection` | POST | JSON with content sizes and space indicator |
+| `/toolbox/managecontentconfirmselection` | GET | Triggers install process |
+
+### Catalog List HTML Structure
+
+```html
+<tr id="row{package_code}" class="content-osm|content-other" onclick="rowClick({code})">
+  <td class="searchablePackage">
+    <span class="provider-tag">NNG Maps</span>
+    <a class="linknoeffect withprogress">{content_name}</a>
+  </td>
+  <td class="searchableRelease">{release_version}</td>
+</tr>
+```
+
+### Content Tree HTML Structure (jstree)
+
+```html
+<li id="{package_code}#{content_id}" data-jstree='{"selected": true}'>
+  <span name="content_name" snapshotcode="{snapshot_code}">
+    <span class="provider-tag">NNG Maps</span>
+    {content_name}
+  </span>
+  <span name="content_release">{version}</span>
+  <span name="content_size">{size_mb}</span>
+</li>
+```
+
+### Update Selection JSON
+
+```json
+{
+  "contentSize": [
+    {"id": "1182615#1008", "size": 749710097},
+    {"id": "1182615#1177715", "size": 305868547}
+  ],
+  "spaceIndicator": {"fullSize": 4257076970, "required": 3523737322}
+}
+```
+
+### Install Flow
+
+1. User selects content in jstree → `POST /rest/managecontent/supermarket/v1/updateselection`
+2. User clicks CONFIRM → `GET /toolbox/managecontentconfirmselection`
+3. Native engine (nngine.dll) handles actual download via wire protocol
+4. Browser polls `/event/` for PROGRESS events
+
+---
+
+## 19. Licenses
+
+The `/rest/1/licenses` endpoint returns purchased content licenses.
+
+### Response (3729 bytes decoded)
+
+Contains 3 license entries, each with:
+- **SWID**: `CW-AUM3-777Q-3IQM-ME7Y-QQ7M`, `CW-YUEM-E7QU-UEA3-UUMM-UYY7`, `CW-UQAQ-YAEQ-37QI-AA7A-QYQM`
+- **.lyc file**: `LGe_Renault_ULC_OSM_UK_IL_Update_2025_Q3.lyc`, `Renault_Dacia_ULC2_Language_Update.lyc`, `Renault_Dacia_Global_Config_update.lyc`
+- Binary license data (encryption keys, expiry, etc.)
+
+---
+
 ## 10. Open Questions
 
-1. ~~**DEVICE mode request encryption**~~ — **SOLVED**: Request seed = Code, response seed = Secret. Verified against live server.
+1. ~~**DEVICE mode request encryption**~~ — **SOLVED**: Request seed = Code, response seed = Secret.
 
-2. **NNGE decryption** — the device.nng encryption using key `m0$7j0n4(0n73n71I)`. The decoder plugin chain in nngine.dll handles this.
+2. **NNGE decryption** — the device.nng encryption using key `m0$7j0n4(0n73n71I)`.
 
-3. ~~**igo-binary response format**~~ — **SOLVED**: Type-tagged format (0x01=int32, 0x05=string, 0x11=object, 0x17=array, 0x80=envelope). Parser implemented.
+3. ~~**igo-binary response format**~~ — **SOLVED**: Type-tagged format. Parser implemented.
 
-4. ~~**igo-binary request body encoding**~~ — **SOLVED**: Query and body are encrypted as **separate SnakeOil streams** (DEVICE: Code for query, Secret for body; RANDOM: same seed, fresh PRNG). The request body format is: `[0x80][len-prefixed strings][BE integers]` — simpler than the response format (no type tags). Implemented in `wire_codec.py`, verified byte-for-byte against all 8 captured requests.
+4. ~~**igo-binary request body encoding**~~ — **SOLVED**: Split query/body encryption. Implemented in `wire_codec.py`.
 
-5. **Credential block XOR key universality** — The credential block encoding is `0xD8 || (Name XOR 6935b733a33d02588bb55424260a2fb5)`. Verified against live server. Unknown whether the XOR key is the same for all devices or device-specific.
+5. **Credential block XOR key universality** — Unknown whether the XOR key is the same for all devices.
+
+6. **Delegator endpoint** — How to call `/rest/1/delegator` to get head unit credentials. Request body structure partially decoded but not yet reproducible. Blocker for senddevicestatus and catalog.
+
+7. **senddevicestatus query flags 0x68** — The `0x08` bit may indicate body encryption with delegator Secret instead of toolbox Secret. Needs testing.
+
+8. **Imei field encoding** — The `x51x4Dx30x30x30x30x31` format. Appears to be hex-encoded ASCII but purpose unclear.
 
 ---
 
