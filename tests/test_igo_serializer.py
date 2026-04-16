@@ -19,7 +19,9 @@ BOOT_PLAINTEXT = bytes.fromhex("068a5086")
 # DEVICE mode: hasActivatableService (decrypted with Code)
 CODE = 0x000D4EA65D36B98E
 NAME_BYTES = bytes.fromhex("FB86ACD6EBA8F54A93C4286CE077D06C")
-HAS_ACT_WIRE = bytes.fromhex("01c2c230000d4ea65d36b98e0e00003f70fcf5a43a9ee2f2d821246d3c0fd641f0d3ab")
+HAS_ACT_WIRE = bytes.fromhex(
+    "01c2c230000d4ea65d36b98e0e00003f70fcf5a43a9ee2f2d821246d3c0fd641f0d3ab"
+)
 HAS_ACT_PLAIN = bytes.fromhex("5120d892b31be54895f71218717c48c67dffd9")
 CRED_BLOCK = bytes.fromhex("d892b31be54895f71218717c48c67dffd9")
 
@@ -38,6 +40,7 @@ class TestBuildCredentialBlock:
 
     def test_bad_length_raises(self):
         import pytest
+
         with pytest.raises(ValueError):
             build_credential_block(b"\x00" * 15)
 
@@ -68,6 +71,7 @@ class TestBuildEmptyDeviceRequest:
 
     def test_bad_credential_block_raises(self):
         import pytest
+
         with pytest.raises(ValueError):
             build_empty_device_request(counter=1, credential_block=b"\x00" * 17)
 

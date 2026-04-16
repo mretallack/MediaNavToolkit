@@ -20,7 +20,7 @@ import struct
 
 # --- Type constants (from Ghidra FUN_10204a50 switch) ---
 TYPE_INT32 = 0x01
-TYPE_INT32P = 0x03   # int32 pair (8 bytes)
+TYPE_INT32P = 0x03  # int32 pair (8 bytes)
 TYPE_INT64 = 0x04
 TYPE_STRING = 0x05
 TYPE_OBJECT = 0x11
@@ -28,10 +28,11 @@ TYPE_ESTRING = 0x15  # embedded string
 TYPE_ARRAY = 0x17
 
 ENVELOPE_BOOT = b"\x80\x80"  # boot requests only
-ENVELOPE = b"\x80\x00"      # regular requests (market, register, etc.)
+ENVELOPE = b"\x80\x00"  # regular requests (market, register, etc.)
 
 
 # --- Field encoders (from Ghidra FUN_1021d570..FUN_1021d660) ---
+
 
 def encode_byte(value: int) -> bytes:
     """FUN_1021d570: default case — just the raw value byte, no type tag."""
@@ -70,6 +71,7 @@ def encode_empty_array() -> bytes:
 
 # --- Container / message ---
 
+
 def encode_container(type_id: int, fields: list[bytes]) -> bytes:
     """Encode a container: [type:1][count:LE32] fields [type:1][count:LE32]."""
     count = len(fields)
@@ -81,7 +83,7 @@ def encode_container(type_id: int, fields: list[bytes]) -> bytes:
 
 def encode_message(fields: list[bytes], type_id: int = TYPE_OBJECT) -> bytes:
     """Encode a full igo-binary message: envelope + fields (no container wrapper).
-    
+
     The correct format is [0x80 0x00][field1][field2]... with fields directly
     after the envelope. The container wrapper [type][count]...[type][count]
     is NOT used in the wire format (it crashes the server).
@@ -90,6 +92,7 @@ def encode_message(fields: list[bytes], type_id: int = TYPE_OBJECT) -> bytes:
 
 
 # --- Market call encoders (toolbox.md §20) ---
+
 
 def encode_login(
     username: str,
@@ -106,23 +109,23 @@ def encode_login(
     17 fields: 5 strings, 5 bytes, 2 int32 (version), 2 int32, 1 empty array.
     """
     fields = [
-        encode_byte(0),              # field_1: auth mode flag
-        encode_string(username),     # field_2: username
-        encode_byte(0),              # field_3
-        encode_string(password),     # field_4: password
-        encode_byte(0),              # field_5
-        encode_string(brand),        # field_6: brand
-        encode_byte(0),              # field_7
+        encode_byte(0),  # field_1: auth mode flag
+        encode_string(username),  # field_2: username
+        encode_byte(0),  # field_3
+        encode_string(password),  # field_4: password
+        encode_byte(0),  # field_5
+        encode_string(brand),  # field_6: brand
+        encode_byte(0),  # field_7
         encode_string(device_type),  # field_8: device_type
-        encode_byte(0),              # field_9
-        encode_empty_array(),        # field_10: empty array
-        encode_byte(0),              # field_11
-        encode_string(""),           # field_12: session token (empty on first login)
-        encode_byte(0),              # field_13
-        encode_int32(version_major), # field_14: version major
-        encode_int32(version_minor), # field_15: version minor
-        encode_int32(appcid),        # field_16
-        encode_int32(device_id),     # field_17
+        encode_byte(0),  # field_9
+        encode_empty_array(),  # field_10: empty array
+        encode_byte(0),  # field_11
+        encode_string(""),  # field_12: session token (empty on first login)
+        encode_byte(0),  # field_13
+        encode_int32(version_major),  # field_14: version major
+        encode_int32(version_minor),  # field_15: version minor
+        encode_int32(appcid),  # field_16
+        encode_int32(device_id),  # field_17
     ]
     return encode_message(fields)
 
@@ -250,6 +253,7 @@ def encode_send_sgn_file_validity(
 
 # --- Decoders (existing) ---
 
+
 def decode_boot_response(data: bytes) -> list[dict]:
     """Decode a v3 boot response into a list of service entries."""
     if len(data) < 11 or data[0:2] != b"\x80\x80":
@@ -269,12 +273,17 @@ def decode_boot_response(data: bytes) -> list[dict]:
     for _ in range(count):
         if pos >= len(data):
             break
-        version = data[pos]; pos += 1
-        name_len = data[pos]; pos += 1
-        name = data[pos:pos + name_len].decode("ascii"); pos += name_len
+        version = data[pos]
+        pos += 1
+        name_len = data[pos]
+        pos += 1
+        name = data[pos : pos + name_len].decode("ascii")
+        pos += name_len
         pos += 1  # 0x00 separator
-        url_len = data[pos]; pos += 1
-        url = data[pos:pos + url_len].decode("ascii"); pos += url_len
+        url_len = data[pos]
+        pos += 1
+        url = data[pos : pos + url_len].decode("ascii")
+        pos += url_len
         entries.append({"version": str(version), "name": name, "location": url})
     return entries
 
@@ -286,4 +295,4 @@ def decode_model_list_response(data: bytes) -> str | None:
     str_len = data[2]
     if len(data) < 3 + str_len:
         return None
-    return data[3:3 + str_len].decode("ascii")
+    return data[3 : 3 + str_len].decode("ascii")

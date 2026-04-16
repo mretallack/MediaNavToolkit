@@ -35,7 +35,7 @@ def build_credential_block(name_bytes: bytes) -> bytes:
     """
     if len(name_bytes) != 16:
         raise ValueError(f"Name must be 16 bytes, got {len(name_bytes)}")
-    return b'\xd8' + bytes(a ^ b for a, b in zip(name_bytes, IGO_CREDENTIAL_KEY))
+    return b"\xd8" + bytes(a ^ b for a, b in zip(name_bytes, IGO_CREDENTIAL_KEY))
 
 
 def build_boot_request_body(counter: int = 0x06, country: int = 0) -> bytes:
@@ -62,8 +62,14 @@ def build_empty_device_request(
         igo-binary payload (before SnakeOil encryption with Code)
     """
     if credential_block is not None:
-        if len(credential_block) != 17 or credential_block[0] != 0xD8 or credential_block[-1] != 0xD9:
-            raise ValueError("credential_block must be 17 bytes starting with 0xD8 and ending with 0xD9")
+        if (
+            len(credential_block) != 17
+            or credential_block[0] != 0xD8
+            or credential_block[-1] != 0xD9
+        ):
+            raise ValueError(
+                "credential_block must be 17 bytes starting with 0xD8 and ending with 0xD9"
+            )
         return bytes([counter, 0x20]) + credential_block
     return bytes([counter, 0x20])
 

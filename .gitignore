@@ -44,6 +44,8 @@ analysis/usb-images/
 
 # Harness (Docker/Wine build artifacts)
 harness/
+analysis/wine_prefix/
+analysis/docker_harness/
 
 # Capture artifacts (mitmproxy, wine logs)
 capture/

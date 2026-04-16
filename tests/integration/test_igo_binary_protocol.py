@@ -53,8 +53,9 @@ class TestIgoBinaryFormat:
 
     def test_boot_response_has_11_byte_header(self, client):
         """Boot response: 11-byte header + 6 entries consuming all remaining bytes."""
-        from medianav_toolbox.api.igo_binary import decode_boot_response
         from pathlib import Path
+
+        from medianav_toolbox.api.igo_binary import decode_boot_response
 
         data = Path("tests/data/boot_response_v3.bin").read_bytes()
         entries = decode_boot_response(data)

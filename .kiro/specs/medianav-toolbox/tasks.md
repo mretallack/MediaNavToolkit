@@ -108,9 +108,8 @@ RANDOM mode seed generation:
   - [ ] `POST /rest/1/sendfingerprint` — needs replayed captured body
   - [ ] `POST /services/register/rest/1/get_device_model_list` — needs replayed captured body
   - [ ] `POST /services/register/rest/1/get_device_descriptor_list` — needs replayed captured body
-  - All use Code in header and as encryption seed, Secret for response decryption
-  - **Workaround**: replay captured request bodies for calls with non-empty payloads
-  - **Full solution**: reverse the igo-binary request body encoder (R.6)
+  - All use Code in header and as query encryption seed, Secret for body encryption
+  - Request bodies use igo-binary tagged format (same as responses) — R.6 SOLVED
 
 ## Phase 3: Content Pipeline
 
@@ -135,5 +134,5 @@ RANDOM mode seed generation:
 - [ ] **R.3** SWID format_swid() — extract exact byte-to-char mapping from Ghidra (`FUN_1009c960`)
 - [ ] **R.4** Imei field — understand the `x51x4Dx30x30x30x30x31` encoding
 - [x] **R.5** ~~DEVICE mode credential encoding~~ — RESOLVED: `0xD8 || (Name XOR 6935b733a33d02588bb55424260a2fb5)`. Verified against live server.
-- [ ] **R.6** Request body encoding — the igo-binary bitstream serializer for request bodies. **THIS IS THE MAIN BLOCKER.** The serializer uses a custom bitstream format with mixed MSB/LSB bit ordering, two-pass presence-then-values architecture, and compound type descriptors. Static analysis in Ghidra hit a wall (optimized switch statement). The ARM64 `liblib_nng_sdk.so` from the Android app may decompile better. Alternatively, captured request bodies could be replayed directly for known operations.
+- [x] **R.6** ~~Request body encoding~~ — **RESOLVED**: Request bodies use the same igo-binary tagged format as responses (length-prefixed strings, type tags). The body appeared as random data because query and body are encrypted as **separate SnakeOil streams**: DEVICE mode uses Code for query, Secret for body. RANDOM mode uses the same random seed but independent PRNG state. `protocol.py` updated with `build_request(query, body, ...)` API. Verified byte-for-byte against all 8 captured requests.
 - [ ] **R.7** XOR key universality — is `IGO_CREDENTIAL_KEY` the same for all devices, or derived from device-specific data? Needs testing with a second device.

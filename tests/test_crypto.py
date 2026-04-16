@@ -5,7 +5,6 @@ Test vectors extracted from mitmproxy captures of real Toolbox sessions.
 
 from medianav_toolbox.crypto import snakeoil
 
-
 # --- Test vectors from mitmproxy flows ---
 
 # Boot request payload (RANDOM mode)
@@ -16,12 +15,10 @@ BOOT_PLAINTEXT = bytes.fromhex("068a5086")
 # Registration response (RANDOM mode) — contains Name, Code, Secret
 REG_SEED = 0x00DE87C9A485AA7D
 REG_RESP_CIPHERTEXT = bytes.fromhex(
-    "eb45c0e5b0fff8505ffb925caf98805b1d66016011875a93"
-    "eda3b6b4e486231592f387973a287b520a9f47"
+    "eb45c0e5b0fff8505ffb925caf98805b1d66016011875a93" "eda3b6b4e486231592f387973a287b520a9f47"
 )
 REG_RESP_PLAINTEXT = bytes.fromhex(
-    "80e0fb86acd6eba8f54a93c4286ce077d06c000d4ea65d36"
-    "b98e000acab6c9fb66f8000000012c00000000"
+    "80e0fb86acd6eba8f54a93c4286ce077d06c000d4ea65d36" "b98e000acab6c9fb66f8000000012c00000000"
 )
 
 # hasActivatableService response (DEVICE mode, seed = Secret)

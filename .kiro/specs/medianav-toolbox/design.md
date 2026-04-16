@@ -52,7 +52,7 @@ Existing modules (✓) and planned modules (○):
 └──────────────────────────────────────────────────────────────┘
 ```
 
-**Status**: `protocol.py` and `crypto.py` are implemented and tested. The `api/` modules have working boot, igo-binary encoding/decoding, and market login. The igo-binary request body encoder is partially implemented (empty bodies work, complex bodies use captured replay).
+**Status**: `protocol.py` and `crypto.py` are implemented and tested. Query and body are encrypted as separate SnakeOil streams (DEVICE mode: Code for query, Secret for body). The `api/` modules have working boot, igo-binary encoding/decoding, and market login. Request bodies use the same igo-binary tagged format as responses — no custom bitstream encoder needed.
 
 ---
 
@@ -96,9 +96,9 @@ class SnakeOil:
     Reversed from FUN_101b3e10 in nngine.dll.
     Symmetric: encrypt and decrypt are the same XOR operation.
 
-    Key management:
-    - RANDOM mode (pre-registration): seed = random uint64 in wire header
-    - DEVICE mode (post-registration): request seed = Code, response seed = Secret
+    Key management (split query/body encryption):
+    - RANDOM mode: query and body both use random seed, but as SEPARATE SnakeOil streams
+    - DEVICE mode: query seed = Code, body seed = Secret (response also uses Secret)
     """
     M = 0xFFFFFFFF
 
@@ -252,7 +252,7 @@ NNGE_TEMPLATE = b'ZXXXXXXXXXXXXXXXXXXZ'
 
 2. ~~**DEVICE mode request encryption**~~ — **SOLVED**: Request seed = Code, response seed = Secret. Verified against live server.
 
-3. **igo-binary request body encoder** — Request bodies use a custom bitstream serializer with mixed MSB/LSB bit ordering. **Workaround**: replay captured request bodies for known operations (login, sendfingerprint, etc.). Full encoder not yet reversed.
+3. ~~**igo-binary request body encoder**~~ — **SOLVED**: Request bodies use the same igo-binary tagged format as responses. The body was encrypted separately from the query (DEVICE mode: query with Code, body with Secret; RANDOM mode: both with random seed, separate PRNG state). No custom bitstream serializer needed.
 
 4. **NNGE decryption** — device.nng uses key `m0$7j0n4(0n73n71I)` with template `ZXXXXXXXXXXXXXXXXXXZ`. Not yet reversed.
 

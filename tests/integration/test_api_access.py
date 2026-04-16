@@ -81,7 +81,12 @@ class TestRegisterService:
     def test_register_endpoints_respond(self, client):
         """All register endpoints are alive (not 404)."""
         endpoints = boot(client)
-        for path in ["/get_device_model_list", "/get_device_descriptor_list", "/devinfo", "/device"]:
+        for path in [
+            "/get_device_model_list",
+            "/get_device_descriptor_list",
+            "/devinfo",
+            "/device",
+        ]:
             resp = client.post(
                 f"{endpoints.register}{path}",
                 json={},
@@ -143,18 +148,28 @@ class TestAPIProtocol:
     def test_index_v3_needs_igo_binary(self, client):
         """Index v3 returns 412 without proper igo-binary payload."""
         endpoints = boot(client)
-        resp = client.post(endpoints.index_v3, content=b"\x80\x80\x00\x00", headers={"Content-Type": "application/vnd.igo-binary; v=1"})
+        resp = client.post(
+            endpoints.index_v3,
+            content=b"\x80\x80\x00\x00",
+            headers={"Content-Type": "application/vnd.igo-binary; v=1"},
+        )
         # 412 = valid format, missing data (not 500 = parse error)
         assert resp.status_code in (412, 500)
 
     def test_register_descriptor_list_needs_device(self, client):
         """Descriptor list returns 417 with empty JSON (needs device data)."""
         endpoints = boot(client)
-        resp = client.post(f"{endpoints.register}/get_device_descriptor_list", json={}, headers={"Content-Type": "application/json"})
+        resp = client.post(
+            f"{endpoints.register}/get_device_descriptor_list",
+            json={},
+            headers={"Content-Type": "application/json"},
+        )
         assert resp.status_code == 417  # Expectation Failed = right format, wrong values
 
     def test_selfie_update_endpoint(self, client):
         """Self-update endpoint is alive."""
         endpoints = boot(client)
-        resp = client.post(endpoints.selfie + "/update", json={}, headers={"Content-Type": "application/json"})
+        resp = client.post(
+            endpoints.selfie + "/update", json={}, headers={"Content-Type": "application/json"}
+        )
         assert resp.status_code in (417, 412)  # Alive but needs proper data

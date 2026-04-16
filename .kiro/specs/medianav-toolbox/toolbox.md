@@ -93,18 +93,41 @@ def snakeoil(data, key_lo, key_hi):
 
 **Two modes:**
 - **RANDOM** (0x20): PRNG seed = key in wire header (random per request). Same seed for request and response.
-- **DEVICE** (0x30): wire header has Code. Request PRNG seed = **Code**. Response PRNG seed = **Secret**.
+- **DEVICE** (0x30): wire header has Code. Response PRNG seed = **Secret**.
 
-**Request**: payload at bytes 16+ encrypted with PRNG seed
-**Response**: payload at bytes 4+ encrypted with response PRNG seed
+**Split query/body encryption (BREAKTHROUGH — R.6 SOLVED):**
+
+Request payloads are split into **query** and **body**, each encrypted as a **separate SnakeOil stream** (independent PRNG state):
+
+```
+Wire: [16B header] [SnakeOil(query, q_key)] [SnakeOil(body, b_key)]
+```
+
+| Mode | Query contents | Query key | Body key |
+|------|---------------|-----------|----------|
+| RANDOM | counter(1) + flags(1) + envelope_data | random seed | random seed |
+| DEVICE (flags=0x20) | counter(1) + flags(1) + credential_block(17) | Code | **Secret** |
+| DEVICE (flags=0x60, JSESSIONID) | counter(1) + flags(1) | Code | **Secret** |
+
+The body uses the **same igo-binary tagged format** as responses:
+- `0x80` = message envelope
+- Length-prefixed strings: `[len:1][string_bytes:len]`
+- Integers: `[0x01][LE32]` (int32), `[0x04][LE64]` (int64)
+- Arrays: `[count:1]` followed by count elements
+
+**This was the main R.6 blocker.** The body appeared as random data because we were decrypting query+body as a single stream. Once split correctly, the body is plaintext igo-binary.
+
+**Response**: payload at bytes 4+ encrypted as a single stream with response PRNG seed
 
 **Response header byte 3**: `0x6B` = RANDOM mode, `0xBC` = DEVICE mode
 
-**Verified decryptions:**
-- Boot response → service URLs (`https://zippy.naviextras.com/...`) ✓
-- Registration response → Credentials (Name, Code, Secret) ✓
-- Model list response → all 29 device model names ✓
-- hasActivatableService response → single `0x00` byte (false) ✓
+**Verified decryptions (all 8 captured requests + responses):**
+- Boot request body → empty (envelope only) ✓
+- Register request body → BrandName, ModelName, Swid, Imei, etc. as plaintext ✓
+- Login request body → OperatingSystemName, AgentVersion, Language, etc. ✓
+- Fingerprint request body → device.nng data, paths, checksums ✓
+- Model list request body → array of 30 {Version, Id} pairs ✓
+- All responses → igo-binary tagged format ✓
 
 ### XML Semantics (from decrypted http_dump)
 
@@ -437,7 +460,7 @@ NaviSync/
 
 3. ~~**igo-binary response format**~~ — **SOLVED**: Type-tagged format (0x01=int32, 0x05=string, 0x11=object, 0x17=array, 0x80=envelope). Parser implemented.
 
-4. **igo-binary request body encoding** — Request bodies use a custom bitstream serializer (FUN_101a8e80) with mixed MSB/LSB bit ordering and compound type descriptors. The serializer's core is an optimized switch statement that Ghidra couldn't fully decompile. **Workaround**: replay captured request bodies for known operations.
+4. ~~**igo-binary request body encoding**~~ — **SOLVED**: Request bodies use the same igo-binary tagged format as responses (length-prefixed strings, type tags). The body appeared as random data because query and body are encrypted as **separate SnakeOil streams**: DEVICE mode uses Code for query, **Secret** for body. RANDOM mode uses the same random seed for both but with independent PRNG state. Verified against all 8 captured requests.
 
 5. **Credential block XOR key universality** — The credential block encoding is `0xD8 || (Name XOR 6935b733a33d02588bb55424260a2fb5)`. Verified against live server. Unknown whether the XOR key is the same for all devices or device-specific.
 
@@ -484,3 +507,420 @@ seed = (((ecx3 ^ edx) & M) << 32) | ((eax ^ edi2) & M)
 ```
 
 The server validates the seed against the current time (tight window). Old seeds from captured sessions continue to work indefinitely.
+
+---
+
+## 13. Wine Runtime Analysis (BREAKTHROUGH)
+
+### Overview
+
+We can load nngine.dll inside a Docker container running 32-bit Wine, then call its internal functions directly from C programs compiled with MinGW. This lets us:
+
+1. **Dump BSS memory** after DllMain initializes the type descriptors
+2. **Call the bit writer functions** directly to verify encoding hypotheses
+3. **Read function code** at runtime to verify disassembly
+
+### Architecture
+
+```
+Host (aarch64 / x86_64)
+│
+├── analysis/wine_prefix/     ← bind mount: persistent Wine prefix (survives restarts)
+├── analysis/                 ← bind mount: C harness source files (read/write)
+├── analysis/extracted/       ← bind mount: nngine.dll + other DLLs (read-only)
+│
+└── Docker container "wine32" (linux/amd64, QEMU if on ARM)
+    ├── wine32-mingw image    ← scottyhardy/docker-wine + gcc-mingw-w64-i686 baked in
+    ├── wine32-entrypoint.sh  ← creates user, inits prefix, starts wineserver
+    ├── wineserver -p         ← persistent daemon (avoids slow per-command startup)
+    └── tail -f /dev/null     ← keep-alive process
+```
+
+### Why This Design
+
+**Problem**: The old approach (`docker run ... sleep 7200`) had several issues:
+- **Slow startup**: Every container restart required re-running `wineboot -i` (~5-10 min under QEMU) because the Wine prefix lived inside the container
+- **Ephemeral state**: `apt-get install mingw` was lost on every restart
+- **Root ownership**: Container ran as root, so bind-mounted files were owned by root:root on the host, requiring sudo to manage
+- **Blocking services**: Every `wine` invocation spawned `wineserver` + `services.exe` + `winedevice.exe` + `wineboot.exe`, each taking minutes under QEMU emulation
+
+**Solution**:
+1. **Custom Docker image** (`Dockerfile.wine32`): Bakes in `gcc-mingw-w64-i686` so it's never lost
+2. **Bind-mounted Wine prefix** (`analysis/wine_prefix/`): Persists across container restarts — `wineboot` only runs once per Wine version
+3. **User mapping**: Entrypoint creates a `wineuser` matching the host UID/GID (1000:100), so all files on bind mounts are owned by the host user
+4. **Persistent wineserver**: `wineserver -p` starts in the entrypoint and stays running, so `wine` commands connect to the existing server instantly instead of spawning a new one
+5. **Version marker** (`.wine-version`): Tracks whether `wineboot` has completed for the current Wine build. On restart, if the marker matches, wineboot is skipped entirely
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `analysis/Dockerfile.wine32` | Image definition: extends `scottyhardy/docker-wine` with mingw |
+| `analysis/wine32-entrypoint.sh` | Container entrypoint: user creation, prefix init, wineserver startup |
+| `analysis/wine_prefix/` | Persistent Wine prefix (bind-mounted into container) |
+| `analysis/wine_prefix/.wine-version` | Our marker: stores `wine-11.0` etc. to skip wineboot on restart |
+| `analysis/wine_prefix/.update-timestamp` | Wine's own marker: stores `wine` binary mtime. **Do not edit** — wineboot manages this |
+
+### How the Entrypoint Works
+
+1. **Create user**: `useradd -u $HOST_UID -g $HOST_GID wineuser` — matches host user so bind mount files have correct ownership
+2. **Check prefix**: If `drive_c/windows/system32/` has < 100 files, run `wineboot -i` (first-time init, ~5-10 min under QEMU)
+3. **Check version**: Compare `.wine-version` against `wine --version`. If different, run `wineboot -u` (upgrade, also slow). Write new version to marker
+4. **Start wineserver**: `wineserver -p` as a persistent daemon — the `-p` flag means "don't exit when last client disconnects"
+5. **Drop to user**: `exec su wineuser -c "tail -f /dev/null"` — keep-alive process running as the mapped user
+
+### Setup
+
+#### Prerequisites
+
+- Docker with `linux/amd64` platform support (QEMU if on ARM host)
+- nngine.dll from the extracted Toolbox installer (`analysis/extracted/nngine.dll`)
+
+#### Step 1: Build the Image (one-time)
+
+```bash
+cd /home/mark/git/MediaNavToolbox/analysis
+docker build --platform linux/amd64 -t wine32-mingw -f Dockerfile.wine32 .
+```
+
+This extends `scottyhardy/docker-wine:latest` (~3.5GB) with `gcc-mingw-w64-i686`.
+
+#### Step 2: Create and Start the Container
+
+```bash
+docker run -d --name wine32 --platform linux/amd64 \
+  --memory=8g \
+  -e HOST_UID=$(id -u) \
+  -e HOST_GID=$(id -g) \
+  -v /home/mark/git/MediaNavToolbox/analysis/wine_prefix:/home/wineuser/.wine32 \
+  -v /home/mark/git/MediaNavToolbox/analysis:/work \
+  -v /home/mark/git/MediaNavToolbox/analysis/extracted:/dlls:ro \
+  wine32-mingw \
+  "tail -f /dev/null"
+```
+
+**Bind mounts explained:**
+| Host Path | Container Path | Mode | Purpose |
+|-----------|---------------|------|---------|
+| `analysis/wine_prefix/` | `/home/wineuser/.wine32` | rw | Persistent Wine prefix — survives restarts |
+| `analysis/` | `/work` | rw | C harness source files — edit on host, compile in container |
+| `analysis/extracted/` | `/dlls` | ro | nngine.dll and other extracted DLLs |
+
+**First run**: The entrypoint runs `wineboot -i` to populate the prefix. This takes **5-10 minutes under QEMU** (it installs ~865 DLLs into `system32/`). Watch progress with `docker logs -f wine32`. You'll see "Ready." when it's done.
+
+**Subsequent runs**: The entrypoint sees the prefix is up to date and skips wineboot. Startup takes **~3 seconds**.
+
+#### Step 3: Verify
+
+```bash
+# Check it's ready
+docker logs wine32
+# Expected: "Wine prefix up to date (wine-11.0, 866 DLLs)."
+#           "Starting wineserver... done. Ready."
+
+# Check user mapping
+docker exec --user $(id -u):$(id -g) wine32 id
+# Expected: uid=1000 gid=100
+
+# Check mingw is available
+docker exec --user $(id -u):$(id -g) wine32 which i686-w64-mingw32-gcc
+# Expected: /usr/bin/i686-w64-mingw32-gcc
+```
+
+#### Step 4: Compile and Run a C Harness
+
+```bash
+# Compile (source files are on the bind mount at /work)
+docker exec --user $(id -u):$(id -g) wine32 bash -c '
+  cp /dlls/nngine.dll $WINEPREFIX/drive_c/
+  i686-w64-mingw32-gcc -O2 -o $WINEPREFIX/drive_c/harness.exe /work/dump_bss.c -lkernel32
+  wine C:\\harness.exe 2>/dev/null
+'
+
+# Output files appear on the host at analysis/wine_prefix/drive_c/
+cat analysis/wine_prefix/drive_c/output.txt
+```
+
+**CRITICAL: Always compile with `-O2`**. The `-O0` flag causes stack alignment issues with `__fastcall` functions in nngine.dll, leading to silent crashes at `LoadLibraryA`.
+
+### Container Lifecycle
+
+```bash
+# Restart (fast — skips wineboot if prefix is current)
+docker restart wine32
+
+# Check status
+docker ps --filter name=wine32 --format "{{.Status}}"
+docker logs wine32 | tail -3
+
+# Execute commands as the mapped user
+docker exec --user $(id -u):$(id -g) wine32 bash -c '...'
+
+# Stop
+docker stop wine32
+
+# Remove (prefix is preserved on host)
+docker rm wine32
+
+# Recreate from scratch (if Wine version changes or prefix is corrupted)
+rm -rf analysis/wine_prefix/*
+docker rm -f wine32
+# Then re-run the docker run command from Step 2
+```
+
+### Wineboot and .update-timestamp — How It Works
+
+Wine's prefix update mechanism caused significant debugging effort. Here's how it works:
+
+1. **Wine checks `.update-timestamp`** on every `wine` invocation. The file contains the epoch-seconds mtime of the `wine` binary at the time wineboot last ran.
+2. **If the timestamp doesn't match** the current `wine` binary's mtime, Wine spawns `wineboot.exe --init` to update the prefix. Under QEMU, this takes 5-10 minutes.
+3. **`wineboot.exe --init`** installs DLLs, registers COM objects, and runs `rundll32.exe setupapi,InstallHinfSection` — all extremely slow under QEMU emulation.
+4. **Our workaround**: The entrypoint runs `wineboot -u` once per Wine version (tracked by `.wine-version` marker), then starts `wineserver -p`. Since wineboot has already completed, subsequent `wine` commands don't trigger it again.
+
+**Important**: Do NOT manually edit `.update-timestamp`. Wineboot writes the correct value (`stat -c '%Y' /opt/wine-stable/bin/wine`). If you overwrite it with a different value (e.g., `wine-preloader`'s mtime), wineboot will re-run on every invocation.
+
+### Loading nngine.dll — Two Modes
+
+#### Mode A: With DllMain (initializes BSS, but blocks stdio)
+
+```c
+HMODULE h = LoadLibraryA("C:\\nngine.dll");
+// DLL loads at ~0x7E9F0000
+// DllMain runs: initializes type descriptors in BSS
+// WARNING: After this call, printf/fflush may hang!
+// Use file I/O (CreateFileA/WriteFile) for output instead
+```
+
+**Use this mode for**: Dumping initialized BSS memory (type descriptors, vtables).
+
+**Gotcha**: DllMain creates threads/hooks that interfere with the C runtime. After `LoadLibraryA`, `printf` and `fflush` may hang indefinitely. Write output using Win32 API (`CreateFileA`/`WriteFile`) instead, or do all printf BEFORE loading the DLL.
+
+#### Mode B: Without DllMain (safe, can call functions directly)
+
+```c
+HMODULE h = LoadLibraryExA("C:\\nngine.dll", NULL, DONT_RESOLVE_DLL_REFERENCES);
+// DLL loads at ~0x7E9F0000
+// DllMain does NOT run: BSS is zeroed (type descriptors not initialized)
+// BUT: all code is present and relocated, functions can be called
+// printf/fflush work normally
+```
+
+**Use this mode for**: Calling bit writer functions, reading function code, verifying encoding.
+
+### Calling __thiscall Functions via Inline Assembly
+
+nngine.dll uses MSVC `__thiscall` convention: `this` in ECX, parameters on stack, callee cleans stack. MinGW's `__thiscall` attribute doesn't always work correctly, so use inline assembly:
+
+```c
+// write_1bit_lsb (RVA 0x1a9e80): __thiscall(ecx=bitstream, stack: value) ret 4
+static unsigned g_w1_addr;
+
+static void w1(unsigned *bs, int value) {
+    unsigned f = g_w1_addr, b = (unsigned)bs;
+    __asm__ volatile(
+        "push %2\n\t"
+        "mov %0, %%ecx\n\t"
+        "call *%1"
+        :: "r"(b), "r"(f), "r"(value)
+        : "ecx", "edx", "eax", "memory"
+    );
+}
+
+// write_nbits_msb (RVA 0x1a8150): __thiscall(ecx=bitstream, stack: value, nbits) ret 8
+// IMPORTANT: Mark as __attribute__((noinline)) to avoid register pressure errors
+static unsigned g_wn_addr;
+
+static void __attribute__((noinline)) wn(unsigned *bs, unsigned val, unsigned nb) {
+    unsigned f = g_wn_addr, b = (unsigned)bs;
+    __asm__ volatile(
+        "mov %3, %%eax\n\t"
+        "push %%eax\n\t"
+        "push %2\n\t"
+        "mov %0, %%ecx\n\t"
+        "call *%1"
+        :: "r"(b), "r"(f), "r"(val), "m"(nb)
+        : "ecx", "edx", "eax", "memory"
+    );
+}
+
+// Initialize addresses after loading DLL
+g_w1_addr = (unsigned)h + 0x1a9e80;
+g_wn_addr = (unsigned)h + 0x1a8150;
+```
+
+**Common errors:**
+- `error: 'asm' operand has impossible constraints` → The function was inlined and GCC ran out of registers. Add `__attribute__((noinline))` to the function, or use `"m"(var)` instead of `"r"(var)` for one operand.
+- Silent hang when calling functions → You loaded with `LoadLibraryA` (Mode A). Use `LoadLibraryExA` with `DONT_RESOLVE_DLL_REFERENCES` (Mode B) instead.
+
+### BitStream Structure
+
+The bit writer functions operate on a BitStream structure:
+
+```c
+struct BitStream {
+    unsigned char *buf;    // [0x00] buffer pointer
+    unsigned bit_pos;      // [0x04] bit offset within current byte (0-7)
+    unsigned byte_pos;     // [0x08] current byte position in buffer
+    unsigned capacity;     // [0x0C] buffer capacity in bytes
+    unsigned char mode;    // [0x10] encoding mode flag
+    // ... more fields
+};
+```
+
+Initialize for testing:
+```c
+unsigned char buf[256] = {0};
+unsigned bs[8] = {0};
+bs[0] = (unsigned)buf;  // buffer pointer
+bs[3] = 256;            // capacity
+// bs[1] (bit_pos) and bs[2] (byte_pos) start at 0
+```
+
+The capacity check function (`FUN_101a8820` at RVA 0x1a8820) compares `bs[2] + needed_bytes` against `bs[3]`. If the buffer is too small, it tries to grow via the NNG allocator (which won't work without DllMain). Set capacity large enough to avoid growth.
+
+### Verified Results
+
+**Bit writer produces correct output:**
+
+| Test | Code | Output | Notes |
+|------|------|--------|-------|
+| 8 presence bits (all 0) | `for(i=0;i<8;i++) w1(bs,0)` | `0x00` | ✓ |
+| 1 presence bit = 1 | `w1(bs, 1)` | `buf[0]=0x01, bit=1, byte=1` | LSB-first |
+| 8-bit MSB value 0xAB | `wn(bs, 0xAB, 8)` | `buf[0]=0xAB` | MSB-first ✓ |
+| 16 presence bits → D8 14 | `{0,0,0,1,1,0,1,1, 0,0,1,0,1,0,0,0}` | `0xD8 0x14` | **Matches DEVICE index body** ✓ |
+| 16 presence bits → 50 86 | `{0,0,0,0,1,0,1,0, 0,1,1,0,0,0,0,1}` | `0x50 0x86` | **Matches boot body** ✓ |
+
+### Key Findings
+
+**DLL loads at 0x7E9F0000** under Wine. DllMain runs successfully and initializes BSS.
+
+**Type system** (from BSS dump after DllMain):
+- 199 type objects share vtable at RVA 0x2D236C
+- Type IDs: 1 (73 objects), 2 (23 objects), 4 (2 objects), 5 (101 objects)
+- Type ID is at `type_object[1]` (offset 4, uint32)
+- Serialize function at vtable[2] = RVA 0x1a67f0
+
+**Field type mapping:**
+
+| type_id | Count | Example fields | Meaning |
+|---------|-------|---------------|---------|
+| 1 | 73 | Country, BrandName, Code, Name, Swid | Presence-only (no value bits) |
+| 2 | 23 | Category, Connections, UniqId, Vin | Compound / nested |
+| 4 | 2 | Url | Special |
+| 5 | 101 | OperatingSystemName, Appcid, DeviceContextId | String / variable-length |
+
+**BSS Memory Layout:**
+- BSS starts at DLL_BASE + 0x314200
+- BSS size: 0x1A1F8 bytes (107,000 bytes)
+- After DllMain: 5543 non-zero bytes (type descriptors initialized)
+- Type objects are 12 bytes: `[vtable:4][type_id:4][sub_desc_ptr:4]`
+
+**D8 14 and 50 86 are pure presence bits:**
+
+The DEVICE index body `D8 14` is 16 presence bits (LSB-first):
+```
+Bits: 0,0,0,1,1,0,1,1, 0,0,1,0,1,0,0,0
+Fields present: 3, 4, 6, 7, 10, 12
+```
+
+The boot body `50 86` is 16 presence bits (LSB-first):
+```
+Bits: 0,0,0,0,1,0,1,0, 0,1,1,0,0,0,0,1
+Fields present: 4, 6, 9, 10, 15
+```
+
+`type_id=1` fields have **no value bits** — just a presence flag. Country=0 is encoded as a single presence bit (1 = present).
+
+### Troubleshooting Checklist
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `wine: could not load kernel32.dll` | 64-bit Wine prefix or empty prefix | Delete `analysis/wine_prefix/*`, restart container to re-init |
+| Silent crash at `LoadLibraryA` | Compiled with `-O0` | Always use `-O2` |
+| `printf` hangs after `LoadLibraryA` | DllMain interferes with CRT | Use `LoadLibraryExA` with `DONT_RESOLVE_DLL_REFERENCES`, or use `CreateFileA`/`WriteFile` |
+| `asm operand has impossible constraints` | Too many inline asm operands | Add `__attribute__((noinline))`, use `"m"()` for memory operands |
+| `LoadLibrary error 126` | Missing DLL dependencies | Copy ALL DLLs from extracted/ to `drive_c/` (winhttp, advapi32 etc. are provided by Wine) |
+| Container OOM killed (exit 137) | Not enough memory | Use `--memory=8g` |
+| `wineboot` runs on every `wine` command | `.update-timestamp` mismatch | Let wineboot complete once; don't manually edit `.update-timestamp` |
+| Container starts but wine hangs | wineserver not running | Check `docker logs wine32` — entrypoint should show "Ready." |
+| Files on host owned by root | Container user mismatch | Pass `-e HOST_UID=$(id -u) -e HOST_GID=$(id -g)` |
+| DLL loads then immediately unloads | DllMain returns FALSE | Normal with `LoadLibraryA` if dependencies fail; use `DONT_RESOLVE_DLL_REFERENCES` |
+
+### Example: Complete BSS Dump Workflow
+
+```bash
+# 1. Compile the dumper (source is on the bind mount)
+docker exec --user $(id -u):$(id -g) wine32 bash -c '
+  cp /dlls/nngine.dll $WINEPREFIX/drive_c/
+  i686-w64-mingw32-gcc -O2 -o $WINEPREFIX/drive_c/dump_bss.exe /work/dump_bss.c -lkernel32
+  wine C:\\dump_bss.exe 2>/dev/null
+'
+
+# 2. Output is directly on the host (bind mount)
+python3 -c "
+bss = open('analysis/wine_prefix/drive_c/bss_init.bin','rb').read()
+nz = sum(1 for b in bss if b)
+print(f'BSS: {len(bss)} bytes, {nz} non-zero')
+"
+```
+
+
+### Request Body Encoding — Detailed Analysis
+
+**Two-buffer architecture**: The serializer writes to TWO separate buffers:
+1. **Bitstream** — presence bits (LSB-first via FUN_101a9e80)
+2. **Byte buffer** — value data (raw bytes via FUN_10056ad0)
+
+The compound serializer (FUN_101a8e80) iterates the field list and for each field:
+1. Writes a presence bit to the bitstream (0=absent, 1=present)
+2. If present, writes the value to the byte buffer
+
+**Type IDs are BYTE WIDTHS, not bit widths:**
+| type_id | Max value | Meaning |
+|---------|-----------|---------|
+| 1 | 0xFF (255) | 1-byte value |
+| 2 | 0xFFFF (65535) | 2-byte value |
+| 3 | 0xFFFFFF | 3-byte value |
+| 4 | 0xFFFFFFFF | 4-byte value |
+| 5 | unlimited | Variable-length (string) |
+
+**Value writer (FUN_10056ad0)**: Writes raw bytes to a growable byte buffer.
+Not a bit writer — writes whole bytes.
+
+**String encoding**: Strings are NOT stored as raw ASCII in the body.
+The value getter (FUN_101bd8d0) returns a transformed value, not the raw string.
+The transformation is unknown — possibly hashed, indexed, or encoded.
+
+**Presence bit mode**: The BitStream has a mode flag at offset 0x10:
+- mode=0: LSB-first for both presence and values (used by the Toolbox)
+- mode=1: MSB-first for values
+
+**Field value serializer (FUN_101a1f80)**: Checks mode flag to choose writer:
+- mode=0 → calls FUN_101a8310 (LSB multi-bit writer)
+- mode!=0 → calls FUN_101a8150 (MSB multi-bit writer)
+
+**Verified encodings:**
+- Boot body (D8 14): 16 presence bits, all LSB-first
+- Boot body (50 86): 16 presence bits, all LSB-first
+- Login body (70 bytes): 14 presence bits + 68 bytes of encoded value data
+  - Strings are NOT raw ASCII — encoding unknown
+  - First 2 bytes (58 0C) confirmed as 14 presence bits
+
+**Triplet array field names (66 entries):**
+```
+[0]Crypt [1]Type [2]Id [3]RequestId [4]Type [5]Type
+[6]Delegation [7]Credentials [8]Version [9]Fault [10]Cellid
+[11]Elevation [12]Cellid [13]Cellid [14]??? [15]Steps
+[16]Mask [17]Coord [18]Days [19]Intervals [20]Type
+[21]Type [22]Country [23]Type [24]Name [25]Coord
+[26]Coord [27]??? [28]Host [29]??? [30]???
+[31]Datagram [32]Length [33]ArtifactId [34]Manifests [35]Force
+[36]OldLastModified [37]??? [38]??? [39]Type [40]Type
+[41]Type [42]Type [43]Kind [44]Name [45]???
+[46]Name [47]??? [48]??? [49]??? [50]???
+[51]??? [52]??? [53]??? [54]??? [55]???
+[56]??? [57]Credentials [58]RetryAfter [59]??? [60]???
+[61]??? [62]ServiceMinor [63]??? [64]RetryAfter [65]???
+```
+
+**Field flags** (at fd+0x16): 0=skip, 5/6/9=include in serialization.
