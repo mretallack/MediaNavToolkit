@@ -56,10 +56,21 @@ Bytes 1-2:   0xC2 0xC2 (envelope marker)
 Byte 3:      Sub-type: 0x20 = unauthenticated, 0x30 = authenticated
 Bytes 4-11:  SnakeOil key (8 bytes, big-endian uint64)
 Byte 12:     Service minor version (0x01=index, 0x0E=register, 0x19=market)
-Bytes 13-14: 0x00 0x00 (padding)
-Byte 15:     0x3F (end marker)
+Bytes 13-14: 0x00 0x00 (reserved)
+Byte 15:     Session nonce — random per-session byte, constant within a session
+             (e.g. 0x3F, 0x67, 0x11 observed across different sessions)
 Byte 16+:    Encrypted payload starts here
 ```
+
+**CRITICAL: No Content-Type header.** Wire protocol requests must NOT include a
+`Content-Type` HTTP header. The server returns HTTP 500 if `Content-Type` is present.
+The real Toolbox sends only `Content-Length`, `Host`, and `User-Agent` headers.
+The `User-Agent` format is `DaciaAutomotive-Toolbox-{version}` (e.g. `DaciaAutomotive-Toolbox-2026041167`).
+
+**Market URL:** Market calls (login, getprocess, sendfingerprint, etc.) go to
+`https://dacia-ulc.naviextras.com/rest/1/{endpoint}`, NOT to the index URL from boot.
+The brand-specific market URL is discovered via a second index v3 call with device
+credentials, or stored locally from a previous session.
 
 Response header (4 bytes):
 ```
@@ -166,7 +177,7 @@ Host: {host}
 Cookie: JSESSIONID={session}  (after first response)
 ```
 
-No `Content-Type` header is sent for the binary protocol.
+No `Content-Type` header is sent for the binary protocol. **The server returns HTTP 500 if Content-Type is included.** This was the key blocker for our implementation — adding `Content-Type: application/vnd.igo-binary; v=1` caused all wire protocol requests to fail.
 
 ---
 

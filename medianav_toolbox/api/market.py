@@ -23,9 +23,11 @@ from medianav_toolbox.models import (
 from medianav_toolbox.protocol import SVC_MARKET, build_request, parse_response
 from medianav_toolbox.wire_codec import build_login_body
 
-# Content type for all market calls (toolbox.md §18)
+# Content type for JSON market calls only. Wire protocol calls must NOT include Content-Type.
+# The server returns HTTP 500 if Content-Type is present on wire protocol requests.
 IGO_BINARY = "application/vnd.igo-binary; v=1"
 JSON_CT = "application/json"
+WIRE_UA = "DaciaAutomotive-Toolbox-2026041167"
 
 
 class MarketAPI:
@@ -128,7 +130,7 @@ class MarketAPI:
         )
 
         url = f"{self._endpoints.index_v3}/login"
-        resp = self._client.post(url, content=wire, headers={"Content-Type": IGO_BINARY})
+        resp = self._client.post(url, content=wire, headers={"User-Agent": WIRE_UA})
 
         jsid = extract_jsessionid(dict(resp.cookies))
         if jsid:

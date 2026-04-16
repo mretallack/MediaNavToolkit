@@ -40,6 +40,7 @@ def build_request(
     seed: int | None = None,
     code: int | None = None,
     secret: int | None = None,
+    session_id: int | None = None,
 ) -> bytes:
     """Build a complete wire request: header + encrypted query + encrypted body.
 
@@ -55,6 +56,7 @@ def build_request(
         seed: PRNG seed for RANDOM mode (auto-generated if None)
         code: Credentials.Code for DEVICE mode
         secret: Credentials.Secret for DEVICE mode
+        session_id: per-session random byte for header byte 15 (auto-generated if None)
 
     Returns:
         Complete wire bytes ready to send
@@ -71,6 +73,8 @@ def build_request(
         q_seed = s
         b_seed = s
 
+    sid = session_id if session_id is not None else (os.urandom(1)[0] | 0x01)
+
     header = struct.pack(
         ">BBBB Q B HB",
         0x01,
@@ -80,7 +84,7 @@ def build_request(
         header_key,
         service_minor,
         0x0000,
-        0x3F,
+        sid,
     )
 
     encrypted_query = snakeoil(query, q_seed)

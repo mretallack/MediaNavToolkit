@@ -73,10 +73,9 @@ class TestBuildRequest:
         assert req[3] == AUTH_RANDOM
         assert struct.unpack(">Q", req[4:12])[0] == BOOT_SEED
         assert req[12] == SVC_INDEX
-        assert req[15] == 0x3F
 
     def test_random_mode_boot_matches_capture(self):
-        req = build_request(BOOT_QUERY, BOOT_BODY, SVC_INDEX, seed=BOOT_SEED)
+        req = build_request(BOOT_QUERY, BOOT_BODY, SVC_INDEX, seed=BOOT_SEED, session_id=0x3F)
         assert req == BOOT_WIRE
 
     def test_device_mode_header(self):
@@ -109,6 +108,7 @@ class TestBuildRequest:
             SVC_MARKET,
             code=DEVICE_CODE,
             secret=DEVICE_SECRET,
+            session_id=0x3F,
         )
         assert req == LOGIN_WIRE
 

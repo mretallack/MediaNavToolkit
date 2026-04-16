@@ -54,6 +54,10 @@ Existing modules (✓) and planned modules (○):
 
 **Status**: `protocol.py` and `crypto.py` are implemented and tested. Query and body are encrypted as separate SnakeOil streams (DEVICE mode: Code for query, Secret for body). The `api/` modules have working boot (v2 JSON + v3 wire), device registration (wire protocol returning DeviceCredentials), and market login (wire protocol). Request bodies use a simple length-prefixed format (`wire_codec.py`), verified byte-for-byte against captured traffic.
 
+**CRITICAL**: Wire protocol requests must NOT include a `Content-Type` HTTP header — the server returns HTTP 500 if it's present. Only `User-Agent` (format: `DaciaAutomotive-Toolbox-{version}`) is required. Header byte 15 is a random per-session nonce, not a fixed value.
+
+**End-to-end session flow** (`session.py`): boot → register (cached creds from `.medianav_creds.json`) → login → sendfingerprint → getprocess. Login and getprocess confirmed working against live API. Market calls go to `https://dacia-ulc.naviextras.com/rest/1/` (brand-specific URL), not the index URL from boot. Credentials (Code/Secret) are permanent and stored in `service_register_v1.sav` by the Windows Toolbox.
+
 ---
 
 ## 2. Protocol Layer (`protocol.py`)

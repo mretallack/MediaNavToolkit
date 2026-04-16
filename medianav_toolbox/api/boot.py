@@ -25,22 +25,27 @@ def boot(client: NaviExtrasClient) -> ServiceEndpoints:
 def boot_v3(client: NaviExtrasClient) -> ServiceEndpoints:
     """Discover service URLs via v3 igo-binary wire protocol (RANDOM mode).
 
-    This is the same protocol the real Toolbox uses.
+    The request uses wire protocol encryption, but the response is raw igo-binary
+    (no wire protocol header or encryption).
     """
     query = build_boot_request_body(counter=0x06)
     wire = build_request(query=query, body=b"", service_minor=SVC_INDEX)
-    seed = int.from_bytes(wire[4:12], "big")
 
     url = f"{client.config.api_base}/3/boot"
     resp = client.post(
         url,
         content=wire,
-        headers={"Content-Type": "application/vnd.igo-binary; v=1"},
+        headers={"User-Agent": "DaciaAutomotive-Toolbox-2026041167"},
     )
     resp.raise_for_status()
 
-    decrypted = parse_response(resp.content, seed)
-    services = parse_boot_response(decrypted)
+    # Response is raw igo-binary (starts with 0x80), not wire-protocol-encrypted
+    if resp.content and resp.content[0] == 0x80:
+        services = parse_boot_response(resp.content)
+    else:
+        seed = int.from_bytes(wire[4:12], "big")
+        decrypted = parse_response(resp.content, seed)
+        services = parse_boot_response(decrypted)
     return _services_to_endpoints(services)
 
 

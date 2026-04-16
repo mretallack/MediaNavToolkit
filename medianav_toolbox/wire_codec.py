@@ -168,3 +168,56 @@ def build_get_device_descriptor_list_body(
         encode_byte(0x01),
         encode_string(agent_alias),
     )
+
+
+def build_sendfingerprint_body(
+    device_context_id: int = 0,
+    checksum: str = "N/A",
+    cache_path: str = "/tmp/medianav_cache",
+    total_space: int = 0,
+    free_space: int = 0,
+    info: str = "0_0",
+) -> bytes:
+    """Build SendFingerprintArg body (minimal version).
+
+    Sends a minimal fingerprint with one dummy file entry and one storage entry.
+    The server accepts this and returns tasks (FINGERPRINT, BROWSER, SSE).
+
+    From captured traffic, the structure is:
+      [int32 BE] DeviceContextId
+      [byte] flags (0xC0 = Partial=false, Synctool=false)
+      [len] checksum string
+      [file_entries...]
+      [storage_entry]
+      [len] info string
+    """
+    # File entry for "dummy" (minimal, matches captured XML)
+    dummy_entry = (
+        b"\x22"  # flags: directory=false, synctool=false
+        + encode_string("dummy")
+        + encode_string(cache_path)
+        + b"\x00\x00\x00\x00\x00\x00\x00\x00"  # size=0
+        + b"\x00\x00\x00\x00\x00\x00\x00\x00"  # create_timestamp=0
+        + b"\x00\x00\x00\x00\x00\x00\x00\x00"  # modify_timestamp=0
+    )
+
+    # Storage entry
+    storage_entry = (
+        b"\x01"  # count=1
+        + b"\x00"  # ReadOnly=false
+        + encode_string(cache_path)
+        + encode_int64(total_space)
+        + encode_int64(free_space)
+        + encode_int64(0)  # MinFreeSpace
+        + encode_int32(4096)  # BlockSize
+        + encode_string("/")  # MountPath
+    )
+
+    return (
+        encode_int32(device_context_id)
+        + b"\xc0"  # flags
+        + encode_string(checksum)
+        + dummy_entry
+        + storage_entry
+        + encode_string(info)
+    )

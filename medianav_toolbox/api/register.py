@@ -23,6 +23,9 @@ from medianav_toolbox.protocol import SVC_REGISTER, build_request, parse_respons
 from medianav_toolbox.wire_codec import build_register_device_body
 
 IGO_BINARY = "application/vnd.igo-binary; v=1"
+# Wire protocol requests must NOT include Content-Type (server returns 500).
+# Only use Content-Type for raw igo-binary (non-wire-protocol) requests.
+WIRE_HEADERS = {"User-Agent": "DaciaAutomotive-Toolbox-2026041167"}
 
 
 def register_device_wire(
@@ -56,7 +59,7 @@ def register_device_wire(
     seed = int.from_bytes(wire[4:12], "big")
 
     url = f"{endpoints.register}/device"
-    resp = client.post(url, content=wire, headers={"Content-Type": IGO_BINARY})
+    resp = client.post(url, content=wire, headers=WIRE_HEADERS)
 
     if resp.status_code != 200:
         raise RuntimeError(f"Registration failed: HTTP {resp.status_code}")
