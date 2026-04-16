@@ -33,6 +33,9 @@ The protocol has been fully reverse-engineered and verified against the live ser
 - [x] Reverse engineering: registration request/response XML format
 - [x] Reverse engineering: device model list
 - [x] Documentation: toolbox.md, design.md, functions.md
+- [x] `wire_codec.py` — request body encoder for wire format (length-prefixed strings, BE integers)
+- [x] Wire protocol: split query/body encryption (R.6 solved), `protocol.py` updated
+- [x] Wire protocol: `boot_v3()`, `register_device_wire()`, `login_wire()` implemented
 
 ## Phase 1: Protocol Implementation
 
@@ -84,16 +87,16 @@ RANDOM mode seed generation:
 
 ## Phase 2: Server Communication
 
-- [ ] **2.1** Implement boot flow
-  - `POST /selfie/rest/1/update` (plaintext JSON)
-  - `POST /services/index/rest/3/boot` (RANDOM mode) → parse service URLs
-  - Tests: boot against live API, verify URLs match known values
+- [x] **2.1** Implement boot flow
+  - `boot()` — v2 JSON GET (existing, reliable fallback)
+  - `boot_v3()` — v3 igo-binary wire protocol (RANDOM mode), parses service URLs
+  - Both in `api/boot.py`
 
-- [ ] **2.2** Implement device registration
-  - `POST /services/register/rest/1/device` (RANDOM mode)
-  - Send: BrandName, ModelName, Swid, Imei, IgoVersion, FirstUse, Appcid, UniqId
-  - Receive: Credentials (Name, Code, Secret)
-  - Tests: register with real device data
+- [x] **2.2** Implement device registration
+  - `register_device_wire()` in `api/register.py` — RANDOM mode wire protocol
+  - Sends: BrandName, ModelName, Swid, Imei, IgoVersion, FirstUse, Appcid, UniqId
+  - Returns: `DeviceCredentials` (Name, Code, Secret) for authenticated calls
+  - Body format verified byte-for-byte against captured traffic
 
 - [ ] **2.3** Implement SWID generation
   - Compute from drive serial: `MD5("SPEEDx{serial}CAM")` → `CK-XXXX-XXXX-XXXX-XXXX`
@@ -101,13 +104,13 @@ RANDOM mode seed generation:
   - Linux: get drive serial from `/dev/disk/by-id/` or `lsblk`
   - Tests: known serial → known SWID
 
-- [ ] **2.4** Implement authenticated API calls (DEVICE mode)
+- [x] **2.4** Implement authenticated API calls (DEVICE mode)
+  - ✅ `POST /rest/1/login` — `login_wire()` in `api/market.py`, DEVICE mode (Code for query, Secret for body)
   - ✅ `POST /services/register/rest/1/hasActivatableService` — WORKING
-  - ✅ `POST /rest/1/login` (market) — WORKING (replayed captured body)
   - ✅ `POST /rest/1/getprocess` — WORKING (empty body + credential block)
-  - [ ] `POST /rest/1/sendfingerprint` — needs replayed captured body
-  - [ ] `POST /services/register/rest/1/get_device_model_list` — needs replayed captured body
-  - [ ] `POST /services/register/rest/1/get_device_descriptor_list` — needs replayed captured body
+  - [ ] `POST /rest/1/sendfingerprint` — needs wire_codec encoder
+  - [ ] `POST /services/register/rest/1/get_device_model_list` — needs wire_codec encoder
+  - [ ] `POST /services/register/rest/1/get_device_descriptor_list` — needs wire_codec encoder
   - All use Code in header and as query encryption seed, Secret for body encryption
   - Request bodies use igo-binary tagged format (same as responses) — R.6 SOLVED
 

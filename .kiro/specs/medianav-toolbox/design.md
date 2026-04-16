@@ -52,7 +52,7 @@ Existing modules (✓) and planned modules (○):
 └──────────────────────────────────────────────────────────────┘
 ```
 
-**Status**: `protocol.py` and `crypto.py` are implemented and tested. Query and body are encrypted as separate SnakeOil streams (DEVICE mode: Code for query, Secret for body). The `api/` modules have working boot, igo-binary encoding/decoding, and market login. Request bodies use the same igo-binary tagged format as responses — no custom bitstream encoder needed.
+**Status**: `protocol.py` and `crypto.py` are implemented and tested. Query and body are encrypted as separate SnakeOil streams (DEVICE mode: Code for query, Secret for body). The `api/` modules have working boot (v2 JSON + v3 wire), device registration (wire protocol returning DeviceCredentials), and market login (wire protocol). Request bodies use a simple length-prefixed format (`wire_codec.py`), verified byte-for-byte against captured traffic.
 
 ---
 

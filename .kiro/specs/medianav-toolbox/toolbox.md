@@ -460,7 +460,7 @@ NaviSync/
 
 3. ~~**igo-binary response format**~~ — **SOLVED**: Type-tagged format (0x01=int32, 0x05=string, 0x11=object, 0x17=array, 0x80=envelope). Parser implemented.
 
-4. ~~**igo-binary request body encoding**~~ — **SOLVED**: Request bodies use the same igo-binary tagged format as responses (length-prefixed strings, type tags). The body appeared as random data because query and body are encrypted as **separate SnakeOil streams**: DEVICE mode uses Code for query, **Secret** for body. RANDOM mode uses the same random seed for both but with independent PRNG state. Verified against all 8 captured requests.
+4. ~~**igo-binary request body encoding**~~ — **SOLVED**: Query and body are encrypted as **separate SnakeOil streams** (DEVICE: Code for query, Secret for body; RANDOM: same seed, fresh PRNG). The request body format is: `[0x80][len-prefixed strings][BE integers]` — simpler than the response format (no type tags). Implemented in `wire_codec.py`, verified byte-for-byte against all 8 captured requests.
 
 5. **Credential block XOR key universality** — The credential block encoding is `0xD8 || (Name XOR 6935b733a33d02588bb55424260a2fb5)`. Verified against live server. Unknown whether the XOR key is the same for all devices or device-specific.
 
@@ -865,62 +865,50 @@ print(f'BSS: {len(bss)} bytes, {nz} non-zero')
 ```
 
 
-### Request Body Encoding — Detailed Analysis
+### Request Body Encoding — SOLVED
 
-**Two-buffer architecture**: The serializer writes to TWO separate buffers:
-1. **Bitstream** — presence bits (LSB-first via FUN_101a9e80)
-2. **Byte buffer** — value data (raw bytes via FUN_10056ad0)
+**The request body format is NOT the bitstream/presence-bit format described in earlier analysis.** That analysis was based on incorrectly decrypted data (query+body decrypted as one stream instead of separately).
 
-The compound serializer (FUN_101a8e80) iterates the field list and for each field:
-1. Writes a presence bit to the bitstream (0=absent, 1=present)
-2. If present, writes the value to the byte buffer
+**Actual format** (from correctly decrypted captured traffic):
 
-**Type IDs are BYTE WIDTHS, not bit widths:**
-| type_id | Max value | Meaning |
-|---------|-----------|---------|
-| 1 | 0xFF (255) | 1-byte value |
-| 2 | 0xFFFF (65535) | 2-byte value |
-| 3 | 0xFFFFFF | 3-byte value |
-| 4 | 0xFFFFFFFF | 4-byte value |
-| 5 | unlimited | Variable-length (string) |
-
-**Value writer (FUN_10056ad0)**: Writes raw bytes to a growable byte buffer.
-Not a bit writer — writes whole bytes.
-
-**String encoding**: Strings are NOT stored as raw ASCII in the body.
-The value getter (FUN_101bd8d0) returns a transformed value, not the raw string.
-The transformation is unknown — possibly hashed, indexed, or encoded.
-
-**Presence bit mode**: The BitStream has a mode flag at offset 0x10:
-- mode=0: LSB-first for both presence and values (used by the Toolbox)
-- mode=1: MSB-first for values
-
-**Field value serializer (FUN_101a1f80)**: Checks mode flag to choose writer:
-- mode=0 → calls FUN_101a8310 (LSB multi-bit writer)
-- mode!=0 → calls FUN_101a8150 (MSB multi-bit writer)
-
-**Verified encodings:**
-- Boot body (D8 14): 16 presence bits, all LSB-first
-- Boot body (50 86): 16 presence bits, all LSB-first
-- Login body (70 bytes): 14 presence bits + 68 bytes of encoded value data
-  - Strings are NOT raw ASCII — encoding unknown
-  - First 2 bytes (58 0C) confirmed as 14 presence bits
-
-**Triplet array field names (66 entries):**
 ```
-[0]Crypt [1]Type [2]Id [3]RequestId [4]Type [5]Type
-[6]Delegation [7]Credentials [8]Version [9]Fault [10]Cellid
-[11]Elevation [12]Cellid [13]Cellid [14]??? [15]Steps
-[16]Mask [17]Coord [18]Days [19]Intervals [20]Type
-[21]Type [22]Country [23]Type [24]Name [25]Coord
-[26]Coord [27]??? [28]Host [29]??? [30]???
-[31]Datagram [32]Length [33]ArtifactId [34]Manifests [35]Force
-[36]OldLastModified [37]??? [38]??? [39]Type [40]Type
-[41]Type [42]Type [43]Kind [44]Name [45]???
-[46]Name [47]??? [48]??? [49]??? [50]???
-[51]??? [52]??? [53]??? [54]??? [55]???
-[56]??? [57]Credentials [58]RetryAfter [59]??? [60]???
-[61]??? [62]ServiceMinor [63]??? [64]RetryAfter [65]???
+Request body = [0x80] [field1] [field2] ...
+
+String:  [length:1] [utf8_bytes:length]   — no null terminator, no type tag
+Int32:   [4 bytes big-endian]             — no type tag
+Int64:   [8 bytes big-endian]             — no type tag
+Array:   [count:1] [elements...]          — count byte then inline elements
+Byte:    [value:1]                        — single raw byte
 ```
 
-**Field flags** (at fd+0x16): 0=skip, 5/6/9=include in serialization.
+**LoginArg body** (70 bytes, verified byte-for-byte):
+```
+80                              envelope
+18 "Windows 10 (build 19044)"  OperatingSystemName (len=24)
+06 "10.0.0"                    OperatingSystemVersion (len=6)
+05 "19044"                     OperatingSystemBuildVersion (len=5)
+0f "5.28.2026041167"           AgentVersion (len=15)
+01 09 "Dacia_ULC"              AgentAliases (array count=1, string len=9)
+02 "en"                        Language (len=2)
+01                             AgentType (enum: TB=1)
+```
+
+**RegisterDeviceArg body** (131 bytes, verified byte-for-byte):
+```
+1d 00                           header (0x1d=29, 0x00)
+0f "DaciaAutomotive"            BrandName (len=15)
+0c "DaciaToolbox"               ModelName (len=12)
+16 "CK-153G-PF9R-KB6D-W8B0"    Swid (len=22)
+15 "x51x4Dx30x30x30x30x31"     Imei (len=21)
+08 "9.35.2.0"                   IgoVersion (len=8)
+00 00 00 00 00 00 00 00         FirstUse (int64 BE = 0 = 1970.01.01)
+42 00 09 be                     Appcid (int32 BE = 0x420009BE)
+00                              separator
+20 "BF7AE9C2D033892B19FB511A6F206AC9"  UniqId (len=32)
+```
+
+**Key insight**: The "presence bits" (D8 14, 50 86, 58 0C) seen in earlier analysis are part of the **query envelope**, not the body. The body uses a simple length-prefixed format with no bitstream encoding.
+
+**Implementation**: `wire_codec.py` — `build_login_body()`, `build_register_device_body()`
+
+**Earlier analysis notes** (bitstream, presence bits, two-buffer architecture) describe the **envelope serializer** used for the XML logging layer inside the DLL, not the wire body format. The triplet array and field flags relate to the DLL's internal type system.

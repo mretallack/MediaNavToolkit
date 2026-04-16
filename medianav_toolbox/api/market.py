@@ -9,8 +9,10 @@ Call sequence: LOGIN → SEND_DRIVES → SEND_FINGERPRINT → SEND_MD5 →
 
 from medianav_toolbox.api.client import NaviExtrasClient
 from medianav_toolbox.auth import AuthenticationError, auth_headers, extract_jsessionid
+from medianav_toolbox.igo_serializer import build_credential_block
 from medianav_toolbox.models import (
     Credentials,
+    DeviceCredentials,
     DeviceInfo,
     DownloadItem,
     DriveInfo,
@@ -18,6 +20,8 @@ from medianav_toolbox.models import (
     ServiceEndpoints,
     Session,
 )
+from medianav_toolbox.protocol import SVC_MARKET, build_request, parse_response
+from medianav_toolbox.wire_codec import build_login_body
 
 # Content type for all market calls (toolbox.md §18)
 IGO_BINARY = "application/vnd.igo-binary; v=1"
@@ -85,6 +89,55 @@ class MarketAPI:
             self._session.is_authenticated = True
             return self._session
         raise AuthenticationError(f"Login failed: HTTP {result['status']}")
+
+    def login_wire(
+        self,
+        device_creds: DeviceCredentials,
+        os_name: str = "Windows 10 (build 19044)",
+        os_version: str = "10.0.0",
+        os_build: str = "19044",
+        agent_version: str = "5.28.2026041167",
+        agent_aliases: list[str] | None = None,
+        language: str = "en",
+    ) -> Session:
+        """POST /login via wire protocol (DEVICE mode).
+
+        Uses Code for query encryption, Secret for body encryption.
+        """
+        if agent_aliases is None:
+            agent_aliases = ["Dacia_ULC"]
+
+        cred_block = build_credential_block(device_creds.name)
+        query = bytes([0x4F, 0x20]) + cred_block  # counter + flags + credential block
+
+        body = build_login_body(
+            os_name=os_name,
+            os_version=os_version,
+            os_build=os_build,
+            agent_version=agent_version,
+            agent_aliases=agent_aliases,
+            language=language,
+        )
+
+        wire = build_request(
+            query=query,
+            body=body,
+            service_minor=SVC_MARKET,
+            code=device_creds.code,
+            secret=device_creds.secret,
+        )
+
+        url = f"{self._endpoints.index_v3}/login"
+        resp = self._client.post(url, content=wire, headers={"Content-Type": IGO_BINARY})
+
+        jsid = extract_jsessionid(dict(resp.cookies))
+        if jsid:
+            self._session.jsessionid = jsid
+
+        if resp.status_code == 200:
+            self._session.is_authenticated = True
+            return self._session
+        raise AuthenticationError(f"Wire login failed: HTTP {resp.status_code}")
 
     def send_drives(self, drives: list[DriveInfo]) -> dict:
         """POST /senddrives — report USB drives. Ref: line 156243, 32-byte arg."""

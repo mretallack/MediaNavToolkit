@@ -84,6 +84,18 @@ class Credentials:
 
 
 @dataclass
+class DeviceCredentials:
+    """Wire protocol credentials from device registration.
+
+    Ref: toolbox.md §2 (SnakeOil encryption), §8 (register response)
+    """
+
+    name: bytes = b""  # 16-byte Name (used in credential block)
+    code: int = 0  # uint64 — query encryption seed, wire header key
+    secret: int = 0  # uint64 — body encryption seed, response decryption
+
+
+@dataclass
 class Session:
     """Authenticated session state. Ref: toolbox.md §17.1."""
 
