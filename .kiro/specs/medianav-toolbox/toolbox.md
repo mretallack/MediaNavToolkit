@@ -876,7 +876,286 @@ The synctool checks for `update_checksum.md5` in the USB root on insertion:
 
 6. ~~**Delegator endpoint**~~ — **SOLVED**: `get_delegator_credentials()` calls `/register/rest/1/delegator`. Body format identical to register but header `0x1E` and serial field. Returns head unit Name/Code/Secret.
 
-7. **senddevicestatus query flags 0x68** — The `0x08` bit uses unknown encryption. Body does NOT decrypt with toolbox Secret, toolbox Code, delegator Secret, or delegator Code. Currently worked around by raw replay of captured wire bytes.
+7. **senddevicestatus query flags 0x68** — **Name₃ CRACKED, Secret₃ unknown**
+  - `0x68` = `0x20 | 0x40 | 0x08` — query has 19-byte cred block
+  - The cred block contains **Name₃**: `C4000BF28569BACB7C000D4EA65D36B9`
+  - **Name₃ derivation**: `0xC4` + `hu_code` (8 bytes BE) + `toolbox_code` (first 7 bytes BE)
+  - Three credential sets in play:
+    1. **Toolbox** (Name₁ `FB86ACD6...`): `/register/rest/1/device` with toolbox SWID
+    2. **Delegator** (Name₂ `C10CD1FD...`): `/register/rest/1/delegator`
+    3. **Constructed** (Name₃ `C4000BF2...`): built at runtime from Code₁ and Code₂
+  - Name₃ is NOT from a separate registration — all RegisterDevice calls in http_dump are delegator calls (verified by Blowfish-decrypting the `.xml.enc` files)
+  - NOT stored anywhere on disk — `service_register_v1.sav` has 2 entries, `reg.sav` has delegator creds
+  - **Secret₃ (body encryption key) remains unknown**
+  - Exhaustively tested: all 4 known keys, all uint32 half combos (320), byte rotations, XOR/ADD/SUB, z3 with 500 solutions from fingerprint known-plaintext
+  - **Critical finding**: the 0x08 flag changes BOTH the encryption key AND the body format
+    - 0x60 body starts with `D8 02 1F 40 0F DaciaAutomotive...` (device status)
+    - 0x08 body does NOT start with `D8 02 1F 40` (z3 UNSAT with 10 constraint bytes)
+    - 0x08 body format is unknown — possibly just file entries without device header
+    - 0x28 response contains file paths (primary/*.nng, NaviSync/license, etc.)
+    - 0x68 response is minimal (just process/task IDs)
+  - **0x28 and 0x68 use DIFFERENT encryption keys** (confirmed by XOR analysis):
+    - All 0x68 flows: enc[0:4] = `31DC598E` (same key, same plaintext prefix)
+    - All 0x28 flows: enc[0:4] = `3F71B944` (same key, same plaintext prefix)
+    - XOR between any 0x28 and 0x68 flow = constant `0EADE0CA50B57915...` = PRNG difference
+    - All 0x08 bodies (both 0x28 and 0x68) share the same first 4 plaintext bytes regardless of endpoint (licinfo, senddevicestatus, sendfingerprint, etc.)
+  - Two separate object instances handle 0x60 vs 0x28/0x68 paths
+  - Credential provider at vtable `PTR_FUN_102baf34` method `+0x18` = `FUN_1019ec40` (RVA 0x19EC40)
+  - Provider copies credential data from base object at `this - 0x9C`
+
+### R.9 Investigation Log
+
+**Attempts to find Secret₃ (body encryption key):**
+
+1. **Known key tests**: tried all 4 keys (tb_code, tb_secret, hu_code, hu_secret) — none decrypt 0x08 bodies
+2. **Key combinations**: XOR, ADD, SUB of all key pairs — no match
+3. **uint32 half combos**: all 8×8×5=320 combinations of lo/hi halves with XOR/ADD — no match
+4. **Byte rotations**: all 7 rotations of each key — no match
+5. **Concat patterns**: first N bytes of one key + first M bytes of another (all splits) — no match
+6. **Hash derivations**: MD5(Name₃), SnakeOil(Name₃, key) — no match
+7. **z3 solver with D8 02 1F 40 header**: UNSAT with 10 constraint bytes — body does NOT start with this
+8. **z3 with D8 02 XX YY variants**: D8 02 1F 08/28/48/68, D8 03/04 1F 40 — no Dacia in 100+ solutions each
+9. **z3 with delegator body format** (1E 00 0F 44): UNSAT — body doesn't start with this either
+10. **z3 with credential blocks** (Name₃, HU Name₂, TB Name₁): all UNSAT
+11. **z3 with 00000000 header**: 200 solutions, none had readable content + Dacia
+12. **z3 with "DaciaAutomotive" at offsets 0-9**: no match
+13. **z3 with CK-A80R SWID**: no match
+14. **Brute-force first byte (0x00-0xFF)**: 256 × 20 solutions cross-validated between flows — no confirmed match
+
+**Attempts to load DLL in Wine:**
+
+1. **Patched DllMain** (RVA 0x27F1EF) to `mov eax,1; ret 0Ch` — still hangs
+2. **Patched TLS callbacks** (RVA 0x27F24C, 0x27F2DC) to NULL — still hangs
+3. **Zeroed TLS directory** in PE header — still hangs
+4. **Patched CRT DllMain** (RVA 0x27F0B9) — still hangs
+5. **Created stub WINHTTP.dll** with 4 required exports — still hangs
+6. **WINEDLLOVERRIDES=winhttp=n** — still hangs
+7. **Conclusion**: Wine's PE loader hangs during CRT static initializer processing, not in DllMain
+
+**Key structural findings from Ghidra:**
+
+- `FUN_100b3a60` (protocol builder): both query and body encrypted with key from credential object `+0x1C/+0x20`
+- `FUN_1019ec40` (credential getter): allocates 0xB0 bytes, copies from `this - 0x9C`
+- `FUN_100b1670` (credential copier): copies 0x22 dwords from source `+0x10` to dest `+0x04`
+- `FUN_100b0a80` (outer object constructor): sets up credential provider via `FUN_100b1670(param_3)`
+- `FUN_100b10c0` (object factory): creates outer object with credential data from `param_1 + 0x84`
+- `FUN_100b8220` (senddevicestatus builder): calls `FUN_10093010` with credential data from `iVar2 + 0x44`
+- `FUN_10093010` (generic API builder): serializes body via `FUN_10091bf0`, stores in request object
+- Two separate object instances handle 0x60 vs 0x28/0x68 paths — different credential data
+  - **device.nng lead**: The HU descriptor's credential data at `+0x84` may come from `device.nng` (268B binary file from the HU), NOT from the delegator response. The device.nng contains "NNGE" marker and encrypted device identity data. This would explain why hu_secret (from delegator) doesn't work — the 0x08 body key is a DIFFERENT secret embedded in the device.nng file.
+  - **Ghidra findings** (see §22 for annotated code):
+    - Protocol builder at `FUN_100b3c80` (line 152100): builds wire envelope
+    - Credential object at `local_c` / `iVar3`: obtained via virtual method `(**(param_1+0x1c))[0x18]()`
+    - Key stored at credential object `+0x1c/+0x20` (Secret_lo/Secret_hi)
+    - Both query and body encrypted with same key from `piVar11[0x10]`
+    - Debug string at line 152354: `"name: %s\ncode: %lld\nsecret: %lld"`
+  - **DLL patching**: DllMain (RVA 0x27F1EF), 2 TLS callbacks (RVA 0x27F24C/0x27F2DC), stub WINHTTP.dll — Wine still hangs (CRT static init)
+
+---
+
+## 22. Annotated Ghidra — Protocol Envelope Builder
+
+### FUN_100b3c80 — Wire Protocol Envelope Builder (line 152100)
+
+This function builds the encrypted wire protocol envelope for all API calls.
+It selects the encryption key based on the credential mode (RANDOM vs DEVICE).
+
+```
+Source: nngine_decompiled.c lines 152100–152380
+RVA: 0x000b3c80
+```
+
+#### Credential Object Structure (at iVar3 / local_c)
+
+```
++0x00: vtable pointer
++0x08: Name pointer (-> 16-byte MD5 hex string)
++0x0C: Name length flag
++0x10: Code_lo  (uint32, little-endian)
++0x14: Code_hi  (uint32, little-endian)
++0x18: (padding or flags)
++0x1C: Secret_lo (uint32, little-endian)  ← ENCRYPTION KEY
++0x20: Secret_hi (uint32, little-endian)  ← ENCRYPTION KEY
+```
+
+#### Key Selection Logic (lines 152290–152320)
+
+```c
+// local_c = credential object, obtained from credential provider
+iVar3 = (**(code **)(**(int **)(param_1 + 0x1c) + 0x18))();
+local_c = iVar3;
+
+// ...later...
+if ((iVar3 == 0) || (piVar8[0xf] == 2)) {
+    // RANDOM mode: generate time-based seed
+    local_13c = 2;  // mode = RANDOM
+    uVar13 = __time64(0);
+    uVar13 = uVar13 << 0x15 ^ uVar13;           // xorshift step 1
+    uVar9 = (uint)(uVar13 >> 0x20);
+    uVar10 = (uint)uVar13 ^ uVar9 >> 3;          // xorshift step 2
+    local_134 = CONCAT44(
+        (uVar9 << 4 | uVar10 >> 0x1c) ^ uVar9,  // key_hi
+        uVar10 << 4 ^ uVar10                      // key_lo
+    );
+    // Allocate 8-byte key buffer, store seed
+    puVar6 = FUN_1027e4f5(8);
+    *puVar6 = (uint)local_134;        // key_lo
+    puVar6[1] = local_134._4_4_;      // key_hi
+} else {
+    // DEVICE mode: use credential object's Secret
+    local_13c = 3;  // mode = DEVICE
+    local_134 = *(undefined8 *)(iVar3 + 0x10);  // Code (for header)
+    local_12c = *(undefined4 *)(iVar3 + 0x18);  // flags/padding
+    puVar6 = FUN_1027e4f5(8);
+    *puVar6 = *(uint *)(iVar3 + 0x1c);   // Secret_lo ← BODY KEY
+    puVar6[1] = *(uint *)(iVar3 + 0x20); // Secret_hi ← BODY KEY
+}
+
+// Store key pointer in request object
+param_3[0x10] = (int)puVar6;  // piVar11[0x10] = key pointer
+```
+
+#### Encryption (lines 152373–152375)
+
+```c
+// Encrypt query (piVar11[0xb] = query buffer, piVar11[0xd] = query length)
+FUN_101b3e10(piVar11[0xb], piVar11[0xd], piVar11[0xb],
+             *(uint *)piVar11[0x10], ((uint *)piVar11[0x10])[1]);
+
+// Encrypt body (piVar11[1] = body buffer, piVar11[3] = body length)
+FUN_101b3e10(piVar11[1], piVar11[3], piVar11[1],
+             *(uint *)piVar11[0x10], ((uint *)piVar11[0x10])[1]);
+```
+
+**Assembly verification** (RVA 0x0B4143 and 0x0B4158):
+Both calls use `[edi+0x40]` = `piVar11[0x10]` as the key pointer. Confirmed identical.
+
+**Critical finding**: The key at `piVar11[0x10]` is `tb_secret` (NOT `tb_code`).
+- The body decrypts with `tb_secret` ✓
+- The query at `piVar11[0x0B]` likely has length 0 (first call is no-op)
+- The wire query is encrypted with `tb_code` as part of the HEADER, not by this function
+- The header is built separately and contains the tb_code-encrypted query
+
+**Wire format** (from FUN_100b39e0, line 152004):
+```
+[1B marker] [header from +0x18, len=+0x20] [query from +0x2C, len=+0x34] [body from +0x04, len=+0x0C]
+```
+The "header" includes the tb_code-encrypted query bytes. The "query" field may be empty (len=0).
+The "body" is encrypted with the credential Secret by FUN_100b3a60.
+
+#### Debug Logging (line 152354)
+
+```c
+FUN_101b74e0(&param_2, "name: %s\ncode: %lld\nsecret: %lld",
+    *puVar6,                              // Name string
+    *(uint *)(local_c + 0x10),            // Code_lo
+    *(uint *)(local_c + 0x14),            // Code_hi
+    *(uint *)(local_c + 0x1c),            // Secret_lo
+    *(uint *)(local_c + 0x20));           // Secret_hi
+```
+
+#### Credential Provider (line 152135)
+
+```c
+// The credential object comes from a virtual method call:
+iVar3 = (**(code **)(**(int **)(param_1 + 0x1c) + 0x18))();
+```
+
+This calls vtable method index 6 (`0x18 / 4`) on the object at `param_1 + 0x1c`.
+The credential provider is set up during session initialization.
+For the 0x08 flag, a different provider returns the constructed credential object
+with Name₃ and the unknown Secret₃.
+
+### FUN_101b3e10 — SnakeOil Encrypt (line 382511)
+
+```
+RVA: 0x001b3e10
+Signature: void __cdecl (byte *src, int len, byte *dst, uint key_lo, uint key_hi)
+```
+
+XORshift128 stream cipher. Each iteration:
+```c
+esi = (esi << 21 | eax >> 11) ^ esi;
+eax = (eax << 21) ^ eax ^ (esi >> 3);
+esi = (esi << 4 | eax >> 28) ^ esi;
+eax = (eax << 4) ^ eax;
+*dst = (eax >> 23) ^ *src;
+```
+
+### FUN_101b3e80 — SnakeOil Encrypt (thiscall variant, line 382534)
+
+```
+RVA: 0x001b3e80
+Signature: void __thiscall (uint *this, int src_offset, int len, byte *dst)
+```
+
+Same algorithm but key state stored in `this[0]` (eax) and `this[1]` (esi).
+Used when the key is part of an object (credential object encryption).
+
+### DLL Entry Points
+
+```
+DllMain:        RVA 0x27F1EF (file offset 0x27E5EF)
+TLS callback 0: RVA 0x27F24C
+TLS callback 1: RVA 0x27F2DC
+CRT DllMain:    RVA 0x27F0B9 (file offset 0x27E4B9)
+Init function:  RVA 0x27F8F5 (called from DllMain on DLL_PROCESS_ATTACH)
+```
+
+### Call Flow: Wire Protocol Request
+
+```
+senddevicestatus (user action)
+  │
+  ├─ FUN_100b8220 (senddevicestatus builder, line 156024)
+  │    ├─ FUN_100ba280 (copy device descriptor into body object)
+  │    ├─ FUN_10093010 (generic API call builder, line 123012)
+  │    │    ├─ Sets request object fields (counter, flags, body builder)
+  │    │    ├─ FUN_10091bf0 (serialize body to igo-binary, line 121985)
+  │    │    └─ FUN_101b30f0 (igo-binary writer)
+  │    └─ Sets flags: param_5 = (puVar3[0x10] | param_4) & param_5
+  │
+  ├─ FUN_100bc640 (async wrapper, line 158836)
+  │    └─ FUN_100b8220 (above)
+  │
+  ├─ FUN_100b0b50 (0x28/0x68 path — with cred block, line 149382)
+  │    │   OR
+  │    FUN_100b2380 (0x60 path — no cred block, line 150739)
+  │    │
+  │    ├─ FUN_100b3a60 (protocol envelope builder, line 152038)
+  │    │    ├─ Credential provider: (**(this+0x1C))[0x18]() → credential object
+  │    │    │    └─ FUN_1019ec40 (RVA 0x19EC40) → copies from this-0x9C
+  │    │    │         └─ FUN_100b1670 (credential copier, line 149999)
+  │    │    │              Copies: Name(+0x04), Code(+0x10/+0x14), Secret(+0x1C/+0x20)
+  │    │    │
+  │    │    ├─ Key selection (DEVICE mode):
+  │    │    │    key_lo = *(cred + 0x1C)   ← Secret_lo
+  │    │    │    key_hi = *(cred + 0x20)   ← Secret_hi
+  │    │    │    piVar11[0x10] = &{key_lo, key_hi}
+  │    │    │
+  │    │    ├─ SnakeOil(query, qlen, query, key_lo, key_hi)  ← may be no-op (qlen=0)
+  │    │    ├─ SnakeOil(body, blen, body, key_lo, key_hi)    ← encrypts body with Secret
+  │    │    │
+  │    │    └─ FUN_100b39e0 (wire output assembler, line 152004)
+  │    │         Output: [1B marker] [header incl. tb_code-encrypted query] [body]
+  │    │
+  │    └─ FUN_100b05f0 (HTTP POST sender, line 149176)
+  │         Sends: POST /senddevicestatus UDP
+
+Credential source for each path:
+  ┌─────────────┬──────────────────────────────────────────────┐
+  │ Path        │ Credential source                            │
+  ├─────────────┼──────────────────────────────────────────────┤
+  │ 0x60        │ Toolbox descriptor → tb_secret               │
+  │ 0x28/0x68   │ HU descriptor +0x84 → Secret₃ (from         │
+  │             │ device.nng, NOT from delegator response)      │
+  └─────────────┴──────────────────────────────────────────────┘
+
+device.nng parsing:
+  FUN_101c0860 (line 54102) — reads device.nng from USB
+  Contains: NNGE marker, device identity, credential data
+  268 bytes, partially encrypted
+```
 
 8. **Imei field encoding** — The `x51x4Dx30x30x30x30x31` format.
 

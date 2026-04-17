@@ -85,6 +85,79 @@ def register_device_wire(
     )
 
 
+def register_hu_device(
+    client: NaviExtrasClient,
+    endpoints: ServiceEndpoints,
+    brand_name: str = "DaciaAutomotive",
+    model_name: str = "DaciaAutomotiveDeviceCY20_ULC4dot5",
+    swid: str = "CK-A80R-YEC3-MYXL-18LN",
+    imei: str = "32483158423731362D42323938353431",
+    igo_version: str = "9.12.179.821558",
+    appcid: int = 0x42000B53,
+    uniq_id: str = "",
+) -> DeviceCredentials | None:
+    """Register the head unit device separately (RANDOM mode).
+
+    The DLL registers the HU device with its own SWID, producing a third
+    credential set (Name₃/Code₃/Secret₃) used for 0x68 flag requests.
+    Returns None if already registered (409).
+
+    Ref: toolbox.md §10 Q7
+    """
+    body = build_register_device_body(
+        brand_name=brand_name,
+        model_name=model_name,
+        swid=swid,
+        imei=imei,
+        igo_version=igo_version,
+        first_use=0,
+        appcid=appcid,
+        uniq_id=uniq_id,
+    )
+    seed = _random_seed()
+    wire = build_request(
+        query=b"",
+        body=body,
+        service_minor=SVC_REGISTER,
+        code=seed,
+        secret=seed,
+    )
+    resp = client.post(
+        f"{endpoints.register}/device",
+        content=wire,
+        headers=WIRE_HEADERS,
+    )
+    if resp.status_code == 409:
+        return None  # Already registered
+    if resp.status_code != 200:
+        raise RuntimeError(f"HU device registration failed: HTTP {resp.status_code}")
+
+    decrypted = parse_response(resp.content, seed)
+    parsed = parse_register_response(decrypted)
+    return DeviceCredentials(
+        name=bytes.fromhex(parsed["name"]),
+        code=parsed["code"],
+        secret=parsed["secret"],
+    )
+
+
+def _random_seed() -> int:
+    """Generate a RANDOM mode seed from current time (matches DLL behavior)."""
+    import time
+
+    M = 0xFFFFFFFF
+    t = int(time.time())
+    t_lo = t & M
+    esi = (t_lo >> 11) & M
+    ecx = (t_lo << 21) & M
+    edi = (t_lo ^ ecx) & M
+    ecx2 = (esi >> 3) & M
+    edi2 = (edi ^ ecx2) & M
+    ecx3 = ((esi << 4) | (edi2 >> 28)) & M
+    eax = (edi2 << 4) & M
+    return (((ecx3 ^ esi) & M) << 32) | ((eax ^ edi2) & M)
+
+
 def get_delegator_credentials(
     client: NaviExtrasClient,
     endpoints: ServiceEndpoints,

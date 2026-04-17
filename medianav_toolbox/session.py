@@ -118,6 +118,24 @@ def run_session(
             )
             result["steps"].append("delegator")
 
+            # 5b. Register HU device separately (for 0x68 flag requests)
+            from medianav_toolbox.api.register import register_hu_device
+
+            hu_dev_creds = _load_hu_dev_creds(usb_path)
+            if hu_dev_creds is None:
+                hu_dev_creds = register_hu_device(
+                    client,
+                    endpoints,
+                    appcid=device.appcid,
+                )
+                if hu_dev_creds:
+                    _save_hu_dev_creds(usb_path, hu_dev_creds)
+                    result["steps"].append("register_hu_device")
+                else:
+                    result["steps"].append("register_hu_device (cached/409)")
+            else:
+                result["steps"].append("register_hu_device (cached)")
+
             # 6. Send device status with head unit credentials
             ds_resp = _send_device_status(client, creds, hu_creds, session, usb_path, device)
             result["devicestatus_status"] = ds_resp.status_code
@@ -268,6 +286,30 @@ def _save_creds(usb_path: Path, creds: DeviceCredentials) -> None:
                 "secret": creds.secret,
             }
         )
+    )
+
+
+HU_DEV_CREDS_FILE = ".medianav_hu_dev_creds.json"
+
+
+def _load_hu_dev_creds(usb_path: Path) -> DeviceCredentials | None:
+    creds_path = usb_path / HU_DEV_CREDS_FILE
+    if not creds_path.exists():
+        return None
+    try:
+        data = json.loads(creds_path.read_text())
+        return DeviceCredentials(
+            name=bytes.fromhex(data["name"]),
+            code=data["code"],
+            secret=data["secret"],
+        )
+    except (KeyError, ValueError):
+        return None
+
+
+def _save_hu_dev_creds(usb_path: Path, creds: DeviceCredentials) -> None:
+    (usb_path / HU_DEV_CREDS_FILE).write_text(
+        json.dumps({"name": creds.name.hex(), "code": creds.code, "secret": creds.secret})
     )
 
 

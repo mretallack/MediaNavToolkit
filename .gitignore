@@ -46,6 +46,9 @@ analysis/usb-images/
 harness/
 analysis/wine_prefix/
 analysis/docker_harness/
+analysis/*.o
+analysis/trace_creds
+analysis/cred_trace
 
 # Capture artifacts (mitmproxy, wine logs)
 capture/

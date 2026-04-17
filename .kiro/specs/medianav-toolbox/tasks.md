@@ -199,6 +199,10 @@ RANDOM mode seed generation:
 
 - [x] **R.1** ~~DEVICE mode request encryption~~ — RESOLVED
 - [ ] **R.2** NNGE decryption — device.nng encryption algorithm
+  - **Now critical for R.9**: device.nng likely contains the 0x08 body encryption key (Secret₃)
+  - 268 bytes, contains "NNGE" marker at offset 0x50
+  - Parser in Ghidra: `FUN_101c0860` (line 54102)
+  - Credential data may be at specific offsets within the parsed structure
 - [x] **R.3** ~~SWID format_swid()~~ — **RESOLVED**
 - [ ] **R.4** Imei field — understand the `x51x4Dx30x30x30x30x31` encoding
 - [x] **R.5** ~~DEVICE mode credential encoding~~ — RESOLVED
@@ -209,10 +213,16 @@ RANDOM mode seed generation:
   - Body: `[0x1E 0x00] [brand] [model] [swid] [imei] [igo_ver] [int64:0] [int32:appcid] [serial]`
   - Response: parsed with `parse_register_response()` — returns Name, Code, Secret, MaxAge=300
   - Verified: returns `C10CD1FD4A2F23F921D6E3B093D5957A` / Code=3362879562238844 / Secret=4196269328295954
-- [ ] **R.9** Query flags `0x68` encryption — body does NOT decrypt with toolbox Secret, Code, or delegator Secret/Code
-  - Affects: senddevicestatus flows 737/741/754/792 and sendfilecontent flows 743/802
-  - Currently worked around by raw replay of captured wire bytes
-  - Solving this would allow generating senddevicestatus bodies dynamically
+- [ ] **R.9** Query flags `0x68` encryption — **Name₃ CRACKED, Secret₃ from device.nng**
+  - `0x68` = `0x20` (cred block) | `0x40` (has body) | `0x08` (delegated device)
+  - Query is 19 bytes (not 2) — cred block contains Name₃ `C4000BF28569BACB7C000D4EA65D36B9`
+  - **Name₃ = `0xC4` + hu_code(8B BE) + tb_code(7B BE)** — derivation CRACKED
+  - 0x28 and 0x68 use DIFFERENT encryption keys (confirmed by XOR analysis across all flows)
+  - All 0x08 bodies share the same 4-byte plaintext prefix regardless of endpoint
+  - Assembly at RVA 0x0B4143/0x0B4158 confirms: body key = credential Secret at `+0x1C/+0x20`
+  - The key is NOT hu_secret (from delegator) — exhaustively tested
+  - **Lead**: credential data at HU descriptor `+0x84` likely comes from `device.nng` (268B binary)
+  - **Next**: parse device.nng via Ghidra FUN_101c0860 to extract the Secret
 - [ ] **R.10** SendDeviceStatus body validation — our generated body returns 409 even with correct format
   - Device info section matches captured byte-for-byte
   - File entries differ (7 files vs ~11 in captured, different timestamps)
