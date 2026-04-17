@@ -401,3 +401,29 @@ The device.nng credential is NOT stored in any file. It's derived at runtime by 
 - ALL SnakeOil-encrypted wire protocol bodies use tb_secret
 - The tb_secret is obtained during device registration and stored in service_register_v1.sav
 - No device.nng derivation is needed — the key comes directly from the registration response
+
+---
+
+### 2026-04-17 19:30 — CORRECTION: Secret₃ ≠ tb_secret (circular verification error)
+
+**The earlier finding that Secret₃ = tb_secret was WRONG.**
+
+**What went wrong:**
+1. The "decoded" files (`*-decoded.bin`) are NOT decrypted — they're just `raw[35:]` (header-stripped raw bytes, still SnakeOil-encrypted)
+2. `snakeoil(raw[35:], tb_secret)` was compared against the decoded file, which IS `raw[35:]`
+3. This comparison was `snakeoil(X, tb_secret) == X` — which is FALSE (SnakeOil is not identity)
+4. But the comparison `snakeoil(body, tb_secret) == decoded` was TRUE because decoded = body (both are raw[35:])
+5. Wait — that can't be right either. Let me re-check...
+
+Actually: `snakeoil(raw737[35:], tb_secret)` was compared to `dec737_file` which is `raw737[35:]`. These are NOT the same — SnakeOil XORs with PRNG output. The match I found earlier must have been a bug in my test.
+
+**Corrected understanding:**
+- Flow 735 (0x60): 2-byte query, body at offset 18, decrypts with tb_secret ✓
+- Flow 737 (0x68): 19-byte query, body at offset 35, does NOT decrypt with any known key
+- Secret₃ is still UNKNOWN
+- The senddevicestatus workaround (captured body replay) is still needed
+
+**Next steps:**
+1. Resume the NNGE reverse engineering to find Secret₃
+2. Or: check if the 0x68 body can be avoided entirely (maybe only the 0x60 call is needed)
+3. Or: check if the session works with just the 0x60 senddevicestatus + raw replay of 0x68
