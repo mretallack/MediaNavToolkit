@@ -827,3 +827,31 @@ Actually: `snakeoil(raw737[35:], tb_secret)` was compared to `dec737_file` which
 1. Monitor brute-force (estimated ~21 hours for full range)
 2. If not found: try alternative first bytes (0xD9, 0xDC, 0xF8)
 3. If not found: expand hi range beyond 0x000F0000
+
+---
+
+### 2026-04-17 23:15 — Delegator response decoded, Secret₃ not in any response field
+
+**Delegator response (flow 736) decoded with `parse_response(tb_secret)`:**
+```
+80 E0 [hu_name(16B)] [hu_code(8B BE)] [hu_secret(8B BE)] [MaxAge=300] [00]
+[04] [license SWIDs: CW-UQAQ-YAEQ, CP-3IE3-EEMQ, CW-YUEM-E7QU, CW-AUM3-777Q]
+```
+- hu_code = 3362879562238844 ✓
+- hu_secret = 4196269328295954 ✓
+- 4 license SWIDs (one more than in service_register_v1.sav)
+
+**Tried as Secret₃:** Every 8-byte window (LE and BE) of the decrypted delegator response body (175 bytes) → no match.
+
+**0x68 body structure (refined):**
+- 0x60 XML has `<State>RECOGNIZED</State>` + `<UniqId>...</UniqId>`
+- 0x68 XML has `<State>REGISTERED</State>`, NO UniqId
+- Binary difference: 0x68 has 19 extra bytes (Delegation ref) but removes 33 bytes (UniqId)
+- Net: 1461 - 33 + 19 + 4 = 1451 bytes ✓
+
+**Brute-force status:** Two processes running (hi=0x00000000-0x000A0000 and 0x000A0000-0x000F0000). ~8.5 hi/sec. Estimated completion: ~10-21 hours. No results yet after 5 minutes.
+
+**Next steps:**
+1. Continue monitoring brute-force
+2. Try alternative plaintext first bytes if D8 search fails
+3. Consider: the 0x68 body might use a completely different binary format than 0x60
