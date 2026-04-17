@@ -427,3 +427,60 @@ Actually: `snakeoil(raw737[35:], tb_secret)` was compared to `dec737_file` which
 1. Resume the NNGE reverse engineering to find Secret₃
 2. Or: check if the 0x68 body can be avoided entirely (maybe only the 0x60 call is needed)
 3. Or: check if the session works with just the 0x60 senddevicestatus + raw replay of 0x68
+
+---
+
+### 2026-04-17 19:45 — Resumed Secret₃ search, http_dump analysis
+
+**What we found:**
+1. The http_dump XML logs `<Key>` (= Code) but NOT `<Secret>` for SnakeOil
+2. Both 0x60 and 0x68 requests use `<Crypt>DEVICE</Crypt>` with `<Key>3745651132643726</Key>` (tb_code)
+3. Only TWO credential sets exist from server: TB (from first register) and HU (from second register)
+4. Name₃ is constructed locally, not from server. Code₃/Secret₃ must also be derived locally.
+5. The Delegation section has HMAC_MD5 digest `6467a86d4e779471076af473dab78b45` — tried as key, no match
+6. The MAC is computed by the CLIENT, not the server
+
+**What we tried:**
+- MAC digest as SnakeOil key (all 8-byte windows, LE and BE) → no match
+- hu_secret/tb_secret byte combinations → no match
+- Constructed keys from hu_secret + tb_secret bytes → no match
+- HMAC_MD5 with various keys and data → couldn't reproduce the MAC
+
+**Key insight:** The 0x08 flag credential object has Name₃ (constructed), Code₃ (unknown), Secret₃ (unknown). These are NOT from any server response. They must be derived locally from the two known credential sets (TB and HU).
+
+**Next steps:**
+1. The credential object is populated by `FUN_100b1670` which copies from `parent+0x84`
+2. The parent is the session object, and `+0x84` is set during session setup
+3. Need to find WHERE `+0x84` is populated with the constructed credential
+4. The construction likely happens in the delegator response handler or session setup code
+5. Alternative: try to find the MAC computation in the DLL to understand the delegation HMAC key
+
+---
+
+### 2026-04-17 20:00 — DLL data scan negative, http_dump confirms DEVICE mode
+
+**What we found:**
+1. http_dump XML confirms both 0x60 and 0x68 use `<Crypt>DEVICE</Crypt>` with `<Key>3745651132643726</Key>` (tb_code)
+2. The `<Secret>` field is NOT logged in request XMLs — only in RegisterDeviceRet responses
+3. Only TWO credential sets exist from server: TB and HU. No third registration.
+4. Name₃ is constructed locally. Code₃/Secret₃ must also be derived locally.
+5. The Delegation MAC digest `6467a86d4e779471076af473dab78b45` doesn't work as key
+6. DLL .rdata and .data section scan: no 8-byte value produces "Dacia" in decrypted output
+7. Known value pairs (all combinations of hu/tb code/secret halves, APPCID, Name₃ parts, XOR/ADD combos): no match
+
+**What we tried:**
+- 529 known value pairs as (lo, hi) → no D8 + 0F + "Dacia" match
+- ~95K values from DLL .rdata section → no "Dacia" in first 40 decrypted bytes
+- ~28K values from DLL .data section → no "Dacia" in first 40 decrypted bytes
+- MAC digest as key → no match
+
+**Confirmed:**
+- Secret₃ is NOT a static value in the DLL
+- Secret₃ is NOT a simple combination of known credential values
+- Secret₃ is derived at runtime through a computation we haven't found
+
+**Next steps:**
+1. The credential object for 0x08 flag has Name₃ (constructed from hu_code + tb_code). The Code₃ and Secret₃ must be constructed similarly.
+2. The construction likely involves the delegator response data or the HMAC computation
+3. Need to trace the code path from delegator response → credential object construction → Secret₃
+4. Alternative: try running the full Toolbox on Windows with a debugger, break on SnakeOil, read the key
