@@ -47,6 +47,12 @@ harness/
 analysis/wine_prefix/
 analysis/docker_harness/
 analysis/*.o
+analysis/*.c
+!analysis/call_snakeoil.c
+!analysis/test_xor_cbc.c
+!analysis/dump_rsa5.c
+!analysis/crt_patch2.c
+!analysis/brute_dll.c
 analysis/trace_creds
 analysis/cred_trace
 
