@@ -798,3 +798,32 @@ Actually: `snakeoil(raw737[35:], tb_secret)` was compared to `dec737_file` which
 1. Monitor brute-force results (running in background)
 2. While waiting: investigate the 18 extra header bytes in the 0x68 body — what's the Delegation section format?
 3. Try to reconstruct the 0x68 plaintext from the 0x60 plaintext + Delegation data
+
+---
+
+### 2026-04-17 23:00 — Corrected brand offset to 24, brute-force restarted
+
+**Correction:** Brand "DaciaAutomotive" is at offset **24** (not 23). The strlen byte (0x0F) is at offset 23. Verified by XOR analysis: bytes 23-193 are identical across flows 737 and 754 (171 consecutive zero bytes in XOR).
+
+**Corrected PRNG target:**
+- PRNG[0] = 0xE9 (assuming plaintext[0] = 0xD8)
+- PRNG[23] = 0x6B (enc[23]=0x64, plaintext[23]=0x0F strlen)
+- PRNG[23:39] = `6B 32 20 9F 54 11 39 66 C9 60 D2 E2 27 BC BA 8D`
+
+**0x68 body structure (revised):**
+```
+[0-3]   Header (4 bytes, constant across flows)
+[4]     Variable byte (differs between flows — counter or size)
+[5-7]   Constant data (3 bytes)
+[8-22]  Variable data (15 bytes — Delegation section: timestamp + MAC?)
+[23]    0x0F = strlen("DaciaAutomotive")
+[24-38] "DaciaAutomotive" (brand)
+[39+]   Model, SWID, etc. (same as 0x60 body from offset 20+)
+```
+
+**Brute-force status:** Running with 4 threads on 4-core machine, searching hi=0x000A0000-0x000F0000 (327K values). Uses PRNG[0]=0xE9 as fast filter, PRNG[23:27] as verification.
+
+**Next steps:**
+1. Monitor brute-force (estimated ~21 hours for full range)
+2. If not found: try alternative first bytes (0xD9, 0xDC, 0xF8)
+3. If not found: expand hi range beyond 0x000F0000
