@@ -767,3 +767,34 @@ Actually: `snakeoil(raw737[35:], tb_secret)` was compared to `dec737_file` which
 **Next steps:**
 1. **Verify explanation #1** — read the raw bytes at 0x0B414E more carefully. Maybe it's `FF 70 0C` (`PUSH [eax+0x0C]`) not `FF 70 04` (`PUSH [eax+0x04]`). A single byte difference would explain everything.
 2. If the second call uses `[eax+8]` and `[eax+12]`, then Secret₃ is at key_object+8 and key_object+12. The key object is the 16-byte buffer allocated at `param_3[0x10]` in the protocol builder.
+
+---
+
+### 2026-04-17 22:45 — BREAKTHROUGH: Brand string at offset 23 (not 5), PRNG target corrected
+
+**Critical finding:** XOR of flows 737 and 754 shows the brand string "DaciaAutomotive" is at **offset 23** in the 0x68 body, NOT offset 5 (as in the 0x60 body). The 0x68 body has 18 extra header bytes before the brand string.
+
+**XOR analysis (737 vs 754):**
+- Bytes 0-3: all zeros (identical header)
+- Byte 4: 0x1D (differs — likely a counter or size field)
+- Bytes 5-7: zeros
+- Bytes 8-22: non-zero (different data — likely Delegation section)
+- **Bytes 23-193: 171 consecutive zeros** (identical content — brand + model + SWID + file list)
+- Bytes 194-226: non-zero (different data)
+- Bytes 227-369: 143 consecutive zeros (more identical content)
+
+**Corrected PRNG target:**
+- PRNG[0] = 0xE9 (assuming plaintext[0] = 0xD8)
+- PRNG[22] = 0x07 (verified: enc[22] = 0x08, plaintext[22] = 0x0F strlen)
+- PRNG[22:38] = `07 20 17 22 95 5c 31 0d 67 d2 62 d0 f9 3a a3 a9`
+
+**Previous PRNG target was WRONG:** We assumed "DaciaAutomotive" at offset 5, giving PRNG[5:20]. The correct target uses offset 22+ for the strlen byte and brand string.
+
+**Brute-force launched:** Three parallel searches covering hi=0x00000000-0x00200000 (2M hi values). Each hi value tests all 2^32 lo values with PRNG[0] as fast filter and PRNG[22:26] as verification.
+
+**Assembly contradiction explained (partially):** The two SnakeOil calls at 0x0B4143/0x0B4158 both use `[edi+0x40]` as key. The FUN_100b4600 debug logging calls show the body uses `piVar11[1]/piVar11[3]` and query uses `piVar11[0xb]/piVar11[0xd]` — these are the DATA pointers, not keys. The actual encryption key is at `piVar11[0x10]` for both. The contradiction (same key, different encrypted output) remains unexplained without a debugger.
+
+**Next steps:**
+1. Monitor brute-force results (running in background)
+2. While waiting: investigate the 18 extra header bytes in the 0x68 body — what's the Delegation section format?
+3. Try to reconstruct the 0x68 plaintext from the 0x60 plaintext + Delegation data
