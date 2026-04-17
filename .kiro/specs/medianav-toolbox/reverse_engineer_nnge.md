@@ -725,3 +725,45 @@ Actually: `snakeoil(raw737[35:], tb_secret)` was compared to `dec737_file` which
 **Next steps:**
 1. **Run the actual Toolbox on Windows with x64dbg** — breakpoint at RVA 0x0B4055, read ECX+0x1C and ECX+0x20 when the 0x08 credential is used. This is the most direct and reliable path.
 2. **Capture fresh mitmproxy traffic** — even without knowing Secret₃, a fresh capture provides a working 0x68 body for replay.
+
+---
+
+### 2026-04-17 22:30 — CRITICAL: Assembly shows SAME key for query and body, contradicts protocol
+
+**Assembly at RVA 0x0B4133-0x0B415D (two SnakeOil calls):**
+```
+; First call (query encryption):
+0B4133: MOV eax, [edi+0x40]     ; eax = key pointer
+0B4136: MOV ecx, [edi+0x2C]     ; ecx = query buffer
+0B4139: PUSH [eax+0x04]         ; key_hi
+0B413C: PUSH [eax]              ; key_lo
+0B413E: PUSH ecx                ; dst (= src, in-place)
+0B413F: PUSH [edi+0x34]         ; len
+0B4142: PUSH ecx                ; src
+0B4143: CALL SnakeOil
+
+; Second call (body encryption):
+0B4148: MOV eax, [edi+0x40]     ; eax = SAME key pointer
+0B414B: MOV ecx, [edi+0x04]     ; ecx = body buffer
+0B414E: PUSH [eax+0x04]         ; key_hi (SAME)
+0B4151: PUSH [eax]              ; key_lo (SAME)
+0B4153: PUSH ecx                ; dst
+0B4154: PUSH [edi+0x0C]         ; len
+0B4157: PUSH ecx                ; src
+0B4158: CALL SnakeOil
+
+0B415D: ADD ESP, 0x28           ; clean up 40 bytes (10 pushes)
+```
+
+**Contradiction:** Both calls use `[edi+0x40]` as the key pointer, reading `[eax]` (lo) and `[eax+4]` (hi). But we PROVED query uses tb_code and body uses tb_secret (XOR test: `enc_q[0] XOR enc_b[0] = 0x80 ≠ plain_q[0] XOR plain_b[0] = 0x1D`).
+
+**Possible explanations:**
+1. `[edi+0x40]` points to a **16-byte key pair** `[Code_lo, Code_hi, Secret_lo, Secret_hi]`, and the first call uses `[eax]/[eax+4]` (Code) while the second call SHOULD use `[eax+8]/[eax+12]` (Secret) — but the assembly shows `[eax]/[eax+4]` for both. **Ghidra may have the wrong disassembly.**
+2. The SnakeOil function at 0x1B3E10 is a **wrapper** that internally selects the key based on a global counter or flag.
+3. The `[edi+0x40]` pointer is modified by a **concurrent thread** between the two calls.
+
+**What this means for Secret₃:** If explanation #1 is correct, the key object at `[edi+0x40]` contains `[Code₃_lo, Code₃_hi, Secret₃_lo, Secret₃_hi]`. For the 0x08 credential, Code₃ = tb_code (confirmed from wire headers). Secret₃ is at offset +8 in the key object. The key object is built from the credential object's Code and Secret fields.
+
+**Next steps:**
+1. **Verify explanation #1** — read the raw bytes at 0x0B414E more carefully. Maybe it's `FF 70 0C` (`PUSH [eax+0x0C]`) not `FF 70 04` (`PUSH [eax+0x04]`). A single byte difference would explain everything.
+2. If the second call uses `[eax+8]` and `[eax+12]`, then Secret₃ is at key_object+8 and key_object+12. The key object is the 16-byte buffer allocated at `param_3[0x10]` in the protocol builder.
