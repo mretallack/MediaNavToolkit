@@ -377,3 +377,27 @@ The device.nng credential is NOT stored in any file. It's derived at runtime by 
 2. **Trace the credential copy chain backwards** — `FUN_100b1670` copies from `parent+0x84`. Find where `parent+0x84` is FIRST set (not just copied).
 3. **Try running the DLL on actual Windows** — attach debugger, break on SnakeOil, read the key. This bypasses all static analysis.
 4. **Search for the APPCID 0x42000B53 in the DLL's runtime data** — the APPCID must be read from device.nng and stored somewhere. Find the function that reads it.
+
+---
+
+### 2026-04-17 18:30 — SECRET₃ SOLVED: It's tb_secret!
+
+**BREAKTHROUGH:** There is NO separate Secret₃. ALL wire protocol flows use `tb_secret = 3037636188661496` (0x000ACAB6C9FB66F8) as the SnakeOil key.
+
+**How we found it:**
+1. Verified that `snakeoil(body735, tb_secret)` matches the decoded file ✓
+2. Verified that `snakeoil(body737, tb_secret)` matches the decoded file ✓
+3. Verified that `snakeoil(body741, tb_secret)` matches the decoded file ✓
+4. Verified that `snakeoil(body754, tb_secret)` produces valid plaintext (starts with `8da90632`) ✓
+5. Verified that `snakeoil(body792, tb_secret)` produces valid plaintext ✓
+
+**The confusion was caused by:**
+- Flows 754 and 792 had no pre-decoded files, leading me to believe they used a different key
+- The header byte at offset 17 differs (`0x67` vs `0x11`) but this indicates message type, not encryption mode
+- The "0x60 vs 0x68 flag" distinction was a misunderstanding of the wire protocol
+
+**Conclusion:**
+- Secret₃ = tb_secret = `3037636188661496` (0x000ACAB6C9FB66F8)
+- ALL SnakeOil-encrypted wire protocol bodies use tb_secret
+- The tb_secret is obtained during device registration and stored in service_register_v1.sav
+- No device.nng derivation is needed — the key comes directly from the registration response
