@@ -272,3 +272,108 @@ Exhaustive search: tried all 8-byte windows in raw/decoded device.nng, brute-for
 1. **T6: Trace `FUN_10044c60` → `vtable[27]`** — find the file system manager's vtable and its +0x6c method. This is the function that processes device.nng and derives Secret₃.
 2. **T7: Try Blowfish key** on device.nng sections — the key at RVA 0x2AF9E8 hasn't been tried with the correct algorithm yet.
 3. **T8: Find the file system manager vtable** — the object at `*(device_manager + 8)` has the vtable with the +0x6c method.
+
+---
+
+### 2026-04-17 15:40 — Traced vtable[27] chain, found file system vtables
+
+**What we found:**
+1. `DAT_10326bf4` = file system factory singleton, vtable `PTR_FUN_102c514c`
+2. Factory `vtable[9]` (RVA `0x134B30`) creates file system objects
+3. File system object vtable: `PTR_FUN_102c5038` (outer wrapper, 30 methods)
+4. Outer `vtable[27]` = `FUN_10133de0` — thin wrapper, delegates to inner object
+5. Inner object vtable: `PTR_FUN_102c5b84` (created by `FUN_1013d030`)
+6. Inner `vtable[27]` = `FUN_1013d750` — **path builder**, NOT credential derivation
+7. The `+0x6c` call in `FUN_10044c60` just builds the full path to device.nng
+
+**Key realization:** The `vtable[27]` call is NOT the credential derivation. It's a path resolution step. The actual credential derivation happens through the credential provider (`FUN_100be3c0`) which is created by `FUN_1005ffe0`.
+
+**reg.sav structure confirmed:**
+- Entry 1: `hu_name(16) + hu_code(8 BE) + hu_secret(8 BE) + flags`
+- Entry 2: `tb_name(16) + tb_code(8 BE) + tb_secret(8 BE) + flags`
+- Name₃ is NOT in reg.sav — the third credential is derived at runtime
+- APPCID `0x42000B53` is NOT in reg.sav or any .lyc file
+
+**Tried credential combinations:**
+- SnakeOil(name3, any_known_key) → no match
+- MD5(name3) as uint64 → no match
+- XOR of hu/tb code/secret → no match
+- SnakeOil(credential_bytes, other_credential) → no match
+- field3 combined with credentials → no match
+- MD5 of credential string combinations → no match
+
+**Revised understanding:**
+The credential provider (`FUN_100be3c0`) creates credentials from:
+1. RSA keys (from `DAT_10316970`) → decrypt .lyc files → map license credentials
+2. reg.sav → hu and tb credentials (stored as Name+Code+Secret)
+3. device.nng → device credential (Secret₃) — **this is the unknown path**
+
+The device.nng credential is NOT stored in any file. It's derived at runtime by the NNGE engine from the device.nng NNGE block data. The NNGE engine is initialized during `FUN_100bed80` (license file loader) which calls `FUN_100ea130` (NNGE file parser).
+
+**Next steps:**
+1. Re-examine `FUN_100bed80` — it creates the NNGE engine and processes device.nng
+2. The NNGE engine's `FUN_100ea130` reads device.nng and extracts the NNGE block
+3. But device.nng is only 268 bytes and the NNGE parser seeks to `end - 24` = offset 244
+4. At offset 244: `6DD1BA989F17000074C83CDAEA1059D8BD756DD1` — NOT "NNGE"
+5. So the NNGE parser FAILS for device.nng → falls through to template check
+6. The template `"ZXXXXXXXXXXXXXXXXXXZ"` is used instead
+7. **The NNGE key `m0$7j0n4(0n73n71I)` might be XOR'd with the template to derive the credential**
+8. Need to trace what happens when the NNGE parser falls through
+
+---
+
+### 2026-04-17 16:15 — Found MD5(device.nng) = fingerprint, NOT Secret₃
+
+**What we found:**
+1. `FUN_10058590` (fingerprint manager) reads device.nng and computes MD5
+2. `FUN_10157f20` = standard MD5 hash of file contents
+3. MD5(device.nng) = `65d0a4c07c1f1610e4dcc2297f5fbf8c`
+4. This MD5 is used as a device FINGERPRINT, not as the SnakeOil key
+5. Tested MD5 as SnakeOil key → no match
+
+**File system vtable chain resolved:**
+- `DAT_10326bf4` → factory vtable `PTR_FUN_102c514c`
+- Factory `vtable[9]` → creates FS object with vtable `PTR_FUN_102c5038`
+- FS object wraps inner object with vtable `PTR_FUN_102c5b84`
+- Inner `vtable[27]` = `FUN_1013d750` = path builder (NOT credential derivation)
+
+**Critical insight:** The NNGE parser (`FUN_100ea130`) FAILS for device.nng because:
+- device.nng is 268 bytes (< 512 → 0x460 search skipped)
+- Parser seeks to `end - 24` = offset 244
+- Data at 244 does NOT start with "NNGE"
+- Template fallback also fails (template starts with "Z", not "NNGE")
+- Parser returns FALSE
+
+**This means device.nng is NOT processed by the NNGE engine at all.** The NNGE block at offset 0x50 is never read by the parser. The device credential must come from a completely different mechanism.
+
+**Next steps:**
+1. The credential provider reads .lyc files (map licenses) and reg.sav (hu/tb credentials)
+2. Neither contains APPCID `0x42000B53` or Secret₃
+3. Secret₃ must be derived by a function we haven't found yet
+4. Search the decompiled code for functions that read from offset 0x50 or 0x5C in a buffer (where the NNGE block and APPCID are in device.nng)
+5. Search for functions that produce a uint64 output from device.nng data
+6. The device.nng might be read as a binary blob and parsed by a custom function, not the NNGE parser
+
+---
+
+### 2026-04-17 16:30 — Blowfish negative, credential entry vtable mapped
+
+**What we tried:**
+1. Blowfish ECB/CBC with key `b0caba3df8a23194f2a22f59cd0b39ab` on all device.nng blocks → no match
+2. Blowfish ECB with NNGE key on all device.nng blocks → no match
+3. Mapped credential entry vtable `PTR_FUN_102bc54c` (16 methods)
+4. Found `FUN_100dd970` = license validation callback (checks APPCID against license store)
+5. Found `FUN_10058590` = fingerprint manager (computes MD5 of device.nng as file checksum)
+6. MD5(device.nng) = `65d0a4c07c1f1610e4dcc2297f5fbf8c` — used as fingerprint, NOT as Secret₃
+
+**Confirmed:**
+- Blowfish key doesn't decrypt device.nng to produce Secret₃
+- MD5(device.nng) is a fingerprint, not the SnakeOil key
+- The NNGE parser (`FUN_100ea130`) FAILS for device.nng (seeks to wrong offset)
+- device.nng NNGE block at offset 0x50 is NEVER read by the NNGE parser
+
+**Next steps (revised priority):**
+1. **Search for functions that read device.nng as a binary blob** — the NNGE block at offset 0x50 must be read by SOME function. Search for `fread` calls that read 20 bytes or for functions that check for "NNGE" at a specific offset.
+2. **Trace the credential copy chain backwards** — `FUN_100b1670` copies from `parent+0x84`. Find where `parent+0x84` is FIRST set (not just copied).
+3. **Try running the DLL on actual Windows** — attach debugger, break on SnakeOil, read the key. This bypasses all static analysis.
+4. **Search for the APPCID 0x42000B53 in the DLL's runtime data** — the APPCID must be read from device.nng and stored somewhere. Find the function that reads it.
