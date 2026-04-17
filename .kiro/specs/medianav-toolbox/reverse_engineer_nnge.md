@@ -640,3 +640,28 @@ Actually: `snakeoil(raw737[35:], tb_secret)` was compared to `dec737_file` which
 1. **Hook the DLL debug log** — patch the log function at the `"name: %s\ncode: %lld\nsecret: %lld"` call site to write to a file. Run a minimal session flow in Wine to capture Secret₃.
 2. **Trace FUN_1019eaf0** — the session setup copies credential from `this-0x9C`. The `this` object has the constructed credential. Find where `this-0x9C` is populated.
 3. **Try running the Toolbox on actual Windows** with x64dbg, break on SnakeOil (RVA 0x1B3E10), read key_lo/key_hi from the stack.
+
+---
+
+### 2026-04-17 21:45 — Arithmetic and hash derivations exhausted
+
+**Additional approaches tried:**
+- Multiply/add/subtract/XOR of all credential pairs → no match
+- MD5 of each credential (as binary and as decimal string) → no match
+- MD5 of Name₃ → no match
+- Byte-swapped credentials → no match
+- CRC32 of credentials → no match
+- Rotated credentials (all 31 rotations) → no match
+- Total: 162 + 98 unique candidates tested against "Dacia" in first 100 decrypted bytes
+
+**Conclusion:** Secret₃ is NOT derivable from simple arithmetic, hashing, or byte manipulation of the known credential values. The derivation must involve:
+- A complex multi-step computation in the DLL
+- Or data from a source we haven't identified (e.g., a server response field we missed)
+- Or the NNGE engine processing device.nng through a path we haven't traced
+
+**Assembly confirmed:** At RVA 0x0B4055-0x0B4061, the credential object is in ECX with Secret at [ECX+0x1C] (lo) and [ECX+0x20] (hi). The CALL to sprintf at 0x0B406C logs these values.
+
+**Next steps:**
+1. **Run the actual Toolbox on Windows with x64dbg** — set breakpoint at RVA 0x0B4055, read ECX+0x1C and ECX+0x20 when hit. This is the most direct path to Secret₃.
+2. **Alternative: patch the DLL binary** — replace the CALL at 0x0B406C with code that writes ECX+0x1C/0x20 to a fixed memory address, then read it after the session runs.
+3. **Alternative: trace the NNGE engine** — the credential provider chain leads through FUN_100be3c0 → FUN_100bed80 (license loader) → NNGE engine. The NNGE engine might derive Secret₃ from device.nng through a path we haven't fully traced.
