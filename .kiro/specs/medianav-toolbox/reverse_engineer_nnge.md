@@ -581,3 +581,62 @@ Actually: `snakeoil(raw737[35:], tb_secret)` was compared to `dec737_file` which
 2. **Hook the DLL debug log** — the format string `"name: %s\ncode: %lld\nsecret: %lld"` at line 152350 logs the credential. Capture this output by patching the DLL's log function to write to a file, then run a minimal session flow.
 3. **Trace FUN_1019eaf0** — the session setup copies credential from `this-0x9C`. Find where `this-0x9C` is populated with the constructed credential (Name₃/Code₃/Secret₃).
 4. **Run actual Toolbox on Windows with debugger** — break on SnakeOil (RVA 0x1B3E10), read key_lo and key_hi from the stack when the 0x68 body is encrypted.
+
+---
+
+### 2026-04-17 21:10 — Live test: 0x68 replay broken, catalog empty without senddevicestatus
+
+**Test results:**
+
+| Scenario | 0x60 | 0x68 | Catalog result |
+|----------|------|------|----------------|
+| Skip all senddevicestatus | — | — | 0 items, 1KB page (minimal) |
+| 0x60 only (re-encrypted capture) | 200 | skipped | 0 items, 17KB page (full template, empty) |
+| 0x60 + 0x68 raw replay | 200 | **409** | 0 items, 17KB page (same as 0x60 only) |
+
+**Key findings:**
+1. **The 0x68 raw replay now returns 409** — the captured body has expired or server state changed
+2. **The 0x60 re-encrypted capture returns 200** but the catalog is empty (no actual map updates shown)
+3. Without senddevicestatus, the catalog page is minimal (1KB). With 0x60 only, it's full (17KB) but has no content items.
+4. The 0x68 call IS required for the catalog to show content — it tells the server the device is REGISTERED (delegated)
+5. **Both the 0x60 and 0x68 captured bodies are stale** — the file list doesn't match current device state
+
+**Impact:**
+- The replay workaround is BROKEN. We must generate fresh senddevicestatus bodies.
+- The 0x60 body format is known (decrypts to readable binary). We can build it from scratch.
+- The 0x68 body requires Secret₃ which is still unknown.
+- **This is now a BLOCKER** — without a working 0x68 senddevicestatus, the catalog shows no content.
+
+**Next steps:**
+1. **Generate a fresh 0x60 body from scratch** — we know the binary format from decrypting the capture. Build it from the actual USB drive data (brand, model, SWID, file list).
+2. **For 0x68: try sending the same body as 0x60 but with 0x68 flags and Name₃ query** — maybe the server accepts the same body content regardless of the flag. The body content might be identical; only the query credential block differs.
+3. **If step 2 fails: try hu_secret as the body key with the CORRECT body content** — maybe hu_secret IS the key but our earlier test failed because the body content was wrong (stale capture vs fresh data).
+4. **If all else fails: hook the DLL debug log** to capture Secret₃ directly.
+
+---
+
+### 2026-04-17 21:30 — 0x68 returns 409 for ALL body variants, Secret₃ is the blocker
+
+**Test results (0x68 with Name₃ query, various body keys):**
+
+| Body content | Body key | Status |
+|-------------|----------|--------|
+| Stale capture (0x60 plaintext) | tb_secret | 409 |
+| Stale capture | hu_secret | 409 |
+| Stale capture | hu_code | 409 |
+| Stale capture | tb_code | 409 |
+| Random garbage (100 bytes) | tb_secret | 409 |
+| Empty body | tb_secret | 409 |
+
+**Analysis:** ALL 0x68 requests return 409 regardless of body content or key. Even empty/garbage bodies get 409. Meanwhile, 0x60 with the same stale body returns 200. This confirms:
+- The server rejects 0x68 requests at the **decryption stage** (can't decrypt → 409)
+- Secret₃ ≠ tb_secret, hu_secret, hu_code, or tb_code
+- The 0x60 stale body is still accepted (server can decrypt with tb_secret and tolerates stale content)
+- **Secret₃ is the sole blocker** — once we find it, even stale body content might work
+
+**Also confirmed:** The 0x68 raw replay from the capture now returns 409 too. The captured request used a session-specific nonce in the wire header that no longer matches.
+
+**Next steps:**
+1. **Hook the DLL debug log** — patch the log function at the `"name: %s\ncode: %lld\nsecret: %lld"` call site to write to a file. Run a minimal session flow in Wine to capture Secret₃.
+2. **Trace FUN_1019eaf0** — the session setup copies credential from `this-0x9C`. The `this` object has the constructed credential. Find where `this-0x9C` is populated.
+3. **Try running the Toolbox on actual Windows** with x64dbg, break on SnakeOil (RVA 0x1B3E10), read key_lo/key_hi from the stack.
