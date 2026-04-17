@@ -665,3 +665,31 @@ Actually: `snakeoil(raw737[35:], tb_secret)` was compared to `dec737_file` which
 1. **Run the actual Toolbox on Windows with x64dbg** — set breakpoint at RVA 0x0B4055, read ECX+0x1C and ECX+0x20 when hit. This is the most direct path to Secret₃.
 2. **Alternative: patch the DLL binary** — replace the CALL at 0x0B406C with code that writes ECX+0x1C/0x20 to a fixed memory address, then read it after the session runs.
 3. **Alternative: trace the NNGE engine** — the credential provider chain leads through FUN_100be3c0 → FUN_100bed80 (license loader) → NNGE engine. The NNGE engine might derive Secret₃ from device.nng through a path we haven't fully traced.
+
+---
+
+### 2026-04-17 22:00 — DLL hook failed (DllMain hangs), HMAC derivations exhausted
+
+**DLL hooking attempt:**
+- Patched SnakeOil (RVA 0x1B3E10) with JMP to hook function
+- LoadLibrary hangs (DllMain blocks on COM/threading init)
+- LoadLibraryEx + manual DllMain call also hangs
+- Cannot run the DLL in Wine without full Windows environment
+
+**Additional derivation attempts:**
+- 3564 HMAC-MD5/SHA1 candidates (all key/data combinations of credentials, names, Name₃) → no match
+- 96 delegation response candidates (HMAC with delegation data, MAC digest, MaxAge, response offsets) → no match
+- All wire headers use tb_code — confirmed the 0x68 request uses tb_code for query, Secret₃ for body
+
+**Wire header analysis confirmed:**
+- ALL 15 captured requests use `code = tb_code` (3745651132643726) in the wire header
+- The 0x68 query decrypts with tb_code to reveal Name₃ credential block
+- The server uses Name₃ to look up the corresponding Secret₃ for body decryption
+- Secret₃ must be known to both client and server — derived from shared data
+
+**Total approaches tried: 20+** (see eliminated approaches table + this session's additions)
+
+**Next steps:**
+1. **Run the actual Toolbox on a real Windows machine** with x64dbg. Set hardware breakpoint on RVA 0x0B4055 (PUSH [ECX+0x20] = Secret_hi). Read ECX+0x1C and ECX+0x20. This is the only reliable path left.
+2. **Alternative: capture fresh mitmproxy traffic** from the real Toolbox on Windows. The new capture will have a fresh 0x68 body. Even without knowing Secret₃, we can replay the fresh capture.
+3. **Alternative: try the NNGE engine path** — FUN_100bed80 (license loader) creates credential entries. The NNGE engine at FUN_100ea130 might process device.nng through a different code path than we traced. Re-examine with focus on the credential entry creation, not the NNGE parser.
