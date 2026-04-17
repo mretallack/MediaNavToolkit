@@ -497,3 +497,43 @@ Actually: `snakeoil(raw737[35:], tb_secret)` was compared to `dec737_file` which
 **Conclusion:** Secret₃ cannot be derived from simple byte concatenation of known credentials. The derivation involves a more complex computation (likely involving the NNGE engine, MD5, or the credential provider chain we traced earlier).
 
 **Practical decision:** The captured body replay workaround works for the catalog flow. Secret₃ remains a research item. Proceeding with task 4.3 (sync command) using the replay workaround.
+
+---
+
+### 2026-04-17 20:30 — Traced credential builder chain, found debug log format
+
+**New findings from code tracing:**
+1. `FUN_100b3a60` (protocol builder) reads credential via `(**(param_1+0x1c))[0x18]()` — credential provider vtable[6]
+2. Found debug log: `"name: %s\ncode: %lld\nsecret: %lld"` at line 152350 — confirms credential has Name/Code/Secret as separate fields
+3. `FUN_1005fb70` is the device manager credential handler — called from `FUN_1005fca9`
+4. `FUN_10062a20` iterates credential entries (stride 0x80) with sub-entries (stride 0x20)
+5. Sub-entry type 1 → `FUN_10062240` builds credential with Code/Secret
+6. `FUN_10062240` calls `FUN_10063940` which parses a **comma-delimited string** (`", "` delimiter at `DAT_102b3260`)
+7. The credential data (Name/Code/Secret) is stored as a text string, not binary
+
+**Exhaustive offset scan:**
+- Tried all 4 known keys (tb_secret, tb_code, hu_code, hu_secret) at all body offsets 16-39 → no match
+- Secret₃ is confirmed to be a DIFFERENT value from all known credentials
+
+**What we now know about the credential chain:**
+```
+.lyc files / reg.sav
+    → credential provider (FUN_100be3c0)
+        → credential entries (0x80-byte structs at +0x58)
+            → sub-entries (0x20-byte structs at entry+0x1C)
+                → type 1: FUN_10062240 → parses comma-delimited string → Name/Code/Secret
+                → type 2/4: FUN_100623f0 → license credentials
+```
+
+**The credential string format:** `"field1, field2, field3, ..."` split by `", "` (comma-space)
+- The string is at `sub_entry + 0x10 + 8`
+- Fields are parsed by `FUN_10063940`
+- For type 1 entries: fields include Name, Code, Secret
+
+**Key question:** Where does the credential string for the 0x08 flag come from? It's NOT from reg.sav (which only has tb and hu credentials). It must be constructed during the delegator response processing or session setup.
+
+**Untried approaches:**
+1. **Hook the debug log** — the `"name: %s\ncode: %lld\nsecret: %lld"` format string is used to log the credential. If we can capture this log output, we get Secret₃ directly.
+2. **Trace FUN_1019eaf0** — this is the session setup function that copies the credential from `this-0x9C`. The `this` object is the credential source for the 0x08 session.
+3. **Check if the 0x68 body can be avoided** — test if the web catalog works with only the 0x60 senddevicestatus call (skip 0x68 entirely).
+4. **Run the actual Toolbox on Windows** with a debugger, break on the debug log format string, read the credential values.
