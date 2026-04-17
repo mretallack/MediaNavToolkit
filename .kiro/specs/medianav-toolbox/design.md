@@ -2,21 +2,35 @@
 
 > **Reverse engineering reference:** See [toolbox.md](toolbox.md) for protocol details, encryption keys, and data source locations.
 > **Function reference:** See [functions.md](functions.md) for annotated Ghidra function map.
+> **NNGE research:** See [reverse_engineer_nnge.md](reverse_engineer_nnge.md) for .lyc RSA decryption and credential analysis.
 
 ---
 
-## 1. Library Architecture
+## 1. Goal
 
-Existing modules (✓) and planned modules (○):
+A CLI tool that replaces the Windows-only Dacia MediaNav Evolution Toolbox. The workflow:
+
+1. User inserts USB in head unit → head unit writes sync data (device.nng, fingerprints, save files)
+2. User plugs USB into PC → CLI reads sync data, registers device, authenticates
+3. CLI shows available map/content updates with sizes
+4. User selects updates → CLI downloads content files
+5. CLI writes content + licenses + checksums to USB in the correct layout
+6. User inserts USB back in head unit → synctool processes the update
+
+**Out of scope:** Map purchase (handled by NaviExtras web store in browser). We handle everything else.
+
+---
+
+## 2. Library Architecture
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                      CLI ✓ (cli.py)                          │
-│  detect │ register │ catalog │ download │ install │ sync     │
+│                      CLI (cli.py)                            │
+│  detect │ register │ login │ catalog │ updates │ sync        │
 └──────────────────────┬───────────────────────────────────────┘
                        │
 ┌──────────────────────┴───────────────────────────────────────┐
-│              medianav_toolbox (public API) ✓ (__init__.py)    │
+│              medianav_toolbox (public API) (__init__.py)      │
 │                                                              │
 │  Toolbox(usb_path)                                           │
 │    .detect_device() → DeviceInfo                             │
@@ -32,236 +46,237 @@ Existing modules (✓) and planned modules (○):
 ┌──────────────────────┴───────────────────────────────────────┐
 │                    Internal Modules                           │
 │                                                              │
-│  ┌─────────────┐ ┌──────────────┐ ┌────────────────────────┐│
-│  │ device.py ✓ │ │ protocol.py ○│ │ api/ ✓                 ││
-│  │ device.nng  │ │ SnakeOil     │ │  client.py ✓           ││
-│  │ brand.txt   │ │ Envelope     │ │  boot.py ✓ (needs redo)││
-│  │ APPCID      │ │              │ │  register.py ✓ (stubs) ││
-│  │ XOR decode  │ │ crypto.py ○  │ │  market.py ✓ (stubs)   ││
-│  └─────────────┘ │ SnakeOil     │ │  catalog.py ✓ (stubs)  ││
-│  ┌─────────────┐ │ Blowfish     │ │  igo_binary.py ✓       ││
-│  │ config.py ✓ │ │ NNGE / MD5   │ └────────────────────────┘│
-│  │ models.py ✓ │ └──────────────┘ ┌────────────────────────┐│
-│  │ auth.py ✓   │ ┌──────────────┐ │ installer.py ✓ (stub)  ││
-│  └─────────────┘ │ download.py ✓│ │ USB layout             ││
-│  ┌─────────────┐ │ (stub)       │ │ .lyc/.stm/.md5         ││
-│  │fingerprint  │ │ Cache        │ └────────────────────────┘│
-│  │  .py ✓      │ │ Resume       │                           │
-│  │ Read/build  │ │ MD5 verify   │                           │
-│  └─────────────┘ └──────────────┘                           │
+│  device.py ✓        protocol.py ✓       api/ ✓               │
+│  - device.nng       - SnakeOil          - client.py          │
+│  - brand.txt        - Envelope          - boot.py            │
+│  - APPCID           - RANDOM/DEVICE     - register.py        │
+│  - XOR decode                           - market.py          │
+│                     crypto.py ✓         - catalog.py         │
+│  config.py ✓        - SnakeOil          - igo_binary.py      │
+│  models.py ✓        - Blowfish                               │
+│  auth.py ✓                              installer.py ✓       │
+│  fingerprint.py ✓   wire_codec.py ✓     - USB layout         │
+│  swid.py ✓          igo_parser.py ✓     - .lyc/.stm/.md5     │
+│  session.py ✓       igo_serializer.py ✓                      │
+│  catalog.py ✓       download.py ✓                            │
+│  content.py ✓                                                │
 └──────────────────────────────────────────────────────────────┘
 ```
 
-**Status**: `protocol.py` and `crypto.py` are implemented and tested. Query and body are encrypted as separate SnakeOil streams (DEVICE mode: Code for query, Secret for body). The `api/` modules have working boot (v2 JSON + v3 wire), device registration (wire protocol returning DeviceCredentials), and market login (wire protocol). Request bodies use a simple length-prefixed format (`wire_codec.py`), verified byte-for-byte against captured traffic.
-
-**CRITICAL**: Wire protocol requests must NOT include a `Content-Type` HTTP header — the server returns HTTP 500 if it's present. Only `User-Agent` (format: `DaciaAutomotive-Toolbox-{version}`) is required. Header byte 15 is a random per-session nonce, not a fixed value.
-
-**End-to-end session flow** (`session.py`): boot → register (cached creds from `.medianav_creds.json`) → login → sendfingerprint → getprocess. Login and getprocess confirmed working against live API. Market calls go to `https://dacia-ulc.naviextras.com/rest/1/` (brand-specific URL), not the index URL from boot. Credentials (Code/Secret) are permanent and stored in `service_register_v1.sav` by the Windows Toolbox.
+**All modules implemented and tested.** 204 unit tests passing.
 
 ---
 
-## 2. Protocol Layer (`protocol.py`)
+## 3. Encryption — Fully Reversed
 
-### Envelope
+### SnakeOil (wire protocol)
 
-```python
-@dataclass
-class ProtocolEnvelope:
-    version: int = 1                    # always 1
-    auth_mode: int = 0x20               # 0x20=unauthenticated, 0x30=authenticated
-    snakeoil_key: int = 0               # 8-byte key (random or Credentials.Code)
-    service_minor: int = 0              # 1=index, 14=register, 25=market
+xorshift128 PRNG stream cipher. Symmetric XOR. Reversed from `FUN_101b3e10`.
 
-    def serialize_request_header(self) -> bytes:
-        """Build the 16-byte request header."""
-        return struct.pack('>BBBBx Q B HB',
-            self.version,               # 0x01
-            0xC2, 0xC2,                 # envelope marker
-            self.auth_mode,             # 0x20 or 0x30
-            self.snakeoil_key,          # 8-byte key (Code for DEVICE, random for RANDOM)
-            self.service_minor,         # service version
-            0x0000,                     # padding
-            0x3F                        # end marker
-        )
+**Key management:**
+- RANDOM mode: random seed for both query and body (separate PRNG streams)
+- DEVICE mode: Code for query, **Secret for body** (both request and response)
+- **All wire protocol bodies use tb_secret** (`3037636188661496`) as the SnakeOil key
+- There is NO separate "Secret₃" — the 0x08 flag flows use the same tb_secret
 
-    @staticmethod
-    def parse_response_header(data: bytes) -> tuple[int, bytes]:
-        """Parse 4-byte response header. Returns (mode_byte, encrypted_payload)."""
-        assert data[0] == 0x01 and data[1] == 0x00 and data[2] == 0xC2
-        return data[3], data[4:]
-```
+### RSA + XOR-CBC (.lyc license files)
 
-### SnakeOil Cipher (FULLY REVERSED)
+.lyc format: `[8B header][256B RSA block][XOR-CBC encrypted data]`
+- RSA: 2048-bit, e=65537, public key embedded in DLL at RVA 0x30B588
+- RSA payload: 40-byte credential header (magic `0x36c8b267`)
+- Fields[1..4] of RSA payload = XOR-CBC key for remaining blocks
+- Decrypted data contains license keys and product names
 
-```python
-class SnakeOil:
-    """xorshift128 PRNG stream cipher.
+### Blowfish ECB (http_dump local storage)
 
-    Reversed from FUN_101b3e10 in nngine.dll.
-    Symmetric: encrypt and decrypt are the same XOR operation.
+Key: `b0caba3df8a23194f2a22f59cd0b39ab` (DLL RVA 0x2AF9E8). Used only for local XML cache files, not wire protocol.
 
-    Key management (split query/body encryption):
-    - RANDOM mode: query and body both use random seed, but as SEPARATE SnakeOil streams
-    - DEVICE mode: query seed = Code, body seed = Secret (response also uses Secret)
-    """
-    M = 0xFFFFFFFF
+### Credential Block XOR
 
-    def __init__(self, seed: int):
-        """seed: uint64 PRNG seed (the Secret for DEVICE mode, or the random key for RANDOM)."""
-        self.key_lo = seed & self.M
-        self.key_hi = (seed >> 32) & self.M
+`credential_block = 0xD8 || (Name XOR 6935b733a33d02588bb55424260a2fb5)`
 
-    def process(self, data: bytes) -> bytes:
-        """Encrypt or decrypt (symmetric XOR)."""
-        M = self.M
-        result = bytearray(len(data))
-        eax, esi = self.key_lo, self.key_hi
-        for i in range(len(data)):
-            edx = (((esi << 21) | (eax >> 11)) ^ esi) & M
-            ecx = (((eax << 21) & M) ^ eax) & M
-            ecx = (ecx ^ (edx >> 3)) & M
-            esi = ((((edx << 4) | (ecx >> 28)) & M) ^ edx) & M
-            eax = (((ecx << 4) & M) ^ ecx) & M
-            result[i] = data[i] ^ (((esi << 32) | eax) >> 23) & 0xFF
-        return bytes(result)
-```
+### NNGE (device.nng)
 
-### igo-binary Serialization
-
-| Tag | Type | Encoding |
-|-----|------|----------|
-| 0x01 | int32 | `<Bi` (tag + LE int32) |
-| 0x02 | byte/bool | `BB` (tag + byte) |
-| 0x03 | int16 | `<Bh` (tag + LE int16) |
-| 0x04 | int64 | `<Bq` (tag + LE int64) |
-| 0x05 | string | tag + UTF-8 bytes + 0x00 |
-| 0x80 0x00 | envelope | start of message |
+Key `m0$7j0n4(0n73n71I)` with template `ZXXXXXXXXXXXXXXXXXXZ`. The NNGE parser in the DLL fails for device.nng (seeks to wrong offset). device.nng is used only for APPCID extraction (offset 0x5C) and MD5 fingerprinting. **No credential derivation from device.nng.**
 
 ---
 
-## 3. Device Detection (`device.py`)
+## 4. Wire Protocol
 
-```python
-@dataclass
-class DeviceInfo:
-    brand: str              # from NaviSync/content/brand.txt ("dacia")
-    brand_md5: str          # MD5 of brand.txt content
-    appcid: int             # from device.nng NNGE header offset 0x5C
-    device_nng_path: Path
+### Request Format
 
-def detect_device(usb_path: Path) -> DeviceInfo:
-    brand = (usb_path / "NaviSync/content/brand.txt").read_text().strip()
-    device_nng = (usb_path / "NaviSync/license/device.nng").read_bytes()
-    appcid = struct.unpack_from('<I', device_nng, 0x5C)[0]
-    brand_md5 = hashlib.md5(brand.encode()).hexdigest()
-    return DeviceInfo(brand=brand, brand_md5=brand_md5, appcid=appcid, ...)
+```
+[16B header] [SnakeOil-encrypted query] [SnakeOil-encrypted body]
+```
+
+Header: `01 C2 C2 {auth_mode} 00 {code:8B} {service_minor} 00 00 {nonce} 3F`
+
+- `auth_mode`: 0x20 (unauthenticated) or 0x30 (authenticated)
+- `code`: 8-byte key (random for RANDOM, Credentials.Code for DEVICE)
+- `nonce`: random per-session byte
+
+**CRITICAL:** Wire protocol requests must NOT include `Content-Type` HTTP header (server returns 500).
+
+### Response Format
+
+```
+[4B header: 01 00 C2 {mode}] [SnakeOil-encrypted payload]
+```
+
+### Query Flags
+
+| Flag | Meaning |
+|------|---------|
+| 0x20 | Has credential block (17 bytes) |
+| 0x40 | Has body |
+| 0x08 | Delegated device (uses Name₃ in credential block) |
+
+- `0x60` = `0x20 | 0x40` — standard authenticated request
+- `0x68` = `0x20 | 0x40 | 0x08` — delegated device request
+- **Both use tb_secret for body encryption** (no key difference)
+
+### Name₃ Construction
+
+`Name₃ = 0xC4 || hu_code(8 bytes BE) || tb_code(7 bytes BE)`
+
+Used in the credential block for 0x08-flag requests.
+
+---
+
+## 5. API Flow
+
+### Complete Session (12 steps)
+
+```
+1. boot (RANDOM)           → service URL map
+2. register (RANDOM)       → tb credentials (Name₁/Code₁/Secret₁) — cached permanently
+3. login (DEVICE)          → session token
+4. hasActivatableService   → boolean
+5. sendfingerprint         → accepted
+6. getprocess              → task list
+7. delegator (DEVICE)      → hu credentials (Name₂/Code₂/Secret₂)
+8. senddevicestatus (0x60) → device state accepted
+9. senddevicestatus (0x68) → delegated device state accepted
+10. web_login (form POST)  → browser session cookie
+11. catalog (web)          → available content list
+12. content selection (web)→ download URLs
+```
+
+### Three Credential Sets
+
+| Set | Source | Purpose |
+|-----|--------|---------|
+| tb (Name₁/Code₁/Secret₁) | Registration response | All DEVICE mode requests |
+| hu (Name₂/Code₂/Secret₂) | Delegator response | Delegation section in requests |
+| Name₃ | Constructed from hu_code + tb_code | 0x08-flag credential blocks |
+
+### Endpoints
+
+| Endpoint | Mode | Service |
+|----------|------|---------|
+| `/services/index/rest/3/boot` | RANDOM | Boot |
+| `/services/register/rest/1/device` | RANDOM | Register |
+| `/rest/1/login` | DEVICE | Market |
+| `/services/register/rest/1/hasActivatableService` | DEVICE | Register |
+| `/rest/1/sendfingerprint` | DEVICE | Market |
+| `/rest/1/getprocess` | DEVICE | Market |
+| `/services/register/rest/1/delegator` | DEVICE | Register |
+| `/rest/1/senddevicestatus` | DEVICE | Market |
+| `/rest/1/licinfo` | DEVICE | Market |
+| `/toolbox/login` | Web POST | Browser session |
+| `/toolbox/cataloglist` | Web GET | Catalog HTML |
+| `/toolbox/managecontentinitwithhierarchy/install` | Web GET | Content tree |
+| `/rest/managecontent/supermarket/v1/updateselection` | Web POST | Content sizes |
+
+---
+
+## 6. USB Drive Structure
+
+```
+NaviSync/
+├── content/
+│   ├── brand.txt              ("dacia")
+│   ├── map/                   *.fbl + *.fbl.stm
+│   ├── poi/                   *.poi + *.poi.stm
+│   ├── speedcam/              *.spc + *.spc.stm
+│   ├── tmc/                   *.tmc + *.tmc.stm
+│   ├── lang/                  *.zip + *.zip.stm
+│   ├── voice/                 *.zip + *.zip.stm
+│   ├── global_cfg/            *.zip + *.zip.stm
+│   └── userdata/POI/          *.zip + *.zip.stm
+├── license/
+│   ├── device.nng             (268 bytes, device identity)
+│   ├── *.lyc                  (RSA-encrypted license files)
+│   ├── *.lyc.md5              (license checksums)
+│   └── *.lyc.stm              (license timestamps)
+├── save/
+│   ├── service_register_v1.sav (tb + hu credentials)
+│   ├── dlm_files_v2.sav       (download state)
+│   └── ...
+└── update_checksum.md5         (trigger file — MD5 of sorted .stm files)
+```
+
+### .stm Shadow Files
+
+Every content file has a `.stm` companion:
+```ini
+purpose = shadow
+size = 109490688
+content_id = 7341211
+header_id = 117863961
+timestamp = 1580666002
+md5 = EAC5E8CCCC4A28792251535B55A7B182
+```
+
+### Update Trigger
+
+`update_checksum.md5` in USB root. Present → synctool processes update. Content: MD5 of all `.stm` files concatenated (sorted alphabetically by path).
+
+---
+
+## 7. Content Download Flow
+
+```
+1. Session established (steps 1-10 above)
+2. web_login → browser session cookie
+3. GET /toolbox/managecontentinitwithhierarchy/install → content tree with IDs
+4. POST /rest/managecontent/supermarket/v1/updateselection → sizes
+5. User confirms selection
+6. POST /rest/managecontent/supermarket/v1/confirminstall → triggers server-side prep
+7. Wire protocol getprocess → download task list with URLs
+8. Download content files (HTTP GET with resume support)
+9. Write to USB: content files + .stm + .lyc + update_checksum.md5
+10. Verify: MD5 checksums match .stm metadata
 ```
 
 ---
 
-## 4. SWID Generation (`swid.py`)
+## 8. Validation Requirements
 
-```python
-def compute_swid() -> str:
-    """CK-XXXX-XXXX-XXXX-XXXX from PC drive serial."""
-    serial = get_drive_serial()
-    salted = f"SPEEDx{serial}CAM"
-    md5 = hashlib.md5(salted.encode()).digest()
-    return format_swid(md5)
-```
+The USB output must be byte-compatible with the original Toolbox:
 
----
-
-## 5. API Client (`api/`)
-
-### Boot (`api/boot.py`)
-
-```python
-def boot(session: Session) -> dict[str, str]:
-    """POST /services/index/rest/3/boot → service URL map
-    Uses RANDOM mode SnakeOil."""
-```
-
-### Register (`api/register.py`)
-
-```python
-@dataclass
-class Credentials:
-    name: str       # "FB86ACD6EBA8F54A93C4286CE077D06C"
-    code: int       # 3745651132643726 (goes in wire header for DEVICE mode)
-    secret: int     # 3037636188661496 (PRNG seed for DEVICE mode)
-
-def register_device(session: Session, device: DeviceInfo, swid: str) -> Credentials:
-    """POST /services/register/rest/1/device
-    Uses RANDOM mode SnakeOil.
-    Sends: BrandName, ModelName, Swid, Imei, IgoVersion, FirstUse, Appcid, UniqId
-    Returns: Credentials (Name, Code, Secret)
-    """
-```
-
-### Market Login (`api/market.py`)
-
-```python
-def login(session: Session, credentials: Credentials) -> MarketSession:
-    """POST /rest/1/login (on dacia-ulc.naviextras.com)
-    Uses DEVICE mode SnakeOil (Code in header AND as request seed, Secret for response)."""
-```
+1. **Directory structure** matches NaviSync layout exactly
+2. **.stm files** have correct format (purpose, size, content_id, header_id, timestamp, md5)
+3. **.lyc files** are copied verbatim from server (RSA-encrypted, not re-encrypted)
+4. **.lyc.md5** contains hex MD5 of the .lyc file
+5. **update_checksum.md5** is MD5 of all .stm file contents concatenated in sorted path order
+6. **Content files** have correct MD5 matching .stm metadata
+7. **No extra files** that would confuse synctool
 
 ---
 
-## 6. Crypto Utilities (`crypto.py`)
+## 9. Remaining Work
 
-```python
-# SnakeOil — fully reversed
-def snakeoil(data: bytes, seed: int) -> bytes:
-    """xorshift128 PRNG stream cipher. Symmetric encrypt/decrypt."""
-    ...
+### Must Fix
+- **SendDeviceStatus body generation** — currently uses captured body replay. Now that we know Secret₃ = tb_secret, we can generate the body properly with correct encryption.
+- **R.10 SendDeviceStatus 409** — generated body returns 409. Need to match file list exactly.
 
-# Blowfish for http_dump decryption
-BLOWFISH_KEY = bytes.fromhex('b0caba3df8a23194f2a22f59cd0b39ab')
+### Must Implement
+- **4.3 `sync` command** — select content → confirm → download → write to USB
+- Wire up download URLs from `getprocess` to `DownloadManager`
+- Wire up `installer.py` to write downloaded content to USB
 
-def decrypt_http_dump(path: Path) -> bytes:
-    cipher = Blowfish.new(BLOWFISH_KEY, Blowfish.MODE_ECB)
-    return cipher.decrypt(path.read_bytes())
-
-# NNGE decryption (device.nng) — not yet reversed
-NNGE_KEY = b'm0$7j0n4(0n73n71I)'
-NNGE_TEMPLATE = b'ZXXXXXXXXXXXXXXXXXXZ'
-```
-
----
-
-## 7. Implementation Priority
-
-### Phase 1: Offline tools (no server communication)
-1. `device.py` — parse USB drive, extract APPCID, brand
-2. `crypto.py` — SnakeOil cipher, Blowfish http_dump decryption
-3. `swid.py` — SWID computation
-4. `protocol.py` — envelope serialization, igo-binary parser
-
-### Phase 2: Server communication
-5. `api/boot.py` — service URL discovery (RANDOM mode)
-6. `api/register.py` — device registration (RANDOM mode → get Credentials)
-7. `api/market.py` — login, fingerprint, catalog (DEVICE mode)
-
-### Phase 3: Full update pipeline
-8. `download.py` — content download with resume and MD5 verify
-9. `installer.py` — write updates to USB drive (.lyc, .stm, .md5 files)
-
----
-
-## 8. Remaining Work
-
-1. ~~**igo-binary parser**~~ — **DONE**: Parser implemented for boot, register, and model list responses.
-
-2. ~~**DEVICE mode request encryption**~~ — **SOLVED**: Request seed = Code, response seed = Secret. Verified against live server.
-
-3. ~~**igo-binary request body encoder**~~ — **SOLVED**: Request bodies use the same igo-binary tagged format as responses. The body was encrypted separately from the query (DEVICE mode: query with Code, body with Secret; RANDOM mode: both with random seed, separate PRNG state). No custom bitstream serializer needed.
-
-4. **NNGE decryption** — device.nng uses key `m0$7j0n4(0n73n71I)` with template `ZXXXXXXXXXXXXXXXXXXZ`. Not yet reversed.
-
-5. ~~**SWID format_swid()**~~ — **SOLVED**: Crockford base32 encoding of first 10 bytes of MD5("SPEEDx{serial}CAM"). Implemented in `swid.py`.
-
-6. **Credential block XOR key universality** — Unknown whether `IGO_CREDENTIAL_KEY` is the same for all devices. Needs testing with a second device.
-
-7. **Content download and installation** — Download manager and USB installer are stubs.
+### Nice to Have
+- **R.4 IMEI encoding** — understand the `x51x4Dx30x30x30x30x31` format
+- **R.7 XOR key universality** — test IGO_CREDENTIAL_KEY with a second device
+- **.lyc file generation** — we can decrypt .lyc files (RSA public key known) but generating new ones requires the private key (server-side only)

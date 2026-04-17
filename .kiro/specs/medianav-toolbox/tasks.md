@@ -7,14 +7,15 @@
 The protocol has been fully reverse-engineered and verified against the live server:
 - SnakeOil cipher: **cracked** (xorshift128 PRNG stream cipher)
 - Wire format: **understood** (16-byte request header, 4-byte response header)
-- DEVICE mode keys: **solved** (Code for request encryption, Secret for response decryption)
+- DEVICE mode keys: **solved** (Code for query, Secret for body — Secret = tb_secret for ALL flows)
 - Credential block: **solved** (`0xD8 || (Name XOR IGO_CREDENTIAL_KEY)`)
 - Full login flow: **working** (boot → login → sendfingerprint → getprocess all return 200)
-- Request body encoding: **solved** (login, fingerprint, register, model list, descriptor list all verified)
-- Catalog parsing: **working** (HTML catalog, content tree, licenses, device status all parsed)
-- Content-Type: **must NOT be sent** for wire protocol requests (server returns 500)
-- Delegator: **working** — returns head unit credentials (Name/Code/Secret)
-- Catalog CLI: **working** — shows 31 map updates, 6.07 GB total (via captured body replay)
+- Request body encoding: **solved** (all endpoints verified)
+- Catalog parsing: **working** (31 map updates, 6.07 GB total)
+- Delegator: **working** — returns head unit credentials
+- **Secret₃ = tb_secret** — no separate key derivation needed (R.9 RESOLVED)
+- **.lyc decryption: solved** — RSA 2048-bit + XOR-CBC, public key extracted (R.2 RESOLVED)
+- **Remaining**: `sync` command (4.3) — download content and write to USB
 
 ---
 
@@ -178,14 +179,30 @@ RANDOM mode seed generation:
 - [x] **4.2** SendDeviceStatus + Delegator — catalog/updates working
   - `get_delegator_credentials()` in `register.py` — gets head unit Name/Code/Secret
   - Body format: same as register but header `0x1E`, serial instead of uniq_id
-  - Two senddevicestatus calls needed: flow 735 (re-encrypted) + flow 737 (raw replay)
-  - `select_content()` fixed: Content-Type `application/json` + `X-Requested-With: XMLHttpRequest`
-  - **Workaround**: senddevicestatus uses captured body replay (0x68 flag encryption unsolved)
+  - Two senddevicestatus calls needed: flow 735 (0x60) + flow 737 (0x68)
+  - **Workaround in place**: senddevicestatus uses captured body replay
+  - **Can now be fixed**: Secret₃ = tb_secret confirmed, so 0x68 bodies can be generated properly
   - Catalog shows 31 items across 31 countries, 6.07 GB total, 7.18 GB available
 
-- [ ] **4.3** Wire up `medianav-toolbox sync` command
-  - Select content, confirm, trigger download, write to USB
-  - Depends on 3.4 (content installation)
+- [ ] **4.3** Wire up `medianav-toolbox sync` command — **THE MAIN REMAINING WORK**
+  - [ ] **4.3.1** Fix senddevicestatus body generation (replace captured replay with generated body)
+    - Use tb_secret for 0x68 body encryption (Secret₃ = tb_secret confirmed)
+    - Build Name₃ credential block: `0xC4 || hu_code(8B BE) || tb_code(7B BE)`
+    - Match file list to actual USB content (read .stm files for timestamps/sizes)
+  - [ ] **4.3.2** Wire up content selection → download URL retrieval
+    - `web_login()` → `get_content_tree()` → user selects → `confirm_selection()`
+    - `getprocess` wire call → extract download task list with URLs
+  - [ ] **4.3.3** Wire up download → USB write pipeline
+    - `DownloadManager.download()` for each content file (with resume + MD5 verify)
+    - `installer.install_content()` — write content files + .stm shadow files
+    - `installer.install_license()` — write .lyc + .lyc.md5 files
+    - `installer.write_update_checksum()` — write update_checksum.md5 trigger
+  - [ ] **4.3.4** Validate USB output
+    - Verify directory structure matches NaviSync layout
+    - Verify .stm files have correct format and content
+    - Verify MD5 checksums match between .stm metadata and actual files
+    - Verify update_checksum.md5 is correct (MD5 of sorted .stm concatenation)
+    - Compare output against original Toolbox output for known content
 
 ## Known Bugs
 
@@ -198,11 +215,10 @@ RANDOM mode seed generation:
 ## Remaining Research
 
 - [x] **R.1** ~~DEVICE mode request encryption~~ — RESOLVED
-- [ ] **R.2** NNGE decryption — device.nng encryption algorithm
-  - **Now critical for R.9**: device.nng likely contains the 0x08 body encryption key (Secret₃)
-  - 268 bytes, contains "NNGE" marker at offset 0x50
-  - Parser in Ghidra: `FUN_101c0860` (line 54102)
-  - Credential data may be at specific offsets within the parsed structure
+- [x] **R.2** ~~NNGE decryption~~ — **RESOLVED**
+  - .lyc files use RSA (2048-bit, e=65537) + XOR-CBC. Public key extracted from DLL.
+  - device.nng NNGE parser fails (seeks to wrong offset). device.nng used only for APPCID + MD5 fingerprint.
+  - No credential derivation from device.nng. See [reverse_engineer_nnge.md](reverse_engineer_nnge.md).
 - [x] **R.3** ~~SWID format_swid()~~ — **RESOLVED**
 - [ ] **R.4** Imei field — understand the `x51x4Dx30x30x30x30x31` encoding
 - [x] **R.5** ~~DEVICE mode credential encoding~~ — RESOLVED
@@ -213,17 +229,15 @@ RANDOM mode seed generation:
   - Body: `[0x1E 0x00] [brand] [model] [swid] [imei] [igo_ver] [int64:0] [int32:appcid] [serial]`
   - Response: parsed with `parse_register_response()` — returns Name, Code, Secret, MaxAge=300
   - Verified: returns `C10CD1FD4A2F23F921D6E3B093D5957A` / Code=3362879562238844 / Secret=4196269328295954
-- [ ] **R.9** Query flags `0x68` encryption — **Name₃ CRACKED, Secret₃ from device.nng**
-  - `0x68` = `0x20` (cred block) | `0x40` (has body) | `0x08` (delegated device)
-  - Query is 19 bytes (not 2) — cred block contains Name₃ `C4000BF28569BACB7C000D4EA65D36B9`
-  - **Name₃ = `0xC4` + hu_code(8B BE) + tb_code(7B BE)** — derivation CRACKED
-  - 0x28 and 0x68 use DIFFERENT encryption keys (confirmed by XOR analysis across all flows)
-  - All 0x08 bodies share the same 4-byte plaintext prefix regardless of endpoint
-  - Assembly at RVA 0x0B4143/0x0B4158 confirms: body key = credential Secret at `+0x1C/+0x20`
-  - The key is NOT hu_secret (from delegator) — exhaustively tested
-  - **Lead**: credential data at HU descriptor `+0x84` likely comes from `device.nng` (268B binary)
-  - **Next**: parse device.nng via Ghidra FUN_101c0860 to extract the Secret
-- [ ] **R.10** SendDeviceStatus body validation — our generated body returns 409 even with correct format
-  - Device info section matches captured byte-for-byte
-  - File entries differ (7 files vs ~11 in captured, different timestamps)
-  - Server may validate file list against known device state or require specific files
+- [x] **R.9** ~~Query flags `0x68` encryption~~ — **RESOLVED: Secret₃ = tb_secret**
+  - All wire protocol bodies use tb_secret (`3037636188661496`) as the SnakeOil key
+  - There is NO separate Secret₃ derived from device.nng
+  - Verified by decrypting all 5 senddevicestatus flows (735, 737, 741, 754, 792) with tb_secret
+  - Name₃ = `0xC4` + hu_code(8B BE) + tb_code(7B BE) — used in 0x08-flag credential blocks
+  - The 0x60 vs 0x68 flag difference is message type (delegation), not encryption mode
+- [ ] **R.10** SendDeviceStatus body generation — **UNBLOCKED by R.9 resolution**
+  - Now that Secret₃ = tb_secret is confirmed, we can generate 0x68 bodies properly
+  - Current workaround: captured body replay. Need to replace with generated body.
+  - Generated body returns 409 — likely file list mismatch with server expectations
+  - Need to match file entries exactly (count, timestamps, paths) against device state
+  - The `0xD8` header in senddevicestatus body is a presence bitmask, NOT a credential block
