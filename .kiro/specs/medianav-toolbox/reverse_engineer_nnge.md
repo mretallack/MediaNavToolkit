@@ -693,3 +693,35 @@ Actually: `snakeoil(raw737[35:], tb_secret)` was compared to `dec737_file` which
 1. **Run the actual Toolbox on a real Windows machine** with x64dbg. Set hardware breakpoint on RVA 0x0B4055 (PUSH [ECX+0x20] = Secret_hi). Read ECX+0x1C and ECX+0x20. This is the only reliable path left.
 2. **Alternative: capture fresh mitmproxy traffic** from the real Toolbox on Windows. The new capture will have a fresh 0x68 body. Even without knowing Secret₃, we can replay the fresh capture.
 3. **Alternative: try the NNGE engine path** — FUN_100bed80 (license loader) creates credential entries. The NNGE engine at FUN_100ea130 might process device.nng through a different code path than we traced. Re-examine with focus on the credential entry creation, not the NNGE parser.
+
+---
+
+### 2026-04-17 22:15 — Traced credential entry creation, confirmed Name₃ not in any file
+
+**FUN_100bed80 trace (license loader):**
+1. Iterates `.lic` and `.lyc` files
+2. For each file: `FUN_10101ab0` parses the file, `FUN_100ea6f0` creates a 0x70-byte credential entry, `FUN_10101e80` processes it
+3. `FUN_10101e80` reads RSA payload: magic `0x36c8b267` (LE), then XOR-CBC key (16B), then credential data
+4. The .lyc files contain LICENSE data (license keys like `CP-3IE3-EEMQ`), NOT Code/Secret values
+5. The credential Code/Secret come from `reg.sav` / `service_register_v1.sav`, not from .lyc files
+
+**File analysis:**
+- `reg.sav`: Contains URL, device info (brand, model, SWID, IMEI, iGO version, APPCID, serial), then ONE credential entry (hu_name + hu_code + hu_secret + MaxAge=300). Format: `[0x80] [0xE0 field_mask] [name(16B)] [code(8B BE)] [secret(8B BE)] [maxage(4B)] [flags]`
+- `service_register_v1.sav`: Contains TWO credential entries (hu and tb) plus three license SWIDs. No third credential.
+- **Name₃ is NOT in any file** — confirmed by searching both reg.sav and service_register_v1.sav
+
+**Credential object layout (from assembly at RVA 0x0B4055):**
+```
++0x04: Name (16 bytes)
++0x10: Code_lo (uint32)  ← PUSH [ecx+16]
++0x14: Code_hi (uint32)  ← PUSH [ecx+20]
++0x18: ??? (4 bytes gap)
++0x1C: Secret_lo (uint32) ← PUSH [ecx+28]
++0x20: Secret_hi (uint32) ← PUSH [ecx+32]
+```
+
+**Conclusion:** The 0x08 credential (Name₃/Code₃/Secret₃) is constructed at runtime from the hu and tb credentials. It is NOT stored in any file and NOT returned by any server response. The construction algorithm is in the DLL code — likely in the session setup path between the delegator response handler and the protocol builder.
+
+**Next steps:**
+1. **Run the actual Toolbox on Windows with x64dbg** — breakpoint at RVA 0x0B4055, read ECX+0x1C and ECX+0x20 when the 0x08 credential is used. This is the most direct and reliable path.
+2. **Capture fresh mitmproxy traffic** — even without knowing Secret₃, a fresh capture provides a working 0x68 body for replay.
