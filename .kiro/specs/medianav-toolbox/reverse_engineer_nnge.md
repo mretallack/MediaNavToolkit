@@ -484,3 +484,16 @@ Actually: `snakeoil(raw737[35:], tb_secret)` was compared to `dec737_file` which
 2. The construction likely involves the delegator response data or the HMAC computation
 3. Need to trace the code path from delegator response → credential object construction → Secret₃
 4. Alternative: try running the full Toolbox on Windows with a debugger, break on SnakeOil, read the key
+
+---
+
+### 2026-04-17 20:15 — Exhaustive byte combination search negative
+
+**What we tried:**
+1. All 4+4 byte splits of hu_secret and tb_secret (BE and LE) as Secret₃ → 4 candidates produce D8 first byte but none contain "Dacia"
+2. All 4+4 byte splits with variable start offsets → same result
+3. The D8 matches are coincidental (1/256 probability)
+
+**Conclusion:** Secret₃ cannot be derived from simple byte concatenation of known credentials. The derivation involves a more complex computation (likely involving the NNGE engine, MD5, or the credential provider chain we traced earlier).
+
+**Practical decision:** The captured body replay workaround works for the catalog flow. Secret₃ remains a research item. Proceeding with task 4.3 (sync command) using the replay workaround.
