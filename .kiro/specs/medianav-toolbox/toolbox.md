@@ -1,5 +1,7 @@
 # Dacia MediaNav Evolution Toolbox — Reverse Engineering Notes
 
+> NNGE Algorithm: [reverse_engineer_nnge.md](reverse_engineer_nnge.md) — Secret₃ derivation from device.nng
+
 ## Data Sources
 
 | Source | Location | Description |
