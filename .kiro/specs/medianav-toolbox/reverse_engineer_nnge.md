@@ -537,3 +537,47 @@ Actually: `snakeoil(raw737[35:], tb_secret)` was compared to `dec737_file` which
 2. **Trace FUN_1019eaf0** — this is the session setup function that copies the credential from `this-0x9C`. The `this` object is the credential source for the 0x08 session.
 3. **Check if the 0x68 body can be avoided** — test if the web catalog works with only the 0x60 senddevicestatus call (skip 0x68 entirely).
 4. **Run the actual Toolbox on Windows** with a debugger, break on the debug log format string, read the credential values.
+
+---
+
+### 2026-04-17 20:06 — SESSION SUMMARY: Secret₃ still unknown after exhaustive search
+
+**Result:** Secret₃ (the SnakeOil body encryption key for 0x08-flag / 0x68 requests) remains unknown. It is NOT any of the 4 known credential values, NOT in the DLL's static data, and NOT a simple derivation from known values.
+
+**What IS confirmed:**
+- 0x60 body: encrypted with tb_secret at offset 18 (2-byte query). Decrypts to readable binary with "DaciaAutomotive" brand string. ✓
+- 0x68 query: encrypted with tb_code at offset 16 (19-byte query with Name₃ credential block). ✓
+- 0x68 body: encrypted with Secret₃ at offset 35. Does NOT decrypt with any known key. ✗
+- Name₃ = `0xC4 || hu_code(8B BE) || tb_code(7B BE)` — construction confirmed. ✓
+- The credential chain: `.lyc`/`reg.sav` → credential provider → comma-delimited string → parsed into Name/Code/Secret
+- Debug log format `"name: %s\ncode: %lld\nsecret: %lld"` exists in the DLL at line 152350
+
+**What was tried and eliminated:**
+
+| # | Approach | Result |
+|---|----------|--------|
+| 1 | Raw device.nng 8-byte windows as key | No match |
+| 2 | XOR-decoded device.nng windows | No match |
+| 3 | MD5/SHA1 of device.nng sections | No match |
+| 4 | SnakeOil(nng_section, known_key) | No match |
+| 5 | All known credential value combinations | No match |
+| 6 | DLL .rdata/.data section scan (~123K values) | No match |
+| 7 | Wine DLL full init attempts | All hang |
+| 8 | Brute-force field3 + 16-bit hi | No match |
+| 9 | SnakeOil-decrypt device.nng with NNGE key | No match |
+| 10 | Blowfish on device.nng | No match |
+| 11 | RSA-decrypt device.nng | Not RSA format |
+| 12 | .lyc decrypted data as key source | No match |
+| 13 | MAC digest (HMAC_MD5) as key | No match |
+| 14 | All 4+4 byte splits of hu_secret/tb_secret (BE/LE) | No match |
+| 15 | All body offsets 16-39 with all 4 known keys | No match |
+| 16 | Known value pairs (529 combos incl XOR/ADD) | No match |
+| 17 | Name₃ bytes as key | No match |
+
+**Current workaround:** Raw replay of captured 0x68 body. Works for catalog flow.
+
+**Next steps (in priority order):**
+1. **Test if 0x68 can be skipped entirely** — send only the 0x60 senddevicestatus, skip the 0x68 call. If the web catalog still works, Secret₃ is irrelevant for the sync command. This is the fastest path forward.
+2. **Hook the DLL debug log** — the format string `"name: %s\ncode: %lld\nsecret: %lld"` at line 152350 logs the credential. Capture this output by patching the DLL's log function to write to a file, then run a minimal session flow.
+3. **Trace FUN_1019eaf0** — the session setup copies credential from `this-0x9C`. Find where `this-0x9C` is populated with the constructed credential (Name₃/Code₃/Secret₃).
+4. **Run actual Toolbox on Windows with debugger** — break on SnakeOil (RVA 0x1B3E10), read key_lo and key_hi from the stack when the 0x68 body is encrypted.
