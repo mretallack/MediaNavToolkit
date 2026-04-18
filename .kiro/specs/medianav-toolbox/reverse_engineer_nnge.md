@@ -1603,3 +1603,69 @@ This works because:
 **Impact on task 4.3.1:** Cannot generate 0x68 bodies from scratch until Secret₃ is found.
 However, the 0x60 body CAN be generated (tb_secret at offset 18). The 0x68 call may not
 be strictly required — need to test if the server accepts just the 0x60 call.
+
+
+---
+
+### 2026-04-18 13:30 — Packet structure clarified, body key still unknown
+
+**CONFIRMED packet structure for all flag types:**
+
+| Flags | Offset 16-17 | Offset 18-34 | Offset 35+ |
+|-------|-------------|-------------|-----------|
+| 0x20 | 2B query (tb_code) | 17B cred block (tb_code) | body (tb_secret) |
+| 0x60 | 2B query (tb_code) | — (no cred block) | body at offset 18 (tb_secret) |
+| 0x68 | 2B query (tb_code) | 17B cred block (tb_code) | body (UNKNOWN key) |
+| 0x28 | 2B query (tb_code) | 17B cred block (???) | body (UNKNOWN key) |
+
+**Evidence:**
+- 0x20 flow 053: cred block decrypts with tb_code → marker 0xD4 ✓, body@35 with tb_secret → "N/A" ✓
+- 0x60 flow 735: no cred block, body@18 with tb_secret → "DaciaAutomotive" ✓
+- 0x68 flow 737: cred block decrypts with tb_code → marker 0xD4 ✓, body@35 with tb_secret → garbage ✗
+- ALL 0x68 flows (737, 742, 754, 792, 800) have IDENTICAL ciphertext at offset 18-34 (same cred block, same key)
+- XOR of 0x68 senddevicestatus and sendfingerprint at offset 35: first 4 bytes = 00000000 (same body prefix, same key)
+
+**Brute-force attempts (all negative):**
+- All 4 known keys (tb_secret, tb_code, hu_code, hu_secret) as body key at offset 35
+- All pairwise XOR, ADD, SUB, MUL of the 4 known 64-bit values
+- All byte-swapped, half-swapped, bitwise-NOT variants
+- Fix key_hi from known 32-bit halves, brute-force key_lo (2^32 each, 22 candidates)
+- Fix key_lo from known 32-bit halves, brute-force key_hi (2^32 each, 22 candidates)
+- Credential block bytes as key
+- Credential name (XOR-decoded) bytes as key
+- Total: ~44 × 2^32 = ~1.9 × 10^11 candidates checked
+
+**The body key for 0x68 flows does NOT share any 32-bit half with any known credential value.**
+
+**Next: Execute nngine.dll in Wine/QEMU Docker container with SnakeOil function hook to capture the actual key at runtime.**
+
+
+---
+
+### 2026-04-18 14:00 — Wine SnakeOil parameter order FIXED, full brute-force running
+
+**DISCOVERY: SnakeOil parameter order is (src, len, dst, key_lo, key_hi) — NOT (dst, len, src, key_lo, key_hi)!**
+
+The first and third parameters are SWAPPED compared to what Ghidra showed. Verified by:
+1. Calling with known tb_secret key and zeros → got correct keystream `BC755FBC32341970`
+2. The `sub [ebp+08], edi` instruction computes `src_adjusted = src - dst` for the XOR loop
+
+**Packet structure confirmed (from ciphertext analysis):**
+- 0x68 flows: cred block at 18-34 encrypted with tb_code (marker 0xD4 ✓)
+- 0x68 flows: body at 35+ encrypted with UNKNOWN key
+- ALL 0x68 flows have identical ct at 18-34 (same cred block)
+- XOR of 0x68 senddevicestatus and sendfingerprint at offset 35: first 4 bytes = 00000000
+  → same body prefix, same key, different body content
+
+**Full brute-force running (PID 799226):**
+- Two threads: one assuming pt starts with D8021F40, one assuming 00000000
+- Searching all 2^64 keys (2^32 key_hi × 2^32 key_lo per thread)
+- Rate: ~2^24 key_hi values per 5 minutes per thread
+- ETA: ~21 hours per thread
+- Result file: /tmp/crack_result.txt
+- Progress: /tmp/crack_progress.txt
+
+**Brute-force attempts so far (all negative):**
+- All 8-byte windows from sav, reg.sav, device.nng files (via Wine DLL)
+- All pairwise XOR/ADD/SUB/MUL/mix of 4 known credential values
+- Fix key_hi or key_lo from known 32-bit halves, brute-force other half (22 × 2^32)
