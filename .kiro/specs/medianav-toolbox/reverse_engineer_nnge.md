@@ -855,3 +855,39 @@ Actually: `snakeoil(raw737[35:], tb_secret)` was compared to `dec737_file` which
 1. Continue monitoring brute-force
 2. Try alternative plaintext first bytes if D8 search fails
 3. Consider: the 0x68 body might use a completely different binary format than 0x60
+
+---
+
+### 2026-04-18 05:35 — CORRECTION: Brand at offset 26, brute-force running 7 hours
+
+**Supersedes entries at 22:45 and 23:00** — those had wrong brand offsets.
+
+**Correct XOR analysis (all 3 flows: 737, 754, 792):**
+- Bytes constant across ALL 3 flows: 0-3, 5-6, 25+
+- Bytes variable: 4, 7-24 (21 bytes of variable data)
+- Brand "DaciaAutomotive" starts at offset **26**, strlen=0x0F at offset **25**
+
+**Correct PRNG target (used in running brute-force):**
+- PRNG[0] = 0xE9 (assuming plaintext[0] = 0xD8)
+- PRNG[25:41] = `4E B8 5C 13 11 72 FC 7A CB E2 3E BA B8 81 01 CB`
+
+**0x68 body structure (final):**
+```
+[0-3]   Header (4 bytes, constant across all flows)
+[4]     Variable (counter/size — differs between all flow pairs)
+[5-6]   Constant (2 bytes)
+[7-24]  Variable (18 bytes — Delegation data: timestamps + MAC?)
+[25]    0x0F = strlen("DaciaAutomotive")
+[26-40] "DaciaAutomotive" (brand)
+[41+]   Model, SWID, etc. (same structure as 0x60 body from offset 20+)
+```
+
+**Brute-force status:** PID 757030 running since 22:38 (7 hours). 2 threads, searching hi=0x000A0000-0x000F0000 (327K values). At ~4 hi/sec = ~100K done (~30%). No result yet. Estimated completion: ~14 more hours.
+
+**Risk:** If plaintext[0] ≠ 0xD8, the PRNG[0]=0xE9 filter rejects the correct key. Would need to restart with different first-byte assumptions.
+
+**Next steps:**
+1. Let brute-force continue running
+2. If no result by completion: try plaintext[0] = 0xD9, 0xDC, 0xF8 (different presence bitmasks)
+3. If still no result: expand hi range to 0x00000000-0x00200000
+4. Alternative: capture fresh mitmproxy traffic on Windows (bypasses Secret₃ entirely)
