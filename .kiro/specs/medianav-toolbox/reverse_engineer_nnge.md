@@ -1999,3 +1999,60 @@ Each call creates a fresh 0x58-byte credential with a fresh timestamp from `FUN_
 2. Reverse-engineer the bit-level encoding from the known field values
 
 **Next step:** Set up the global serializer registry in Wine and call `FUN_101a9930` on the credential object to capture the serialized output.
+
+
+---
+
+### 2026-04-18 20:45 — Assembly decoded: serializer call and HMAC arguments confirmed
+
+**Disassembly of FUN_101aa050 around the serializer + HMAC calls:**
+
+```asm
+; Set up serializer output buffer at [ebp-0x40]
+lea  eax, [ebp-0x40]       ; output buffer address
+lea  ecx, [ebx+8]          ; ECX = credential + 8 = vtable2 (thiscall)
+push eax                    ; push output buffer
+mov  [ebp-0x40], 0          ; data_ptr = 0
+mov  [ebp-0x3C], 0          ; ??? = 0
+mov  [ebp-0x38], 0          ; data_len = 0
+mov  [ebp-0x34], 0          ; ??? = 0
+mov  word [ebp-0x30], 0x101 ; version = 0x101
+mov  byte [ebp-0x2E], 0     ; ??? = 0
+call FUN_101a9930            ; serialize credential via vtable2
+
+; Build HMAC key (hu_secret in big-endian, 8 bytes at [ebp-0x2C])
+mov  edx, [ebp-0x20]        ; hu_secret_lo
+mov  eax, esi               ; hu_secret_hi
+; ... byte-by-byte reordering into [ebp-0x2C]..[ebp-0x25] ...
+
+; Call HMAC-MD5
+push [ebp-0x38]              ; data_len (serializer output length)
+push [ebp-0x40]              ; data_ptr (serializer output pointer)
+push 8                       ; key_len
+push &[ebp-0x2C]             ; key_ptr (hu_secret BE)
+push &[ebp-0x18]             ; output_ptr (16-byte HMAC result)
+call FUN_101aa3a0             ; HMAC-MD5(output, key, key_len, data, data_len)
+```
+
+**Key finding:** The serializer is called as `thiscall` with `ECX = credential + 8` (vtable2 interface). The output buffer at `[ebp-0x40]` receives a pointer to dynamically allocated serialized data, and `[ebp-0x38]` receives the length.
+
+**The HMAC input is the igo-binary serialized credential via vtable2.** To reproduce the prefix, we need to:
+1. Serialize the credential object using the igo-binary format
+2. Compute HMAC-MD5(key=hu_secret_BE, data=serialized_credential)
+3. The result is the 16-byte credential name
+
+**The 17-byte prefix is: `[0x86 presence] [16B HMAC-MD5 name]`**
+
+Wait — that can't be right. The HMAC name goes into the QUERY (Name₃), not the prefix. And the query Name₃ is constant (`ad35bcc1...`) while the prefix changes per request.
+
+**CORRECTION:** `FUN_101aa050` is called PER REQUEST. Each call creates a NEW credential with a fresh timestamp. The HMAC name changes because the timestamp changes. The QUERY uses the SESSION-level credential name (from the delegator response), while the PREFIX contains the PER-REQUEST credential name.
+
+**So the 17-byte prefix IS: `[0x86] [16B per-request HMAC-MD5 name]`**
+
+To reproduce it, we need to:
+1. Build a credential object with current timestamp
+2. Serialize it via igo-binary (vtable2)
+3. HMAC-MD5(key=hu_secret_BE, data=serialized)
+4. Prefix = `0x86` + HMAC result
+
+**Next step:** Emulate the serializer via Unicorn to capture the exact serialized bytes for a credential with known field values. Then we can reproduce the serialization in Python.
