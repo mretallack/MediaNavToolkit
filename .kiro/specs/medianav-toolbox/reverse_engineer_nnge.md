@@ -1840,3 +1840,130 @@ After content confirmation, DOWNLOAD tasks should appear with CDN URLs.
 **Resolution**: Sync the USB drive from the car head unit, then re-run the tool. The full pipeline (select → confirm → getprocess → download → install) should work once the server recognizes the device state.
 
 **No mitmproxy needed**: We can call getprocess directly via the wire protocol (encryption solved). No certificate pinning issue since we're making the calls ourselves, not proxying the native engine.
+
+
+---
+
+### 2026-04-18 18:30 — Delegation prefix is the remaining blocker (not encryption, not USB sync)
+
+**Status:** Encryption fully solved. Body format fully solved. The blocker is a 17-byte **delegation prefix** in 0x68 requests that we cannot yet generate.
+
+**The 0x68 wire layout (confirmed):**
+```
+[16B header] [25B query, SnakeOil(tb_code)] [17B prefix, SnakeOil(tb_secret)] [body, SnakeOil(tb_secret)]
+```
+
+**What the delegation prefix looks like (decrypted):**
+| Flow | Prefix (hex) |
+|------|-------------|
+| 737 | `86 a2 18 8d b8 54 42 8f 9c 52 c5 19 2d 16 44 f0 0b` |
+| 742 | `86 a5 55 09 d9 17 6e d0 dc 8b a0 f3 60 ba 6a b3 16` |
+| 754 | `86 a2 ce 20 09 47 2b ef 8b 9c 5f a9 8b 5a e9 e0 0e` |
+| 792 | `86 7a cf 51 fb 91 9c bb 4c 96 3a 74 de ca cc 39 65` |
+| 800 | `86 7a cf 51 fb 91 9c bb 4c 96 3a 74 de ca cc 39 65` |
+
+**Observations:**
+- Byte 0 is always `0x86` (presence bitmask)
+- Bytes 1-16 change per request, but flows sent at the same time share the same prefix (792 = 800)
+- This suggests a timestamp or counter component
+- The prefix is NOT the delegator Name₂, Code₂, or Secret₂ (no match)
+- XOR with Name₂ shows no constant pattern
+
+**What we proved:**
+- Re-encrypting the captured 0x60 body → HTTP 200 (encryption correct, body content accepted)
+- Re-encrypting the captured 0x68 body → HTTP 409 (encryption correct, but prefix is stale)
+- The 409 is caused by the prefix, not the body content (the body is identical format to 0x60)
+
+**What we need to reverse-engineer:**
+- How `FUN_101aa050` builds the 17-byte prefix from the delegator response + session state
+- The prefix is likely: `[0x86] [timestamp/counter] [hash or token derived from delegation credentials]`
+- The DLL creates this when processing the delegator response, before any senddevicestatus call
+
+**Next step:** Trace `FUN_101aa050` in Ghidra/Unicorn to find the exact prefix construction logic. Focus on what happens to the delegator response (Name₂, Code₂, Secret₂) between the delegation call and the first 0x68 request.
+
+
+---
+
+### 2026-04-18 19:15 — Delegation prefix analysis from annotated Ghidra code
+
+**Key findings from `nngine_decompiled.c.backup`:**
+
+1. **Protocol builder (`FUN_100b3a60`) makes exactly 2 SnakeOil calls** — one for query, one for body. Both use the SAME key from `piVar11[0x10]`. Yet wire traffic shows query uses tb_code and body uses tb_secret. This contradiction is unresolved — the credential provider may return different objects for different call contexts.
+
+2. **The body IS split-encrypted** (verified empirically):
+   - `snakeoil(body[0:17], tb_secret)` → `86 a2 18 8d...` (valid prefix)
+   - `snakeoil(body[17:], tb_secret)` → `D8 03 1E 40 0F DaciaAutomotive...` (valid body)
+   - `snakeoil(body[0:], tb_secret)` as single stream → prefix OK but body[17:] is garbage
+   - The PRNG resets at byte 17, meaning two separate SnakeOil calls
+
+3. **The 17-byte prefix structure:**
+   - Byte 0: always `0x86` (presence bitmask)
+   - Bytes 1-16: 16 bytes of per-request data
+   - Changes between requests (737≠754≠792), but identical for simultaneous requests (792=800)
+   - NOT the HMAC-MD5 credential name (that's in the query)
+   - NOT a direct copy of any known credential field (tb_code, tb_secret, hu_code, hu_secret)
+   - Likely computed from session state + timestamp
+
+4. **Credential object layout (`FUN_101aa050`):**
+   ```
+   puVar9[0]  = vtable1 (PTR_FUN_102b9590)
+   puVar9[2]  = vtable2 (PTR_FUN_102b9580)
+   puVar9[4]  = 1 (flag)
+   puVar9[5]  = 1 (flag)
+   puVar9[6]  = hu_code_lo
+   puVar9[7]  = hu_code_hi
+   puVar9[8]  = 1 (flag)
+   puVar9[9..10] = *(iVar5 + 0x10) — from device manager chain (8B)
+   puVar9[0xb] = *(iVar5 + 0x18) — from device manager chain (4B)
+   puVar9[0xc] = timestamp from FUN_101d2630()
+   puVar9[0xd] = CONCAT31(local_48._1_3_, 1)
+   puVar9[0xe] = vtable3 (PTR_FUN_102b9588)
+   puVar9[0x10] = 3 (mode = DEVICE)
+   puVar9[0x12..0x14] = HMAC-MD5 name (16B, stored via loop from FUN_10156c60)
+   ```
+
+5. **The credential sub-object is copied into the request via `FUN_100a73d0`** when bit 6 of flags is set (0x40 bit, present in 0x60 and 0x68). The body serializer then includes it.
+
+**Next step:** Trace the body serializer (`FUN_10091bf0` → `FUN_101b2c30`) to find exactly how the credential sub-object is serialized into the 17-byte prefix. The serializer likely writes `[0x86 presence bitmask] [serialized fields from credential]`. The 16 data bytes are probably: `[8B from puVar9[9..10]] [4B from puVar9[0xb]] [4B from puVar9[0xc]]` = device_manager_value + unknown_field + timestamp.
+
+
+---
+
+### 2026-04-18 19:45 — Serializer traced, prefix is per-request credential serialization
+
+**Key discovery: `FUN_101aa050` is called PER REQUEST, not once per session.**
+
+Each call creates a fresh 0x58-byte credential with a fresh timestamp from `FUN_101d2630()`. This explains why the prefix changes per request but is identical for simultaneous requests (792=800).
+
+**Credential sub-object descriptor (8 fields):**
+| Index | Name | Present in 0x86? |
+|-------|------|-----------------|
+| 0 | Type0 | No (bit 0 = 0) |
+| 1 | Type1 | Yes (bit 1 = 1) |
+| 2 | Delegation | Yes (bit 2 = 1) |
+| 3 | Credentials | No (bit 3 = 0) |
+| 4 | Version | No (bit 4 = 0) |
+| 5 | Fault | No (bit 5 = 0) |
+| 6 | Cellid | No (bit 6 = 0) |
+| 7 | Elevation | Yes (bit 7 = 1) |
+
+**Byte-by-byte analysis across flows:**
+- Byte 0: always `0x86` (presence bitmask)
+- Byte 1: constant within time window, changes between windows (session-level value?)
+- Bytes 2-16: completely different between time windows, identical for simultaneous requests
+
+**HMAC-MD5 computation in FUN_101aa050:**
+- Key: hu_secret (8 bytes, big-endian)
+- Data: igo-binary serialized credential via `FUN_101a9930`
+- Result: 16-byte name stored in credential object
+- The HMAC name goes into the QUERY (Name₃), NOT the prefix
+
+**The prefix data (16 bytes after 0x86) is the igo-binary serialized form of the credential's Type1, Delegation, and Elevation fields.** The serialization uses a bitstream format with variable-width fields. The exact encoding depends on the igo-binary serializer internals.
+
+**Annotated in nngine_decompiled.c.backup:**
+- FUN_101aa050: full credential object layout, HMAC computation, per-request behavior
+- SnakeOil section: corrected Secret3 = tb_secret, wire format for 0x68
+- Binary serializer vtable: all 18 entries documented
+- Credential descriptor: 8 fields with names
+
+**Next: Execute FUN_101a9930 (igo-binary serializer) via Unicorn Engine to capture the exact serialized bytes for the credential sub-object. This will reveal the prefix format.**
