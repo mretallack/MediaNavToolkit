@@ -239,12 +239,13 @@ def build_sendfingerprint_body(
 class DeviceFileEntry:
     """A file on the USB drive for senddevicestatus."""
 
-    md5: str  # 32-char hex MD5 of file content
+    md5: str  # 32-char hex MD5 of file content (empty for directories)
     filename: str
     mount: str  # "primary"
     path: str  # e.g. "NaviSync/license"
     size: int
     modified_ms: int  # epoch milliseconds
+    created_ms: int = 0  # epoch milliseconds (0 = same as modified_ms)
 
 
 def build_senddevicestatus_body(
@@ -253,27 +254,36 @@ def build_senddevicestatus_body(
     swid: str = "",
     imei: str = "32483158423731362D42323938353431",
     igo_version: str = "9.12.179.821558",
-    timestamp_ms: int = 0,
+    first_use_seconds: int = 0,
     appcid: int = 0x42000B53,
     serial: str = "",
     uniq_id: str = "",
+    content_version: int = 46475,
+    overall_md5: str = "",
     files: list[DeviceFileEntry] | None = None,
 ) -> bytes:
-    """Build SendDeviceStatus request body.
+    """Build SendDeviceStatus request body (flags=0x60).
 
     Structure (from captured traffic flow 735, flags=0x60):
-      [4B header: D8 02 1F 40] — presence bitmask (NOT a credential block)
-      [len] brand [len] model [len] swid [len] imei [len] igo_version
-      [int64] timestamp [int32] appcid [len] serial [len] uniq_id
+      [4B bitmask: D8 02 1F 40]
+      [str] brand [str] model [str] swid [str] imei [str] igo_version
+      [4B BE] first_use_seconds [4B zero] [4B BE] appcid
+      [str] serial [str] uniq_id
       [0x00] separator
-      [int32] content_version
-      [int32] file_count_or_flags
-      [int32] zero
+      [0x01] [2B BE content_version] [2B zero]
+      [0x01] [4B zero]
+      [0xE0] [str overall_md5]
+      [1B file_count]
       [file_entries...]
+      [trailer: 0x01 0x00 0x07 "primary" 0x00*20]
 
-    File entry types:
-      0xa0: [len] md5 [len] filename [len] mount [len] path [int64] size [int64] ts1 [int64] ts2
-      0x22: directory [len] name [len] mount [len] path [int64:0] [int64] ts1 [int64] ts2
+    File entry (0xA0):
+      [str] md5 [str] filename [str] mount [str] path
+      [8B BE] size [8B BE] modified_ms [8B BE] modified_ms
+
+    Directory entry (0x22):
+      [str] name [str] mount [str] path
+      [8B BE] 0 [8B BE] modified_ms [8B BE] modified_ms
 
     Ref: toolbox.md §15
     """
@@ -288,27 +298,54 @@ def build_senddevicestatus_body(
         + encode_string(swid)
         + encode_string(imei)
         + encode_string(igo_version)
-        + encode_int64(timestamp_ms)
+        + encode_int32(first_use_seconds)
+        + b"\x00\x00\x00\x00"
         + encode_int32(appcid)
         + encode_string(serial)
         + encode_string(uniq_id)
     )
 
-    # File entries
-    file_data = b""
+    # Content metadata
+    meta = (
+        b"\x00"
+        + b"\x01"
+        + struct.pack("<H", content_version & 0xFFFF)
+        + b"\x00\x00"
+        + b"\x00\x01\x00\x00\x00\x00"
+    )
+
+    # Overall MD5 + file list
+    file_list = b"\xe0" + encode_string(overall_md5) if overall_md5 else b""
+
+    # File count + entries
+    file_data = bytes([len(files)])
     for f in files:
-        file_data += (
-            b"\xa0"
-            + encode_string(f.md5)
-            + encode_string(f.filename)
-            + encode_string(f.mount)
-            + encode_string(f.path)
-            + encode_int64(f.size)
-            + encode_int64(f.modified_ms)
-            + encode_int64(f.modified_ms)
-        )
+        ts2 = f.created_ms if f.created_ms else f.modified_ms
+        if f.md5:
+            # File entry
+            file_data += (
+                b"\xa0"
+                + encode_string(f.md5)
+                + encode_string(f.filename)
+                + encode_string(f.mount)
+                + encode_string(f.path)
+                + encode_int64(f.size)
+                + encode_int64(f.modified_ms)
+                + encode_int64(ts2)
+            )
+        else:
+            # Directory entry
+            file_data += (
+                b"\x22"
+                + encode_string(f.filename)
+                + encode_string(f.mount)
+                + encode_string(f.path)
+                + encode_int64(0)
+                + encode_int64(f.modified_ms)
+                + encode_int64(ts2)
+            )
 
-    # Separator + metadata before file entries
-    separator = b"\x00" + b"\x01\x8b\xb5" + encode_int32(1) + encode_int32(0)
+    # Trailer: mount info
+    trailer = b"\x01\x00" + encode_string("primary") + b"\x00" * 20
 
-    return header + device_info + separator + file_data
+    return header + device_info + meta + file_list + file_data + trailer

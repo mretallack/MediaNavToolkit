@@ -217,25 +217,34 @@ def _get_process(client, creds, session):
 
 
 def _send_device_status(client, creds, hu_creds, session, usb_path, device):
-    """Send device status — replays captured requests to establish device context.
+    """Send device status — generates 0x60 body from USB files, replays 0x68.
 
     Two senddevicestatus calls are needed:
-    1. Flow 735 (flags=0x60): device info + file listing, re-encrypted with our keys
-    2. Flow 737 (flags=0x68): raw replay (uses unknown encryption for body)
+    1. Flow 735 (flags=0x60): generated from USB file listing
+    2. Flow 737 (flags=0x68): raw replay (Secret₃ unknown, see R.9)
     Both are required for the web session to show content.
     """
-    base = Path(__file__).parent.parent / "analysis" / "flows_decoded" / "2026-04-16"
-    cap1 = base / "735-senddevicestatus-req.bin"
-    cap2 = base / "737-senddevicestatus-req.bin"
+    from medianav_toolbox.device import scan_device_files, compute_overall_md5
 
-    if not cap1.exists() or not cap2.exists():
-        return type("R", (), {"status_code": 0})()
+    # First call: generate 0x60 body from actual USB content
+    files = scan_device_files(usb_path)
+    overall_md5 = compute_overall_md5(usb_path)
 
-    from medianav_toolbox.crypto import snakeoil
+    body1 = build_senddevicestatus_body(
+        brand_name="DaciaAutomotive",
+        model_name="DaciaAutomotiveDeviceCY20_ULC4dot5",
+        swid=device.drive_path.name if hasattr(device, "drive_path") else "",
+        imei="32483158423731362D42323938353431",
+        igo_version="9.12.179.821558",
+        first_use_seconds=0x63AAF600,
+        appcid=device.appcid,
+        serial="UU1DJF00869579646",
+        uniq_id="9DF60F15136D64AC7E234644DD228027",
+        content_version=46475,
+        overall_md5=overall_md5,
+        files=files,
+    )
 
-    # First call: re-encrypt captured body with our keys
-    wire1 = cap1.read_bytes()
-    body1 = snakeoil(wire1[18:], creds.secret)
     query = bytes([0xC5, 0x60])
     wire = build_request(
         query=query,
@@ -250,15 +259,19 @@ def _send_device_status(client, creds, hu_creds, session, usb_path, device):
         headers=_wire_headers(session),
     )
 
-    # Second call: raw replay (0x68 flags, can't re-encrypt)
-    wire2_raw = cap2.read_bytes()
-    resp2 = client.post(
-        f"{MARKET_BASE}/1/senddevicestatus",
-        content=wire2_raw,
-        headers=_wire_headers(session),
-    )
+    # Second call: raw replay (0x68 flags, Secret₃ unknown)
+    base = Path(__file__).parent.parent / "analysis" / "flows_decoded" / "2026-04-16"
+    cap2 = base / "737-senddevicestatus-req.bin"
+    if cap2.exists():
+        wire2_raw = cap2.read_bytes()
+        resp2 = client.post(
+            f"{MARKET_BASE}/1/senddevicestatus",
+            content=wire2_raw,
+            headers=_wire_headers(session),
+        )
+        return resp2 if resp2.status_code == 200 else resp1
 
-    return resp2 if resp2.status_code == 200 else resp1
+    return resp1
 
 
 def _load_creds(usb_path: Path) -> DeviceCredentials | None:

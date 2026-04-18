@@ -7,13 +7,13 @@
 The protocol has been fully reverse-engineered and verified against the live server:
 - SnakeOil cipher: **cracked** (xorshift128 PRNG stream cipher)
 - Wire format: **understood** (16-byte request header, 4-byte response header)
-- DEVICE mode keys: **solved** (Code for query, Secret for body — Secret = tb_secret for ALL flows)
+- DEVICE mode keys: **solved** (Code for query, Secret for body — 0x60 flows verified; 0x68 Secret₃ unknown)
 - Credential block: **solved** (`0xD8 || (Name XOR IGO_CREDENTIAL_KEY)`)
 - Full login flow: **working** (boot → login → sendfingerprint → getprocess all return 200)
 - Request body encoding: **solved** (all endpoints verified)
 - Catalog parsing: **working** (31 map updates, 6.07 GB total)
 - Delegator: **working** — returns head unit credentials
-- **Secret₃ = tb_secret** — no separate key derivation needed (R.9 RESOLVED)
+- **Secret₃ unknown** — 0x68 body encryption key not yet found; 0x60 body generation working (R.9 OPEN)
 - **.lyc decryption: solved** — RSA 2048-bit + XOR-CBC, public key extracted (R.2 RESOLVED)
 - **Remaining**: `sync` command (4.3) — download content and write to USB
 
@@ -85,21 +85,21 @@ The protocol has been fully reverse-engineered and verified against the live ser
 
 ### Key Protocol Findings (from Phase 1)
 
-Request wire layout (after 16-byte cleartext header):
+Request wire layout (DEVICE mode):
 ```
-Offset 16-17:  SnakeOil(2B query, Code)       — counter(1) + flags(1)
-Offset 18-34:  SnakeOil(17B ext_query, Secret) — credential block
-Offset 35+:    SnakeOil(body, Secret)          — igo-binary request payload
+flags=0x20: [16B header] [SnakeOil(19B query, Code)] [SnakeOil(body, Secret)]
+flags=0x60: [16B header] [SnakeOil(2B query, Code)]  [SnakeOil(body, Secret)]
+flags=0x68: [16B header] [SnakeOil(2B query, Code)]  [SnakeOil(body, Secret₃)]
 ```
 
 PRNG seed per mode:
-- RANDOM requests: seed = key in wire header (for all 3 segments)
-- DEVICE requests: Code for 2B query, **Secret for ext_query and body**
+- RANDOM requests: seed = key in wire header
+- DEVICE requests: Code for query, **Secret** for body (0x60 flows)
+- DEVICE delegated: Code for query, **Secret₃** for body (0x68 flows — key unknown)
 - RANDOM responses: seed = same key as request
 - DEVICE responses: seed = **Secret**
 
-**Body key is always Secret (tb_secret) for ALL flows** — pre- and post-delegation.
-The delegation only changes the query flags byte (0x60 → 0x68), not the encryption key.
+**Secret₃ for 0x68 flows is unknown.** Currently replayed from captured traffic.
 
 Credential block encoding:
 - `credential_block = 0xD8 || (Name XOR 6935b733a33d02588bb55424260a2fb5)`
@@ -186,14 +186,18 @@ RANDOM mode seed generation:
   - `get_delegator_credentials()` in `register.py` — gets head unit Name/Code/Secret
   - Body format: same as register but header `0x1E`, serial instead of uniq_id
   - Two senddevicestatus calls needed: flow 735 (0x60) + flow 737 (0x68)
-  - Body encryption: tb_secret for ALL flows (body at offset 35, ext_query at offset 18)
+  - **Workaround in place**: 0x60 body re-encrypted with current keys; 0x68 body raw replay
+  - Secret₃ for 0x68 body encryption is still unknown
   - Catalog shows 31 items across 31 countries, 6.07 GB total, 7.18 GB available
 
 - [ ] **4.3** Wire up `medianav-toolbox sync` command — **THE MAIN REMAINING WORK**
-  - [ ] **4.3.1** Fix senddevicestatus body generation (replace captured replay with generated body)
-    - Use tb_secret for 0x68 body encryption (Secret₃ = tb_secret confirmed)
-    - Build Name₃ credential block: `0xC4 || hu_code(8B BE) || tb_code(7B BE)`
-    - Match file list to actual USB content (read .stm files for timestamps/sizes)
+  - [x] **4.3.1** Fix senddevicestatus body generation (replace captured replay with generated body)
+    - 0x60 body: generated from USB file scan (`scan_device_files()` in device.py)
+    - Body format: `[D8021F40 bitmask] [strings] [4B BE first_use] [4B zero] [4B BE appcid] [strings] [meta] [0xE0 overall_md5] [file_count] [entries] [trailer]`
+    - File entries: 0xA0 (file) or 0x22 (directory), sizes/timestamps as BE int64
+    - Generated body matches captured flow 735 byte-for-byte
+    - 0x68 body: still raw replay (Secret₃ unknown, see R.9/T13-T15)
+    - 205 unit tests passing
   - [ ] **4.3.2** Wire up content selection → download URL retrieval
     - `web_login()` → `get_content_tree()` → user selects → `confirm_selection()`
     - `getprocess` wire call → extract download task list with URLs
@@ -234,15 +238,13 @@ RANDOM mode seed generation:
   - Body: `[0x1E 0x00] [brand] [model] [swid] [imei] [igo_ver] [int64:0] [int32:appcid] [serial]`
   - Response: parsed with `parse_register_response()` — returns Name, Code, Secret, MaxAge=300
   - Verified: returns `C10CD1FD4A2F23F921D6E3B093D5957A` / Code=3362879562238844 / Secret=4196269328295954
-- [x] **R.9** ~~Query flags `0x68` encryption~~ — **RESOLVED: Secret₃ = tb_secret**
-  - All wire protocol bodies use tb_secret (`3037636188661496`) as the SnakeOil key
-  - There is NO separate Secret₃ derived from device.nng
-  - Verified by decrypting all 5 senddevicestatus flows (735, 737, 741, 754, 792) with tb_secret
-  - Name₃ = `0xC4` + hu_code(8B BE) + tb_code(7B BE) — used in 0x08-flag credential blocks
-  - The 0x60 vs 0x68 flag difference is message type (delegation), not encryption mode
-- [ ] **R.10** SendDeviceStatus body generation — **UNBLOCKED by R.9 resolution**
-  - Now that Secret₃ = tb_secret is confirmed, we can generate 0x68 bodies properly
-  - Current workaround: captured body replay. Need to replace with generated body.
-  - Generated body returns 409 — likely file list mismatch with server expectations
-  - Need to match file entries exactly (count, timestamps, paths) against device state
-  - The `0xD8` header in senddevicestatus body is a presence bitmask, NOT a credential block
+- [ ] **R.9** Query flags `0x68` encryption — **OPEN: Secret₃ unknown**
+  - 0x60 flows: body at offset 18, key = tb_secret ✓
+  - 0x68 flows: body at offset 18, key = UNKNOWN (not tb_secret, tb_code, hu_code, or hu_secret)
+  - Decoded files at offset 35 were artifacts of a script, not real plaintext
+  - Wine/QEMU Docker container available for DLL execution (T13-T15)
+  - Current workaround: raw replay of captured 0x68 request binary
+- [x] **R.10** ~~SendDeviceStatus body generation~~ — **RESOLVED (0x60 only)**
+  - 0x60 body: generated from USB file scan, matches captured traffic byte-for-byte
+  - 0x68 body: still raw replay (blocked on R.9 — Secret₃ unknown)
+  - Body format fully decoded: bitmask + device info + content metadata + file entries + trailer

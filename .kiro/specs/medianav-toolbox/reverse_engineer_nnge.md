@@ -47,16 +47,16 @@ Find the 8-byte SnakeOil key (**Secret₃**) used to encrypt the body of `0x08`-
 - [~] **T6.** ~~Trace `FUN_10044c60` → `vtable[27]` device.nng processing chain~~ — SUPERSEDED by Unicorn approach
 - [~] **T7.** ~~Try Blowfish key on device.nng sections~~ — SUPERSEDED (tried in brute-force phase, no match)
 - [~] **T8.** ~~Find the file system manager vtable and its `+0x6c` method~~ — SUPERSEDED by Unicorn approach
-- [~] **T9.** ~~Extract the derivation algorithm as standalone C and test it~~ — OBSOLETE: body offset was 35 not 18; key is always tb_secret, no Secret₃ exists
+- [~] **T9.** ~~Extract the derivation algorithm as standalone C and test it~~ — SUPERSEDED by Wine/QEMU approach
 
 ### Unicorn Engine Approach (T10–T15)
 
 - [x] **T10.** Set up Unicorn Engine environment (Python venv with unicorn 2.1.4, capstone 5.0.7, pefile 2024.8.26)
 - [x] **T11.** Build PE loader: `analysis/unicorn_harness.py` — maps nngine.dll at 0x10000000, applies relocations, stack at 0x00100000, heap at 0x00400000
 - [x] **T12.** Validate harness: SnakeOil(zeros, tb_secret)→bc755fbc32341970 ✓, flow 735 body→DaciaAutomotive@offset 5 ✓
-- [~] **T13.** ~~Emulate credential derivation chain with device.nng data~~ — OBSOLETE: no Secret₃ derivation needed
-- [~] **T14.** ~~Read Secret₃ from emulated memory~~ — OBSOLETE: Secret₃ does not exist
-- [~] **T15.** ~~Validate Secret₃~~ — RESOLVED: body at offset 35 decrypts with tb_secret for ALL flows (0x20, 0x28, 0x60, 0x68)
+- [ ] **T13.** Find Secret₃ — the 0x68 body encryption key. Wine/QEMU Docker container available for DLL execution. ← **NEXT (deferred — sync works with replay)**
+- [ ] **T14.** Read Secret₃ from emulated/executed DLL memory
+- [ ] **T15.** Validate Secret₃ — decrypt captured 0x68 body at offset 18, verify "DaciaAutomotive"
 
 ## Architecture Overview
 
@@ -1579,3 +1579,27 @@ Offset 35+:   [body]       — encrypted with tb_secret (Secret)
 - The delegation only changes the query FLAGS (0x60 → 0x68), not the encryption key
 - All captured traffic can be decrypted with just tb_code (query) and tb_secret (body)
 - The credential store, device manager, and vtable chains are irrelevant to decryption
+
+---
+
+### 2026-04-18 10:30 — CORRECTION: Body offset 35 was WRONG
+
+**The "body at offset 35" finding was incorrect.** The decoded files (`*-decoded.bin`) were
+created by a script that stripped 35 bytes and decrypted with tb_secret. This produces
+garbage for 0x68 flows — the decoded files are NOT the real plaintext.
+
+**Actual verified state:**
+- 0x60 flows: body at offset 18, key = tb_secret → "DaciaAutomotive" ✓
+- 0x68 flows: body at offset 18, key = UNKNOWN (not tb_secret, tb_code, hu_code, or hu_secret)
+- 0x68 flows: body at offset 35, key = tb_secret → garbage (matches decoded files, but decoded files are wrong)
+
+**The Secret₃ mystery remains unsolved.** The 0x68 body encryption key is still unknown.
+
+**Current workaround:** The session.py replays captured binary files for senddevicestatus.
+This works because:
+1. Flow 735 (0x60): re-encrypted with current tb_secret at offset 18
+2. Flow 737 (0x68): raw binary replay (includes old session data)
+
+**Impact on task 4.3.1:** Cannot generate 0x68 bodies from scratch until Secret₃ is found.
+However, the 0x60 body CAN be generated (tb_secret at offset 18). The 0x68 call may not
+be strictly required — need to test if the server accepts just the 0x60 call.
