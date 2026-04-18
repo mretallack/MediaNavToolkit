@@ -2056,3 +2056,31 @@ To reproduce it, we need to:
 4. Prefix = `0x86` + HMAC result
 
 **Next step:** Emulate the serializer via Unicorn to capture the exact serialized bytes for a credential with known field values. Then we can reproduce the serialization in Python.
+
+
+---
+
+### 2026-04-18 21:30 — HMAC oracle approach exhausted, need full serializer emulation
+
+**Confirmed:** The DLL's HMAC-MD5 function (FUN_101aa3a0) works correctly in Wine. Verified: `HMAC-MD5(key=000EE87C16B1E812, data="hello") = 0344F48CAB00AE473B4992DF82F1BC1D` matches Python.
+
+**Exhaustive HMAC oracle tests (all negative):**
+- 4B timestamp (LE/BE) across ±28 hours
+- 8B hu_code + 4B timestamp (LE)
+- 8B tb_code + 4B timestamp (LE)
+- 8B tb_secret + 4B timestamp (LE)
+- 4B timestamp + 8B hu_code (LE)
+- 8B hu_code + 8B tb_code + 4B timestamp (LE)
+- Various presence byte + field value combinations
+
+**Conclusion:** The serialized data uses the igo-binary **bitstream** format, NOT byte-aligned fields. The bitstream packs presence bits and field values at the bit level with variable-width encoding. Simple concatenation of field values does not produce the correct HMAC input.
+
+**Wine serializer crashes** because `FUN_101b2910` (serializer init) needs thread-local storage and global state that isn't initialized without DllMain.
+
+**Remaining approaches:**
+1. **Full Unicorn emulation** — emulate the entire serializer chain with proper memory layout and hooks for all dependent functions
+2. **Trace the bitstream writer** — follow `FUN_101a9e80` (write_1bit_lsb) and the value writers to understand the exact bit packing
+3. **Patch DllMain** — modify the DLL to skip problematic init code and run with full DllMain in Wine
+4. **mitmproxy capture** — run the Windows Toolbox and capture a fresh 0x68 request, then replay within the 300-second MaxAge window
+
+Option 4 is the fastest path to a working end-to-end test. Options 1-3 are needed for the permanent solution.
