@@ -58,3 +58,6 @@ analysis/cred_trace
 
 # Capture artifacts (mitmproxy, wine logs)
 capture/
+analysis/nngine_decompiled.c.backup
+analysis/wine64_prefix/
+analysis/__pycache__/

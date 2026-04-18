@@ -7,15 +7,15 @@
 The protocol has been fully reverse-engineered and verified against the live server:
 - SnakeOil cipher: **cracked** (xorshift128 PRNG stream cipher)
 - Wire format: **understood** (16-byte request header, 4-byte response header)
-- DEVICE mode keys: **solved** (Code for query, Secret for body — 0x60 flows verified; 0x68 Secret₃ unknown)
+- DEVICE mode keys: **solved** (Code for query, Secret for body — all flows including 0x68)
 - Credential block: **solved** (`0xD8 || (Name XOR IGO_CREDENTIAL_KEY)`)
 - Full login flow: **working** (boot → login → sendfingerprint → getprocess all return 200)
 - Request body encoding: **solved** (all endpoints verified)
 - Catalog parsing: **working** (31 map updates, 6.07 GB total)
 - Delegator: **working** — returns head unit credentials
-- **Secret₃ unknown** — 0x68 body encryption key not yet found; 0x60 body generation working (R.9 OPEN)
+- **Secret₃ SOLVED** — 0x68 body key = tb_secret, split encryption (body[0:17] + body[17:] each fresh PRNG)
 - **.lyc decryption: solved** — RSA 2048-bit + XOR-CBC, public key extracted (R.2 RESOLVED)
-- **Remaining**: `sync` command (4.3) — **BLOCKED on Secret₃** (R.9). 0x68 senddevicestatus required for content access.
+- **Remaining**: `sync` command (4.3) — content selection → download → install pipeline
 
 ---
 
@@ -89,17 +89,19 @@ Request wire layout (DEVICE mode):
 ```
 flags=0x20: [16B header] [SnakeOil(19B query, Code)] [SnakeOil(body, Secret)]
 flags=0x60: [16B header] [SnakeOil(2B query, Code)]  [SnakeOil(body, Secret)]
-flags=0x68: [16B header] [SnakeOil(2B query, Code)]  [SnakeOil(body, Secret₃)]
+flags=0x68: [16B header] [SnakeOil(25B query, Code)] [SnakeOil(17B prefix, Secret)] [SnakeOil(body, Secret)]
 ```
 
 PRNG seed per mode:
 - RANDOM requests: seed = key in wire header
-- DEVICE requests: Code for query, **Secret** for body (0x60 flows)
-- DEVICE delegated: Code for query, **Secret₃** for body (0x68 flows — key unknown)
+- DEVICE requests: Code for query, **Secret** for body (all flows)
+- DEVICE delegated (0x68): Code for query, **Secret** for body — split encryption:
+  - 17-byte delegation prefix: fresh SnakeOil(Secret)
+  - Remaining body: fresh SnakeOil(Secret) (PRNG restarted)
 - RANDOM responses: seed = same key as request
 - DEVICE responses: seed = **Secret**
 
-**Secret₃ for 0x68 flows is unknown.** Currently replayed from captured traffic.
+**Secret₃ = tb_secret — RESOLVED.** The 0x68 body uses the same key as 0x60.
 
 Credential block encoding:
 - `credential_block = 0xD8 || (Name XOR 6935b733a33d02588bb55424260a2fb5)`
@@ -186,30 +188,33 @@ RANDOM mode seed generation:
   - `get_delegator_credentials()` in `register.py` — gets head unit Name/Code/Secret
   - Body format: same as register but header `0x1E`, serial instead of uniq_id
   - Two senddevicestatus calls needed: flow 735 (0x60) + flow 737 (0x68)
-  - **Workaround in place**: 0x60 body re-encrypted with current keys; 0x68 body raw replay
-  - Secret₃ for 0x68 body encryption is still unknown
+  - **Secret₃ SOLVED**: 0x68 body key = tb_secret, split encryption confirmed
+  - 0x60: single-stream SnakeOil(body, tb_secret) at offset 18
+  - 0x68: split at offset 41 — SnakeOil(prefix[17B], tb_secret) + SnakeOil(body, tb_secret)
   - Catalog shows 31 items across 31 countries, 6.07 GB total, 7.18 GB available
 
 - [ ] **4.3** Wire up `medianav-toolbox sync` command — **THE MAIN REMAINING WORK**
   - [x] **4.3.1** Fix senddevicestatus body generation (replace captured replay with generated body)
     - 0x60 body: generated from USB file scan (`scan_device_files()` in device.py)
-    - Body format: `[D8021F40 bitmask] [strings] [4B BE first_use] [4B zero] [4B BE appcid] [strings] [meta] [0xE0 overall_md5] [file_count] [entries] [trailer]`
-    - File entries: 0xA0 (file) or 0x22 (directory), sizes/timestamps as BE int64
-    - Generated body matches captured flow 735 byte-for-byte
-    - 0x68 body: still raw replay (Secret₃ unknown, see R.9/T13-T15)
+    - Re-encrypted 0x60 body returns HTTP 200 from live server ✓
+    - 0x68 body: encryption solved (tb_secret, split pattern), body construction needs delegation prefix
+    - 0x68 delegation prefix: 17 bytes `[0x86][16B session data]` — must be built from current delegator response
     - 205 unit tests passing
-  - [ ] **4.3.2** Wire up content selection → download URL retrieval — **BLOCKED on R.9**
-    - Content tree requires BOTH 0x60 AND 0x68 senddevicestatus to return 200
-    - 0x60 replay works (200), but alone is insufficient — server returns empty content tree
-    - 0x68 captured replay is now stale (returns 409)
-    - 0x68 body generation blocked on Secret₃ (unknown encryption key)
-    - Once Secret₃ is found: confirm_selection → getprocess → extract download URLs
-  - [ ] **4.3.3** Wire up download → USB write pipeline
+  - [ ] **4.3.2** Wire up content selection → download URL retrieval
+    - R.9 is RESOLVED — encryption is no longer a blocker
+    - Content selection and confirmation work (sync command does this already)
+    - **BLOCKED**: download URLs come from wire protocol `getprocess` after confirmation
+    - The getprocess response contains DOWNLOAD tasks with CDN URLs
+    - We don't have a captured post-confirmation getprocess response
+    - Need to either: capture one via mitmproxy with the real Toolbox, or reverse-engineer the task format from nngine.dll
+    - The web page does NOT provide download URLs — it only shows progress via `/mds/` polling
+  - [ ] **4.3.3** Wire up download → USB write pipeline — BLOCKED on 4.3.2
     - `DownloadManager.download()` for each content file (with resume + MD5 verify)
     - `installer.install_content()` — write content files + .stm shadow files
     - `installer.install_license()` — write .lyc + .lyc.md5 files
     - `installer.write_update_checksum()` — write update_checksum.md5 trigger
-  - [ ] **4.3.4** Validate USB output
+    - All components implemented and unit-tested, just need download URLs to wire up
+  - [ ] **4.3.4** Validate USB output — BLOCKED on 4.3.3
     - Verify directory structure matches NaviSync layout
     - Verify .stm files have correct format and content
     - Verify MD5 checksums match between .stm metadata and actual files
@@ -241,12 +246,13 @@ RANDOM mode seed generation:
   - Body: `[0x1E 0x00] [brand] [model] [swid] [imei] [igo_ver] [int64:0] [int32:appcid] [serial]`
   - Response: parsed with `parse_register_response()` — returns Name, Code, Secret, MaxAge=300
   - Verified: returns `C10CD1FD4A2F23F921D6E3B093D5957A` / Code=3362879562238844 / Secret=4196269328295954
-- [ ] **R.9** Query flags `0x68` encryption — **OPEN: Secret₃ unknown**
-  - 0x60 flows: body at offset 18, key = tb_secret ✓
-  - 0x68 flows: body at offset 18, key = UNKNOWN (not tb_secret, tb_code, hu_code, or hu_secret)
-  - Decoded files at offset 35 were artifacts of a script, not real plaintext
-  - Wine/QEMU Docker container available for DLL execution (T13-T15)
-  - Current workaround: raw replay of captured 0x68 request binary
+- [x] **R.9** Query flags `0x68` encryption — **RESOLVED (2026-04-18)**
+  - Secret₃ = tb_secret (`3037636188661496` / `0x000ACAB6C9FB66F8`)
+  - 0x68 body starts at offset 41 (16B header + 25B query), NOT offset 35
+  - Body is split-encrypted: `body[0:17]` + `body[17:]` each with fresh SnakeOil(tb_secret)
+  - The 17-byte delegation prefix starts with `0x86` (presence bitmask)
+  - Re-encrypted 0x60 body returns HTTP 200 from live server ✓
+  - See [reverse_engineer_nnge.md](reverse_engineer_nnge.md) for full details
 - [x] **R.10** ~~SendDeviceStatus body generation~~ — **RESOLVED (0x60 only)**
   - 0x60 body: generated from USB file scan, matches captured traffic byte-for-byte
   - 0x68 body: still raw replay (blocked on R.9 — Secret₃ unknown)

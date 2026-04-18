@@ -410,9 +410,11 @@ def sync(ctx, country, dry_run):
         confirm_selection(hc, jsid)
         console.print("[green]✓ Selection confirmed[/green]")
         console.print(
-            "\n[dim]The server has queued the update. In the original Windows Toolbox,"
-            "\nthe native engine (nngine.dll) would now download the files."
-            "\nDirect download from this CLI is not yet implemented (needs R.9/R.10)."
-            "\n\nTo complete the update, run the Windows Toolbox once to download,"
-            "\nor check back when direct download support is added.[/dim]"
+            "\n[dim]The server has queued the update. Download URLs are provided"
+            "\nvia the wire protocol getprocess endpoint, which the native engine"
+            "\n(nngine.dll) normally handles. Direct download from this CLI requires"
+            "\ncapturing a post-confirmation getprocess response to understand the"
+            "\ndownload task format."
+            "\n\nTo complete the update now, run the Windows Toolbox to download,"
+            "\nor capture a post-confirmation mitmproxy trace to enable direct download.[/dim]"
         )

@@ -7,13 +7,16 @@ Query and body are encrypted as SEPARATE SnakeOil streams:
   RANDOM mode: both use the random seed (fresh PRNG state each)
   DEVICE mode: query uses Code, body uses Secret
 
+For delegated requests (flags=0x68), the body is split-encrypted:
+  [SnakeOil(17B delegation prefix, Secret)] [SnakeOil(body, Secret)]
+  Each segment uses a fresh PRNG state (Secret = tb_secret for all flows).
+
 Ref: toolbox.md §2 (wire protocol), credential_encoding_notes.md
 
 Wire layout (DEVICE mode, sub-type 0x30):
   flags=0x20: [16B header] [SnakeOil(19B query, Code)] [SnakeOil(body, Secret)]
   flags=0x60: [16B header] [SnakeOil(2B query, Code)]  [SnakeOil(body, Secret)]
-  flags=0x68: [16B header] [SnakeOil(2B query, Code)]  [SnakeOil(body, Secret₃)]
-  Secret₃ for 0x68 flows is unknown — currently replayed from captured traffic.
+  flags=0x68: [16B header] [SnakeOil(25B query, Code)] [SnakeOil(17B prefix, Secret)] [SnakeOil(body, Secret)]
 """
 
 import os

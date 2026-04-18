@@ -26,15 +26,15 @@ This project reverse-engineers the NaviExtras wire protocol and reimplements it 
 **Working end-to-end:**
 - ✅ USB drive detection and device identity reading
 - ✅ Device registration with NaviExtras server
-- ✅ Full authentication flow (boot → login → fingerprint → delegator)
+- ✅ Full authentication flow (boot → login → fingerprint → delegator → senddevicestatus)
+- ✅ Wire protocol encryption fully solved (SnakeOil with tb_secret for all flows)
 - ✅ Content catalog browsing (31 map regions with sizes)
 - ✅ Content installation to USB drive (.stm, .lyc, .md5 files)
 - ✅ 204 unit tests passing
 
-**Not yet implemented:**
-- ❌ Content download from CDN (download URLs come from `getprocess` after selection)
-- ❌ `sync` command (select → download → install in one step)
-- ❌ SendDeviceStatus body generation (uses captured body replay as workaround)
+**In progress:**
+- 🔧 `sync` command — content selection → download → install pipeline
+- 🔧 0x68 delegation prefix construction (encryption solved, body serialization WIP)
 
 ## Requirements
 
@@ -74,9 +74,20 @@ medianav-toolbox catalog --usb-path /media/usb
 # Quick update check
 medianav-toolbox updates --usb-path /media/usb
 
+# Sync updates to USB drive (select → download → install)
+medianav-toolbox sync --usb-path /media/usb
+
 # Register a new device (if no cached credentials)
 medianav-toolbox register --usb-path /media/usb
 ```
+
+### Usage Flow
+
+1. **Sync your car** — plug the USB drive into your MediaNav head unit and let it sync
+2. **Plug USB into PC** — the drive must contain `NaviSync/license/device.nng`
+3. **Run the tool** — `medianav-toolbox catalog --usb-path /media/usb` to see available updates
+4. **Download updates** — `medianav-toolbox sync --usb-path /media/usb` to download and install
+5. **Sync back to car** — plug the USB drive back into the head unit to apply updates
 
 ### Example Output
 
@@ -156,7 +167,14 @@ The NaviExtras API uses a custom binary wire protocol:
 
 Header: [0x01] [0xC2 0xC2] [mode] [8B key] [svc_minor] [0x00 0x00] [nonce]
 Mode:   0x20 = RANDOM (unauthenticated), 0x30 = DEVICE (authenticated)
+Key:    Code (for query encryption), Secret (for body encryption)
 ```
+
+For delegated requests (flags=0x68), the body is split-encrypted:
+```
+[16B header] [SnakeOil(25B query, Code)] [SnakeOil(17B prefix, Secret)] [SnakeOil(body, Secret)]
+```
+Each SnakeOil segment uses a fresh PRNG state.
 
 Full session flow:
 ```
