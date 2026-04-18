@@ -1812,3 +1812,31 @@ All start with `0x86` — likely a delegation-specific presence bitmask.
 5. Remove UniqId field (33 bytes: space + 32-char hex string after VIN)
 
 **The encryption layer is COMPLETE. Secret₃ = tb_secret is confirmed working end-to-end.**
+
+---
+
+### 2026-04-18 16:45 — getprocess task format decoded, blocker is stale USB data
+
+**getprocess response format** (from captured login response, flow 048):
+
+```
+[process_id: 0x24 + 36-byte UUID]
+[task_count: varint]
+[tasks...]
+
+Each task:
+  [type_flag: 1B]  (0x88=SSE, 0x84=BROWSER, 0x80=FINGERPRINT)
+  [00 00]
+  [task_id: 0x24 + 36-byte UUID]
+  [device_context_id: 4B BE]
+  [type_code: 1B]  (0x03=SSE, 0x04=BROWSER, 0x02=FINGERPRINT)
+  [url_string: length-prefixed]  (for SSE and BROWSER tasks)
+```
+
+After content confirmation, DOWNLOAD tasks should appear with CDN URLs.
+
+**Actual blocker**: The content tree returns 0 items because the USB drive data is stale (last synced from car on March 23). The server compares the senddevicestatus file list against known device state. When they don't match, no content is offered.
+
+**Resolution**: Sync the USB drive from the car head unit, then re-run the tool. The full pipeline (select → confirm → getprocess → download → install) should work once the server recognizes the device state.
+
+**No mitmproxy needed**: We can call getprocess directly via the wire protocol (encryption solved). No certificate pinning issue since we're making the calls ourselves, not proxying the native engine.

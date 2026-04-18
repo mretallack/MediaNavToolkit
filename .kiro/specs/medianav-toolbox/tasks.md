@@ -203,12 +203,13 @@ RANDOM mode seed generation:
   - [ ] **4.3.2** Wire up content selection → download URL retrieval
     - R.9 is RESOLVED — encryption is no longer a blocker
     - Content selection and confirmation work (sync command does this already)
-    - **BLOCKED**: download URLs come from wire protocol `getprocess` after confirmation
-    - The getprocess response contains DOWNLOAD tasks with CDN URLs
-    - We don't have a captured post-confirmation getprocess response
-    - Need to either: capture one via mitmproxy with the real Toolbox, or reverse-engineer the task format from nngine.dll
-    - The web page does NOT provide download URLs — it only shows progress via `/mds/` polling
-  - [ ] **4.3.3** Wire up download → USB write pipeline — BLOCKED on 4.3.2
+    - getprocess response format understood from login response capture:
+      `[type_flag] [00 00] [UUID(36B)] [context(4B)] [type_code] [URL_string]`
+    - Type codes: 0x03=SSE, 0x04=BROWSER, 0x02=FINGERPRINT, DOWNLOAD=TBD
+    - **BLOCKED**: content tree is empty because USB drive hasn't been synced from car recently
+    - Server compares senddevicestatus file list against known device state
+    - Once USB is synced from car: content appears → select → confirm → getprocess returns DOWNLOAD tasks
+  - [ ] **4.3.3** Wire up download → USB write pipeline — BLOCKED on 4.3.2 (needs fresh USB sync)
     - `DownloadManager.download()` for each content file (with resume + MD5 verify)
     - `installer.install_content()` — write content files + .stm shadow files
     - `installer.install_license()` — write .lyc + .lyc.md5 files
