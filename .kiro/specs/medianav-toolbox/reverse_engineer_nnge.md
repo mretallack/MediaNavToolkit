@@ -8,15 +8,43 @@ Find the 8-byte SnakeOil key (**Secret₃**) used to encrypt the body of `0x08`-
 
 ## Status
 
-**SOLVED (2026-04-18 15:30)** — Secret₃ = **tb_secret** (`3037636188661496` / `0x000ACAB6C9FB66F8`).
+**Secret₃ SOLVED (2026-04-18 15:30)** — Secret₃ = **tb_secret** (`3037636188661496`).
 
-The investigation was blocked for 24+ hours by two compounding errors:
-1. **Wrong body offset**: Assumed body at offset 35 (`16 header + 19 query`). Actual query length for 0x68 flows is **25 bytes** (header byte 12 = 0x19), so body starts at offset **41**.
-2. **Split encryption**: The 0x68 body is encrypted as **two separate SnakeOil streams**, not one continuous stream:
-   - **Stream 1**: `body[0:17]` — 17-byte delegation prefix, encrypted with fresh tb_secret PRNG
-   - **Stream 2**: `body[17:]` — standard senddevicestatus content, encrypted with **another fresh** tb_secret PRNG
+**Delegation prefix format CRACKED (2026-04-18 23:25)** — via Unicorn emulation of nngine.dll.
 
-Verified across all 0x68 flows (737, 754, 792): `snakeoil(body[17:], tb_secret)` → `D8 03 1E 40 0F DaciaAutomotive...` ✓
+### Summary of Findings
+
+**Wire encryption:**
+- 0x68 body starts at offset 41 (16B header + 25B query), NOT offset 35
+- Body is split-encrypted: `body[0:17]` + `body[17:]` each with fresh SnakeOil(tb_secret)
+- The 17-byte delegation prefix = `0x86 || HMAC-MD5(hu_secret_BE, binary_credential)`
+
+**Binary serialization (FUN_101a9930 — descriptor-based serializer):**
+```
+[1B presence] [8B hu_code BE] [8B tb_code BE] [4B timestamp BE] = 21 bytes
+```
+- Presence byte: 0xC4 for test credential (may vary with field state)
+- HMAC key: hu_secret in big-endian (8 bytes)
+- Timestamp: internal timer, converted to FILETIME via `(ts + 0x2B6109100) * 10M`
+
+**XML serialization (FUN_101b2c30 — wire protocol serializer):**
+```xml
+<DelegationRO>
+	<Type>TEMPORARY</Type>
+	<Delegator>{hu_code}</Delegator>
+	<Agent>{tb_code}</Agent>
+	<Timestamp>YYYY.MM.DD HH:MM:SS</Timestamp>
+</DelegationRO>
+```
+- Timestamp format: `%d.%02d.%02d %02d:%02d:%02d` via FileTimeToSystemTime
+
+**Unicorn emulation pipeline (analysis/unicorn_serialize3.py):**
+- Loads nngine.dll sections, patches 186 IAT entries
+- Hooks: malloc, realloc, free, FUN_101b2720 (printf), FileTimeToSystemTime
+- Initializes binary serializer (FUN_101b2910), serializes credential (FUN_101a9930)
+- Produces correct binary output verified against known field values
+
+**Remaining:** Verify presence byte against captured traffic. The 0xC4 value may depend on which credential fields are set. Need to test different field combinations or run FUN_101aa050 end-to-end.
 
 ## Known Values
 
@@ -2191,3 +2219,32 @@ HMAC-MD5(key=hu_secret_BE_8bytes, data=XML_string) → 16-byte credential name
 - Implement the timestamp conversion in Python (internal epoch → FILETIME → date string)
 - Build the complete prefix generation pipeline
 - Verify against captured flows
+
+
+---
+
+### 2026-04-18 24:00 — FUN_101a9930 produces BINARY, not XML — two different serializers!
+
+**Critical discovery: FUN_101a9930 and FUN_101b2c30 are DIFFERENT serializers!**
+
+| Function | Used by | Output | Format |
+|----------|---------|--------|--------|
+| FUN_101b2c30 | Wire protocol (FUN_10091bf0) | XML string | `<DelegationRO>...<Timestamp>YYYY.MM.DD HH:MM:SS</Timestamp>...</DelegationRO>` |
+| FUN_101a9930 | HMAC computation (FUN_101aa050) | Binary data | `[0xC4][hu_code 8B BE][tb_code 8B BE][timestamp 4B BE]` |
+
+**Binary format from FUN_101a9930 (21 bytes for test credential):**
+```
+C4                          # presence/type byte
+00 0B F2 85 69 BA CB 7C    # hu_code (big-endian 64-bit)
+00 0D 4E A6 5D 36 B9 8E    # tb_code (big-endian 64-bit)
+69 D4 BA 80                # timestamp (big-endian 32-bit)
+```
+
+**HMAC computation:**
+```
+HMAC-MD5(key=hu_secret_BE_8B, data=binary_from_FUN_101a9930) → 16-byte credential name
+```
+
+**Remaining issue:** ±30 day timestamp search found no HMAC match. The `0xC4` presence byte may vary depending on which credential fields are set. The real session credential may have different fields present than our test credential.
+
+**Next step:** Vary the credential field flags in Unicorn to find the correct `0xC4` value, or run FUN_101aa050 end-to-end to capture the exact binary output.

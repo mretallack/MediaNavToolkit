@@ -137,9 +137,57 @@ Header: `01 C2 C2 {auth_mode} 00 {code:8B} {service_minor} 00 00 {nonce} 3F`
 
 ### Name₃ Construction
 
-`Name₃ = 0xC4 || hu_code(8 bytes BE) || tb_code(7 bytes BE)`
+The 17-byte delegation prefix for 0x08-flag requests is built from an HMAC-MD5 of the binary-serialized credential.
 
-Used in the credential block for 0x08-flag requests.
+**Binary serialization (FUN_101a9930):**
+
+The credential is serialized by the descriptor-based serializer into a compact binary format:
+```
+[1B presence] [8B hu_code BE] [8B tb_code BE] [4B timestamp BE]
+```
+- Presence byte: encodes which credential fields are set (0xC4 for test credential with all fields)
+- hu_code: 64-bit big-endian (from delegator response)
+- tb_code: 64-bit big-endian (from delegator response)
+- timestamp: 32-bit big-endian internal timer value
+
+**HMAC computation (FUN_101aa050):**
+```
+key = hu_secret (8 bytes, big-endian)
+data = binary serialized credential (from FUN_101a9930)
+HMAC-MD5(key, data) → 16-byte credential name
+```
+
+**Delegation prefix:**
+```
+prefix = 0x86 || HMAC-MD5(hu_secret_BE, serialized_credential)
+```
+
+**Timestamp conversion:**
+
+The internal timestamp is converted to a Windows FILETIME for display:
+```python
+filetime = (internal_ts + 0x00000002B6109100) * 10_000_000
+```
+The offset `0x00000002B6109100` converts from the DLL's internal epoch to the Windows FILETIME epoch (100ns intervals since 1601-01-01).
+
+**Two serialization paths exist:**
+
+| Serializer | Function | Output | Used by |
+|-----------|----------|--------|---------|
+| Descriptor-based | FUN_101a9930 | Binary (presence + fields) | HMAC computation |
+| Wire protocol | FUN_101b2c30 | XML (`<DelegationRO>...`) | Wire protocol body |
+
+The XML serializer produces:
+```xml
+<DelegationRO>
+	<Type>TEMPORARY</Type>
+	<Delegator>{hu_code}</Delegator>
+	<Agent>{tb_code}</Agent>
+	<Timestamp>YYYY.MM.DD HH:MM:SS</Timestamp>
+</DelegationRO>
+```
+
+**Status:** Binary format confirmed via Unicorn emulation. Presence byte may vary with credential state — verification against captured traffic in progress.
 
 ---
 
@@ -268,7 +316,7 @@ The USB output must be byte-compatible with the original Toolbox:
 ## 9. Remaining Work
 
 ### Must Fix
-- **SendDeviceStatus body generation** — currently uses captured body replay. Now that we know Secret₃ = tb_secret, we can generate the body properly with correct encryption.
+- **Delegation prefix generation** — binary serializer format cracked (presence byte + hu_code + tb_code + timestamp in BE). Need to verify exact presence byte value against captured traffic. Unicorn emulation pipeline working end-to-end.
 - **R.10 SendDeviceStatus 409** — generated body returns 409. Need to match file list exactly.
 
 ### Must Implement

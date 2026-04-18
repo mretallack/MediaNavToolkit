@@ -195,10 +195,12 @@ RANDOM mode seed generation:
 
 - [ ] **4.3** Wire up `medianav-toolbox sync` command — **THE MAIN REMAINING WORK**
   - [x] **4.3.1** Fix senddevicestatus body generation (replace captured replay with generated body)
-    - 0x60 body: generated from USB file scan (`scan_device_files()` in device.py)
-    - Re-encrypted 0x60 body returns HTTP 200 from live server ✓
-    - 0x68 body: encryption solved (tb_secret, split pattern), body construction needs delegation prefix
-    - 0x68 delegation prefix: 17 bytes `[0x86][16B session data]` — must be built from current delegator response
+    - 0x60 body: generated from USB file scan (`scan_device_files()` in device.py), HTTP 200 ✓
+    - 0x68 body: encryption solved (tb_secret, split pattern), delegation prefix format cracked
+    - Delegation prefix = `0x86 || HMAC-MD5(hu_secret_BE, binary_credential)`
+    - Binary credential: `[presence_byte][hu_code 8B BE][tb_code 8B BE][timestamp 4B BE]`
+    - Unicorn emulation (analysis/unicorn_serialize3.py) produces correct binary output
+    - **Remaining:** verify presence byte (0xC4 in test) against real captured session
     - 205 unit tests passing
   - [ ] **4.3.2** Wire up content selection → download URL retrieval
     - R.9 is RESOLVED — encryption is no longer a blocker
@@ -253,8 +255,19 @@ RANDOM mode seed generation:
   - Body is split-encrypted: `body[0:17]` + `body[17:]` each with fresh SnakeOil(tb_secret)
   - The 17-byte delegation prefix starts with `0x86` (presence bitmask)
   - Re-encrypted 0x60 body returns HTTP 200 from live server ✓
-  - See [reverse_engineer_nnge.md](reverse_engineer_nnge.md) for full details
-- [x] **R.10** ~~SendDeviceStatus body generation~~ — **RESOLVED (0x60 only)**
+  - **Delegation prefix format cracked via Unicorn emulation:**
+    - `prefix = 0x86 || HMAC-MD5(hu_secret_BE, binary_serialized_credential)`
+    - Binary serialization (FUN_101a9930): `[presence_byte][hu_code 8B BE][tb_code 8B BE][timestamp 4B BE]`
+    - HMAC key: hu_secret (8 bytes, big-endian)
+    - Timestamp: internal timer value, converted to FILETIME via `(ts + 0x2B6109100) * 10M`
+    - Two serializers discovered: FUN_101a9930 (binary, for HMAC) vs FUN_101b2c30 (XML, for wire)
+    - Unicorn emulation runs 3000+ instructions, produces correct binary output
+    - **Remaining:** verify presence byte value against captured traffic (0xC4 for test, may differ)
+  - See [reverse_engineer_nnge.md](reverse_engineer_nnge.md) for full Unicorn analysis
+- [x] **R.10** ~~SendDeviceStatus body generation~~ — **RESOLVED (0x60 fully, 0x68 in progress)**
   - 0x60 body: generated from USB file scan, matches captured traffic byte-for-byte
-  - 0x68 body: still raw replay (blocked on R.9 — Secret₃ unknown)
+  - 0x68 body: encryption solved (tb_secret, split pattern), delegation prefix format cracked
+  - Delegation prefix = `0x86 || HMAC-MD5(hu_secret_BE, binary_credential)`
+  - Binary credential = `[presence][hu_code BE][tb_code BE][timestamp BE]` (21 bytes)
+  - **Remaining:** verify presence byte and timestamp against captured traffic
   - Body format fully decoded: bitmask + device info + content metadata + file entries + trailer
