@@ -135,9 +135,27 @@ Header: `01 C2 C2 {auth_mode} 00 {code:8B} {service_minor} 00 00 {nonce} 3F`
 - `0x68` = `0x20 | 0x40 | 0x08` — delegated device request
 - **Both use tb_secret for body encryption** (no key difference)
 
-### Name₃ Construction
+### Name₃ Construction — FULLY CRACKED
 
-The 17-byte delegation prefix for 0x08-flag requests is built from an HMAC-MD5 of the binary-serialized credential.
+**Name₃ = `0xC4 || hu_code(8 bytes BE) || tb_code(7 bytes BE)`**
+
+This is a direct concatenation (16 bytes total), NOT an HMAC:
+- `0xC4` = type tag (constant)
+- `hu_code` = 8 bytes, big-endian (from delegator response)
+- `tb_code` = first 7 bytes, big-endian (from registration response)
+
+The credential block in the query is: `0xD8 || (Name₃ XOR IGO_CREDENTIAL_KEY)`
+
+Verified against all captured 0x68 flows (737, 754, 792). ✓
+
+### Delegation Prefix (0x68 body prefix)
+
+The 17-byte delegation prefix in the body of 0x68 requests:
+```
+prefix = 0x86 || prefix_data(16 bytes)
+```
+
+The `prefix_data` changes per request (different for flows 737, 754, 792). It is computed from the binary-serialized credential via HMAC-MD5.
 
 **Binary serialization (FUN_101a9930):**
 
