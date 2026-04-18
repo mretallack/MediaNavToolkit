@@ -265,93 +265,37 @@ struct.pack_into('<I',cd,0x30,0x69D4BA80); struct.pack_into('<I',cd,0x34,1)
 struct.pack_into('<I',cd,0x40,3); cd[0x44]=1
 uc.mem_write(cred,bytes(cd))
 
-# Serialize — call FUN_101a9930 (the HMAC serializer, not FUN_101b2c30)
-# FUN_101a9930 is thiscall: ECX = credential vtable2, stack arg = output buffer
-# It requires the binary serializer to be active as thread-local.
-# We set up the serializer in step 1 (FUN_101b2910).
-# The serializer is stored at ser_obj. We need to make it the "active" serializer.
-# The active serializer is accessed via thread-local storage.
-# FUN_101b26a0 reads it from TLS.
-# Let me store the serializer pointer in TLS.
+# Serialize — call FUN_101a9930 (the HMAC serializer)
+# thiscall: ECX = cred+8 (vtable2), stack arg = output buffer
+# Output buffer: 20 bytes initialized to zeros with version=0x0101 at offset 16
+out_buf = ha(32)
+uc.mem_write(out_buf + 16, struct.pack('<H', 0x0101))
 
-# The TLS slot has the serializer at some offset.
-# From FUN_101b26a0: lea edi,[ecx+8]; call FUN_101bd8d0
-# ECX is the serializer object. But how does FUN_101b26a0 get ECX?
-# It's called as thiscall — ECX is passed by the caller.
-# The caller is the field serializer which gets ECX from... the active serializer.
-
-# Actually, looking at the call chain:
-# FUN_101a9930 → vtable[2] → FUN_101a8e80 → FUN_101a9da0 (field iterator)
-# The field iterator calls the field's write function.
-# The write function calls FUN_101b26a0 with ECX = serializer.
-# But where does the serializer come from?
-
-# In the normal flow (FUN_10091bf0):
-# The serializer is created on the stack and passed to FUN_101b2c30.
-# FUN_101b2c30 stores it somewhere accessible.
-
-# In FUN_101aa050:
-# FUN_101a9930 is called with the output buffer.
-# The output buffer has version=0x0101.
-# FUN_101a9930 calls FUN_101b3f20(version) which processes the version.
-# Then it calls vtable[7] (prepare) and vtable[2] (serialize).
-
-# The serialize function needs to write to the output buffer.
-# But the output buffer is NOT a serializer — it's a simple struct.
-# The serialize function writes to the ACTIVE serializer (thread-local).
-
-# So I need to store ser_obj in TLS before calling FUN_101a9930.
-# The TLS offset for the serializer is... unknown.
-# Let me check what FUN_101b2c30 does to make the serializer active.
-
-# Actually, FUN_101b2c30 doesn't store the serializer in TLS.
-# It passes the serializer as ECX (thiscall) to the serialize function.
-# The serialize function (vtable[0x38]) receives ECX = serializer.
-
-# But FUN_101a9930 calls vtable[2] on the DESCRIPTOR, not on the serializer.
-# The descriptor's vtable[2] = FUN_101a8e80 which calls FUN_101a9da0.
-# FUN_101a9da0 iterates fields and calls field serializers.
-# The field serializers need the active serializer.
-
-# The active serializer is passed through the call chain via ECX or stack.
-# Let me check: FUN_101a8e80 receives what as ECX?
-
-# FUN_101a9930 calls: (*vtable[2])(param_1, param_2, &local_10)
-# This is a thiscall on the descriptor. ECX = descriptor.
-# param_1 = credential vtable2 (the object being serialized)
-# param_2 = output buffer
-# &local_10 = version info
-
-# So FUN_101a8e80 receives ECX = descriptor, not the serializer.
-# The serializer is NOT passed to the serialize function!
-# The serialize function must get the serializer from somewhere else.
-
-# This means the serializer IS stored in a global or TLS variable.
-# FUN_101b2c30 stores it before calling FUN_101a9930.
-
-# Let me check FUN_101b2c30 more carefully:
 esp=0x5FF000
-uc.reg_write(UC_X86_REG_ECX,so)
-esp-=4; uc.mem_write(esp,struct.pack('<I',0))
-esp-=4; uc.mem_write(esp,struct.pack('<I',0))
-esp-=4; uc.mem_write(esp,struct.pack('<I',cred+8))
-esp-=4; uc.mem_write(esp,struct.pack('<I',END))
-uc.reg_write(UC_X86_REG_ESP,esp); uc.reg_write(UC_X86_REG_EBP,esp+0x200)
+uc.reg_write(UC_X86_REG_ECX, cred+8)
+# Push output buffer as arg, then return address
+esp-=4; uc.mem_write(esp, struct.pack('<I', out_buf))
+esp-=4; uc.mem_write(esp, struct.pack('<I', END))
+uc.reg_write(UC_X86_REG_ESP, esp); uc.reg_write(UC_X86_REG_EBP, esp+0x200)
 cnt[0]=0
 
 try:
-    uc.emu_start(IB+0x1B2C30, END, timeout=120000000)
+    uc.emu_start(IB+0x1A9930, END, timeout=120000000)
     print(f'COMPLETED ({cnt[0]} insns)')
 except UcError as e:
     eip=uc.reg_read(UC_X86_REG_EIP)
     print(f'Crash at rva 0x{eip-IB:X} after {cnt[0]}: {e}')
 
-sp = struct.unpack('<I', bytes(uc.mem_read(so+8, 4)))[0]
-sl = struct.unpack('<I', bytes(uc.mem_read(sp-0xC, 4)))[0]
-print(f'\nXML ({sl}B):')
-if 0 < sl < 10000:
-    data = bytes(uc.mem_read(sp, sl))
-    print(data.decode('ascii', errors='replace'))
+ob = bytes(uc.mem_read(out_buf, 20))
+data_ptr = struct.unpack_from('<I', ob, 0)[0]
+data_len = struct.unpack_from('<I', ob, 8)[0]
+print(f'\nOutput: ptr=0x{data_ptr:08X} len={data_len}')
+print(f'Buffer: {ob.hex()}')
+if data_ptr and 0 < data_len < 10000:
+    data = bytes(uc.mem_read(data_ptr, data_len))
+    print(f'Data ({data_len}B): {data.hex()}')
+    try: print(f'ASCII: {data.decode("ascii")}')
+    except: pass
     h = hmac.new(b'\x00\x0E\xE8\x7C\x16\xB1\xE8\x12', data, hashlib.md5).digest()
     print(f'\nHMAC: {h.hex()}')
     print(f'Want: ad35bcc12654b893f7b5596a8057190c')
