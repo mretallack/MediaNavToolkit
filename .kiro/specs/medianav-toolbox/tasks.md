@@ -15,7 +15,7 @@ The protocol has been fully reverse-engineered and verified against the live ser
 - Delegator: **working** — returns head unit credentials
 - **Secret₃ unknown** — 0x68 body encryption key not yet found; 0x60 body generation working (R.9 OPEN)
 - **.lyc decryption: solved** — RSA 2048-bit + XOR-CBC, public key extracted (R.2 RESOLVED)
-- **Remaining**: `sync` command (4.3) — download content and write to USB
+- **Remaining**: `sync` command (4.3) — **BLOCKED on Secret₃** (R.9). 0x68 senddevicestatus required for content access.
 
 ---
 
@@ -198,9 +198,12 @@ RANDOM mode seed generation:
     - Generated body matches captured flow 735 byte-for-byte
     - 0x68 body: still raw replay (Secret₃ unknown, see R.9/T13-T15)
     - 205 unit tests passing
-  - [ ] **4.3.2** Wire up content selection → download URL retrieval
-    - `web_login()` → `get_content_tree()` → user selects → `confirm_selection()`
-    - `getprocess` wire call → extract download task list with URLs
+  - [ ] **4.3.2** Wire up content selection → download URL retrieval — **BLOCKED on R.9**
+    - Content tree requires BOTH 0x60 AND 0x68 senddevicestatus to return 200
+    - 0x60 replay works (200), but alone is insufficient — server returns empty content tree
+    - 0x68 captured replay is now stale (returns 409)
+    - 0x68 body generation blocked on Secret₃ (unknown encryption key)
+    - Once Secret₃ is found: confirm_selection → getprocess → extract download URLs
   - [ ] **4.3.3** Wire up download → USB write pipeline
     - `DownloadManager.download()` for each content file (with resume + MD5 verify)
     - `installer.install_content()` — write content files + .stm shadow files
