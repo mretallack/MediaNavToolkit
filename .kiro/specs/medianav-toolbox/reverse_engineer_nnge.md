@@ -2084,3 +2084,110 @@ To reproduce it, we need to:
 4. **mitmproxy capture** — run the Windows Toolbox and capture a fresh 0x68 request, then replay within the 300-second MaxAge window
 
 Option 4 is the fastest path to a working end-to-end test. Options 1-3 are needed for the permanent solution.
+
+
+---
+
+### 2026-04-18 22:00 — Unicorn breakthrough: serializer runs 707K instructions, XML format discovered
+
+**Unicorn emulation setup (analysis/unicorn_serialize2.py):**
+- Loaded all DLL sections (.text, .rdata, .data) at image base 0x10000000
+- Hooked: malloc (0x27E4F5), realloc (0x2839F9), free (0x2839D1/0x27DFE8)
+- Patched 186 IAT entries with ret stubs for Windows API functions
+- Fixed security cookie: 0xBB40E64E (from PE load config, not arbitrary)
+- TLS setup: page 0 mapped for FS:[0x2C] access, TLS array + slot allocated
+- Hooked encoded pointer decode (0x29D7DD) to return RET stub
+- Pre-mapped high addresses (0x70000000, 0x77770000, 0xEFFFF000) for stray calls
+
+**Step 1: FUN_101b2910 (serializer init) — 156 instructions, SUCCESS**
+- Sets vtable to 0x102D8D68 (binary serializer)
+- Calls FUN_101babb0 (stream init: sets vtable 0x102D9154)
+- Calls FUN_101ba780 (buffer alloc: 0x1000 bytes)
+- Calls FUN_101bb9c0 (stream position: set to 0)
+- Key fix: `ret 8` calling convention — needed 2 dummy stack args
+
+**Step 2: FUN_101b2c30 (serialize credential) — 707,905 instructions, CRASH at 0x301396**
+- Crash: encoded function pointer decode produces invalid address
+- The DLL uses `__security_check_cookie` to encode/decode function pointers
+- Without DllMain, the encoded pointer table at 0x1032C2C0 is not initialized
+- Crash happens AFTER the serializer has done its work (707K insns is substantial)
+
+**XML serialization discovered in heap at 0x01001DF0:**
+```xml
+<DelegationRO>
+	<Type>TEMPORARY</Type>
+	<Delegator>3362879562238844</Delegator>
+	<Agent>3745651132643726</Agent>
+	<Timestamp>[truncated - crash before value written]
+</DelegationRO>
+```
+
+- `Delegator` = hu_code (3362879562238844)
+- `Agent` = tb_code (3745651132643726)
+- `Type` = TEMPORARY
+- `Timestamp` = per-request timestamp from FUN_101d2630()
+
+**This XML is the TEXT serialization (for debug logging), NOT the HMAC input.**
+The binary serializer writes to a SEPARATE buffer. The HMAC input is the binary serialized data.
+
+**Heap buffer structure at 0x01001DF0:**
+```
+[4B: length=0x7D=125] [4B: 0] [4B: capacity=0x10000000] [4B: flags=1]
+[125B: XML text data]
+```
+
+**Raw credential data found at 0x01002E10:**
+```
+01000000 01000000 7CCBBA69 85F20B00  (flags, flags, hu_code_lo, hu_code_hi)
+01000000 8EB9365D A64E0D00 01000000  (flag, tb_code_lo, tb_code_hi, flag)
+80BAD469 01000000 88952B10 00000000  (timestamp, flag, vtable3, 0)
+03000000 01000000 00000000 00000000  (mode=3, flag, name_ptr=0, name_len=0)
+```
+
+**HMAC brute-force with XML format — NO MATCH** in timestamp range 1776320000-1776350000.
+This confirms the HMAC input is the BINARY serialized data, not the XML.
+
+**Next: Find the binary serialized output in the heap, or fix the crash to let the serializer complete and write the output buffer.**
+
+
+---
+
+### 2026-04-18 23:25 — SERIALIZER CRACKED: Complete XML format with FileTimeToSystemTime
+
+**The igo-binary serializer produces XML, not binary data!**
+
+The HMAC input for the delegation credential is an XML string:
+```xml
+<DelegationRO>
+	<Type>TEMPORARY</Type>
+	<Delegator>{hu_code}</Delegator>
+	<Agent>{tb_code}</Agent>
+	<Timestamp>YYYY.MM.DD HH:MM:SS</Timestamp>
+</DelegationRO>
+```
+
+**Key discoveries:**
+1. `FUN_101b2720` is a `printf`-like format writer (uses `%.*s`, `%I64d`, `%d.%02d.%02d %02d:%02d:%02d`)
+2. The timestamp is converted via `FileTimeToSystemTime` (Windows API)
+3. The DLL's internal timestamp is converted to FILETIME by adding `0x0000000200000000B6109100` (a fixed epoch offset)
+4. The format is `YYYY.MM.DD HH:MM:SS` (year without padding, month/day/hour/min/sec zero-padded to 2 digits)
+
+**Unicorn hooks that made it work:**
+- `FUN_101b2720` → Python printf implementation (handles `%.*s`, `%s`, `%d`, `%02d`, `%I64d`)
+- `FileTimeToSystemTime` → Python datetime conversion
+- `FUN_1027E4F5` → malloc
+- `FUN_102839F9` → realloc
+- All other IAT entries → `xor eax,eax; ret 4` stubs
+
+**HMAC computation:**
+```
+HMAC-MD5(key=hu_secret_BE_8bytes, data=XML_string) → 16-byte credential name
+```
+
+**The 17-byte delegation prefix is: `0x86` + HMAC-MD5 of the XML string.**
+
+**Remaining work:**
+- Determine the real session timestamp from the captured traffic
+- Implement the timestamp conversion in Python (internal epoch → FILETIME → date string)
+- Build the complete prefix generation pipeline
+- Verify against captured flows

@@ -265,7 +265,71 @@ struct.pack_into('<I',cd,0x30,0x69D4BA80); struct.pack_into('<I',cd,0x34,1)
 struct.pack_into('<I',cd,0x40,3); cd[0x44]=1
 uc.mem_write(cred,bytes(cd))
 
-# Serialize
+# Serialize — call FUN_101a9930 (the HMAC serializer, not FUN_101b2c30)
+# FUN_101a9930 is thiscall: ECX = credential vtable2, stack arg = output buffer
+# It requires the binary serializer to be active as thread-local.
+# We set up the serializer in step 1 (FUN_101b2910).
+# The serializer is stored at ser_obj. We need to make it the "active" serializer.
+# The active serializer is accessed via thread-local storage.
+# FUN_101b26a0 reads it from TLS.
+# Let me store the serializer pointer in TLS.
+
+# The TLS slot has the serializer at some offset.
+# From FUN_101b26a0: lea edi,[ecx+8]; call FUN_101bd8d0
+# ECX is the serializer object. But how does FUN_101b26a0 get ECX?
+# It's called as thiscall — ECX is passed by the caller.
+# The caller is the field serializer which gets ECX from... the active serializer.
+
+# Actually, looking at the call chain:
+# FUN_101a9930 → vtable[2] → FUN_101a8e80 → FUN_101a9da0 (field iterator)
+# The field iterator calls the field's write function.
+# The write function calls FUN_101b26a0 with ECX = serializer.
+# But where does the serializer come from?
+
+# In the normal flow (FUN_10091bf0):
+# The serializer is created on the stack and passed to FUN_101b2c30.
+# FUN_101b2c30 stores it somewhere accessible.
+
+# In FUN_101aa050:
+# FUN_101a9930 is called with the output buffer.
+# The output buffer has version=0x0101.
+# FUN_101a9930 calls FUN_101b3f20(version) which processes the version.
+# Then it calls vtable[7] (prepare) and vtable[2] (serialize).
+
+# The serialize function needs to write to the output buffer.
+# But the output buffer is NOT a serializer — it's a simple struct.
+# The serialize function writes to the ACTIVE serializer (thread-local).
+
+# So I need to store ser_obj in TLS before calling FUN_101a9930.
+# The TLS offset for the serializer is... unknown.
+# Let me check what FUN_101b2c30 does to make the serializer active.
+
+# Actually, FUN_101b2c30 doesn't store the serializer in TLS.
+# It passes the serializer as ECX (thiscall) to the serialize function.
+# The serialize function (vtable[0x38]) receives ECX = serializer.
+
+# But FUN_101a9930 calls vtable[2] on the DESCRIPTOR, not on the serializer.
+# The descriptor's vtable[2] = FUN_101a8e80 which calls FUN_101a9da0.
+# FUN_101a9da0 iterates fields and calls field serializers.
+# The field serializers need the active serializer.
+
+# The active serializer is passed through the call chain via ECX or stack.
+# Let me check: FUN_101a8e80 receives what as ECX?
+
+# FUN_101a9930 calls: (*vtable[2])(param_1, param_2, &local_10)
+# This is a thiscall on the descriptor. ECX = descriptor.
+# param_1 = credential vtable2 (the object being serialized)
+# param_2 = output buffer
+# &local_10 = version info
+
+# So FUN_101a8e80 receives ECX = descriptor, not the serializer.
+# The serializer is NOT passed to the serialize function!
+# The serialize function must get the serializer from somewhere else.
+
+# This means the serializer IS stored in a global or TLS variable.
+# FUN_101b2c30 stores it before calling FUN_101a9930.
+
+# Let me check FUN_101b2c30 more carefully:
 esp=0x5FF000
 uc.reg_write(UC_X86_REG_ECX,so)
 esp-=4; uc.mem_write(esp,struct.pack('<I',0))
