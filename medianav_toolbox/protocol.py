@@ -8,6 +8,14 @@ Query and body are encrypted as SEPARATE SnakeOil streams:
   DEVICE mode: query uses Code, body uses Secret
 
 Ref: toolbox.md §2 (wire protocol), credential_encoding_notes.md
+
+Wire layout (DEVICE mode, sub-type 0x30):
+  Offset  0-15:  16B header (cleartext)
+  Offset 16-17:  SnakeOil(2B query, Code)       — counter + flags
+  Offset 18-34:  SnakeOil(17B ext_query, Secret) — credential block
+  Offset 35+:    SnakeOil(body, Secret)          — igo-binary payload
+
+The body key is always Secret (tb_secret) for ALL flows, pre- and post-delegation.
 """
 
 import os

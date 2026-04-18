@@ -61,7 +61,7 @@ Byte 12:     Service minor version (0x01=index, 0x0E=register, 0x19=market)
 Bytes 13-14: 0x00 0x00 (reserved)
 Byte 15:     Session nonce — random per-session byte, constant within a session
              (e.g. 0x3F, 0x67, 0x11 observed across different sessions)
-Byte 16+:    Encrypted payload starts here
+Byte 16+:    Encrypted payload starts here (2B query at 16, 17B ext_query at 18, body at 35)
 ```
 
 **CRITICAL: No Content-Type header.** Wire protocol requests must NOT include a
@@ -113,14 +113,31 @@ def snakeoil(data, key_lo, key_hi):
 Request payloads are split into **query** and **body**, each encrypted as a **separate SnakeOil stream** (independent PRNG state):
 
 ```
-Wire: [16B header] [SnakeOil(query, q_key)] [SnakeOil(body, b_key)]
+Wire layout:
+  Offset  0-15:  [16B header]                          — cleartext
+  Offset 16-17:  [SnakeOil(2B query, Code)]            — counter(1) + flags(1)
+  Offset 18-34:  [SnakeOil(17B extended_query, Secret)] — credential block or envelope data
+  Offset 35+:    [SnakeOil(body, Secret)]               — igo-binary request payload
 ```
 
-| Mode | Query contents | Query key | Body key |
-|------|---------------|-----------|----------|
-| RANDOM | counter(1) + flags(1) + envelope_data | random seed | random seed |
-| DEVICE (flags=0x20) | counter(1) + flags(1) + credential_block(17) | Code | **Secret** |
-| DEVICE (flags=0x60, JSESSIONID) | counter(1) + flags(1) | Code | **Secret** |
+**Key assignment (DEVICE mode, sub-type 0x30):**
+
+| Field | Offset | Size | SnakeOil key | Contents |
+|-------|--------|------|-------------|----------|
+| Header | 0-15 | 16B | (cleartext) | version, marker, sub-type, Code(BE), service minor, nonce |
+| Query | 16-17 | 2B | **Code** | counter(1) + flags(1) |
+| Extended query | 18-34 | 17B | **Secret** | credential block (0xD8 + credential name XOR IGO_CREDENTIAL_KEY) |
+| Body | 35+ | variable | **Secret** | igo-binary tagged request payload |
+
+**The body key is always Secret (tb_secret).** It does not change after delegation. The delegation only changes the query flags byte (0x60 → 0x68) to indicate a delegated credential is in use. All pre- and post-delegation flows use the same Secret for body encryption.
+
+**Query flags byte values:**
+| Flags | Meaning |
+|-------|---------|
+| 0x20 | Unauthenticated (no JSESSIONID) |
+| 0x28 | Unauthenticated, delegated |
+| 0x60 | Authenticated (has JSESSIONID) |
+| 0x68 | Authenticated, delegated |
 
 The body uses the **same igo-binary tagged format** as responses:
 - `0x80` = message envelope
@@ -128,18 +145,15 @@ The body uses the **same igo-binary tagged format** as responses:
 - Integers: `[0x01][LE32]` (int32), `[0x04][LE64]` (int64)
 - Arrays: `[count:1]` followed by count elements
 
-**This was the main R.6 blocker.** The body appeared as random data because we were decrypting query+body as a single stream. Once split correctly, the body is plaintext igo-binary.
-
-**Response**: payload at bytes 4+ encrypted as a single stream with response PRNG seed
+**Response**: payload at bytes 4+ encrypted as a single stream with Secret as PRNG seed.
 
 **Response header byte 3**: `0x6B` = RANDOM mode, `0xBC` = DEVICE mode
 
-**Verified decryptions (all 8 captured requests + responses):**
-- Boot request body → empty (envelope only) ✓
-- Register request body → BrandName, ModelName, Swid, Imei, etc. as plaintext ✓
-- Login request body → OperatingSystemName, AgentVersion, Language, etc. ✓
-- Fingerprint request body → device.nng data, paths, checksums ✓
-- Model list request body → array of 30 {Version, Id} pairs ✓
+**Verified decryptions (all 13 captured requests + responses from 2026-04-16 session):**
+- All 0x20 flows (login, hasActivatable, sendfingerprint) ✓
+- All 0x60 flows (senddevicestatus pre-delegation) ✓
+- All 0x68 flows (senddevicestatus, licenses, sendfingerprint post-delegation) ✓
+- All 0x28 flows (senddevicestatus unauthenticated delegated) ✓
 - All responses → igo-binary tagged format ✓
 
 ### XML Semantics (from decrypted http_dump)

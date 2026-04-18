@@ -85,15 +85,21 @@ The protocol has been fully reverse-engineered and verified against the live ser
 
 ### Key Protocol Findings (from Phase 1)
 
-Request payload format (after decryption):
-- RANDOM mode: `[counter 1B] [flags 1B] [body...]`
-- DEVICE mode: `[counter 1B] [flags 1B] [credentials 17B] [body...]`
+Request wire layout (after 16-byte cleartext header):
+```
+Offset 16-17:  SnakeOil(2B query, Code)       — counter(1) + flags(1)
+Offset 18-34:  SnakeOil(17B ext_query, Secret) — credential block
+Offset 35+:    SnakeOil(body, Secret)          — igo-binary request payload
+```
 
 PRNG seed per mode:
-- RANDOM requests: seed = key in wire header
-- DEVICE requests: seed = **Code** (header also contains Code)
+- RANDOM requests: seed = key in wire header (for all 3 segments)
+- DEVICE requests: Code for 2B query, **Secret for ext_query and body**
 - RANDOM responses: seed = same key as request
 - DEVICE responses: seed = **Secret**
+
+**Body key is always Secret (tb_secret) for ALL flows** — pre- and post-delegation.
+The delegation only changes the query flags byte (0x60 → 0x68), not the encryption key.
 
 Credential block encoding:
 - `credential_block = 0xD8 || (Name XOR 6935b733a33d02588bb55424260a2fb5)`
@@ -180,8 +186,7 @@ RANDOM mode seed generation:
   - `get_delegator_credentials()` in `register.py` — gets head unit Name/Code/Secret
   - Body format: same as register but header `0x1E`, serial instead of uniq_id
   - Two senddevicestatus calls needed: flow 735 (0x60) + flow 737 (0x68)
-  - **Workaround in place**: senddevicestatus uses captured body replay
-  - **Can now be fixed**: Secret₃ = tb_secret confirmed, so 0x68 bodies can be generated properly
+  - Body encryption: tb_secret for ALL flows (body at offset 35, ext_query at offset 18)
   - Catalog shows 31 items across 31 countries, 6.07 GB total, 7.18 GB available
 
 - [ ] **4.3** Wire up `medianav-toolbox sync` command — **THE MAIN REMAINING WORK**
