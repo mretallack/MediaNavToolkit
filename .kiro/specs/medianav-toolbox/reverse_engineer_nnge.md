@@ -1967,3 +1967,35 @@ Each call creates a fresh 0x58-byte credential with a fresh timestamp from `FUN_
 - Credential descriptor: 8 fields with names
 
 **Next: Execute FUN_101a9930 (igo-binary serializer) via Unicorn Engine to capture the exact serialized bytes for the credential sub-object. This will reveal the prefix format.**
+
+
+---
+
+### 2026-04-18 20:15 — Field structure decoded via Wine vtable traversal
+
+**Credential sub-object field structure (from Wine DLL vtable traversal):**
+
+| Field | Name | Sub-fields | Present in 0x86? |
+|-------|------|-----------|-----------------|
+| 0 | Type0 | Type, Delegator | No |
+| 1 | Type1 | Type, **Digest** | **Yes** (bit 1) |
+| 2 | Delegation | Delegation, **Mac** | **Yes** (bit 2) |
+| 3 | Credentials | Credentials, Device | No |
+| 4 | Version | Version, Value | No |
+| 5 | Fault | Fault, ServiceLevel | No |
+| 6 | Cellid | Cellid, Horizontal | No |
+| 7 | Elevation | Elevation | **Yes** (bit 7) |
+
+**The 17-byte prefix contains:**
+1. `0x86` — presence bitmask (fields 1, 2, 7)
+2. **Type1** value — contains a "Digest" (likely the HMAC-MD5 of the credential, 16 bytes)
+3. **Delegation** value — contains a "Mac" (authentication code)
+4. **Elevation** value — a simple value (timestamp?)
+
+**Key insight:** The "Digest" sub-field of Type1 is likely the per-request HMAC-MD5 name computed in `FUN_101aa050`. The "Mac" sub-field of Delegation is likely derived from the delegator response. These are cryptographic values that change per request.
+
+**The 16 data bytes are the igo-binary serialized form of these three fields.** The exact bit-level encoding depends on the serializer internals (variable-width fields in a bitstream). Need to either:
+1. Execute the serializer in Wine/Unicorn to capture exact output
+2. Reverse-engineer the bit-level encoding from the known field values
+
+**Next step:** Set up the global serializer registry in Wine and call `FUN_101a9930` on the credential object to capture the serialized output.
