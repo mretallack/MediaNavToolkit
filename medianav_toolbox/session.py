@@ -217,14 +217,19 @@ def _get_process(client, creds, session):
 
 
 def _send_device_status(client, creds, hu_creds, session, usb_path, device):
-    """Send device status — replays captured requests to establish device context.
+    """Send device status — two calls needed to establish device context.
 
-    Two senddevicestatus calls are needed:
-    1. Flow 735 (flags=0x60): re-encrypt captured body with current keys
-    2. Flow 737 (flags=0x68): raw replay (Secret₃ unknown)
+    1. Flow 735 (flags=0x60): 2B query + body (encrypted with Secret)
+    2. Flow 737 (flags=0x68): 25B query (Name₃) + 17B prefix + body (split encryption)
+
     Both are required for the web session to show content.
     """
     from medianav_toolbox.crypto import snakeoil
+    from medianav_toolbox.igo_serializer import (
+        build_credential_block,
+        build_delegation_name3,
+        build_delegation_prefix,
+    )
 
     base = Path(__file__).parent.parent / "analysis" / "flows_decoded" / "2026-04-16"
     cap1 = base / "735-senddevicestatus-req.bin"
@@ -233,12 +238,11 @@ def _send_device_status(client, creds, hu_creds, session, usb_path, device):
     if not cap1.exists() or not cap2.exists():
         return type("R", (), {"status_code": 0})()
 
-    # First call: re-encrypt captured body with our keys
+    # --- First call (0x60): 2B query, body at offset 18 ---
     wire1 = cap1.read_bytes()
     body1 = snakeoil(wire1[18:], creds.secret)
-    query = bytes([0xC5, 0x60])
-    wire = build_request(
-        query=query,
+    wire_0x60 = build_request(
+        query=bytes([0xC5, 0x60]),
         body=body1,
         service_minor=SVC_MARKET,
         code=creds.code,
@@ -246,16 +250,46 @@ def _send_device_status(client, creds, hu_creds, session, usb_path, device):
     )
     resp1 = client.post(
         f"{MARKET_BASE}/1/senddevicestatus",
-        content=wire,
+        content=wire_0x60,
         headers=_wire_headers(session),
     )
 
-    # Second call: raw replay (0x68 flags, Secret₃ unknown)
-    wire2_raw = cap2.read_bytes()
+    # --- Second call (0x68): 25B query + split-encrypted body ---
+    name3 = build_delegation_name3(hu_creds.code, creds.code)
+    name3_cred_block = build_credential_block(name3)
+
+    # Extract the extra 6 bytes from captured 0x68 query
+    wire2 = cap2.read_bytes()
+    captured_query = snakeoil(wire2[16:41], creds.code)
+    extra_6b = captured_query[19:25]
+
+    query_0x68 = bytes([0xC7, 0x68]) + name3_cred_block + extra_6b
+
+    # Build delegation prefix (17 bytes)
+    prefix = build_delegation_prefix(hu_creds.code, creds.code, hu_creds.secret)
+
+    # Decrypt body from captured flow (after 41B header+query + 17B prefix)
+    body2 = snakeoil(wire2[58:], creds.secret)
+
+    # Build wire: header + enc_query(25B) + enc_prefix(17B) + enc_body
+    import os
+    sid = os.urandom(1)[0] | 0x01
+    header = struct.pack(
+        ">BBBB Q B HB",
+        0x01, 0xC2, 0xC2, 0x30,
+        creds.code, SVC_MARKET, 0x0000, sid,
+    )
+    wire_0x68 = (
+        header
+        + snakeoil(query_0x68, creds.code)
+        + snakeoil(prefix, creds.secret)
+        + snakeoil(body2, creds.secret)
+    )
+
     resp2 = client.post(
         f"{MARKET_BASE}/1/senddevicestatus",
-        content=wire2_raw,
-        headers={**_wire_headers(session), "Content-Length": str(len(wire2_raw))},
+        content=wire_0x68,
+        headers=_wire_headers(session),
     )
 
     return resp2 if resp2.status_code == 200 else resp1

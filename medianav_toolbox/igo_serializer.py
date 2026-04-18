@@ -19,9 +19,75 @@ across multiple captured sessions.
 Ref: toolbox.md §2, functions.md (FUN_100b3a60)
 """
 
+import hmac
+import hashlib
 import struct
+import time
 
 IGO_CREDENTIAL_KEY = bytes.fromhex("6935b733a33d02588bb55424260a2fb5")
+
+
+def build_delegation_name3(hu_code: int, tb_code: int) -> bytes:
+    """Build the 16-byte Name₃ for delegated (0x08-flag) requests.
+
+    Name₃ = 0xC4 || hu_code(8 bytes BE) || tb_code(first 7 bytes BE)
+
+    Args:
+        hu_code: head unit Code from delegator response
+        tb_code: toolbox Code from registration response
+
+    Returns:
+        16-byte Name₃
+    """
+    return b"\xC4" + struct.pack(">Q", hu_code) + struct.pack(">Q", tb_code)[:7]
+
+
+def _serialize_credential_binary(hu_code: int, tb_code: int, timestamp: int) -> bytes:
+    """Serialize a delegation credential in igo-binary format.
+
+    Format: [presence 1B] [hu_code 8B BE] [tb_code 8B BE] [timestamp 4B BE]
+
+    The presence byte encodes the credential type (1) in bits 2-5,
+    plus flags for tb_code (bit 7) and timestamp (bit 6) presence.
+
+    Args:
+        hu_code: head unit Code
+        tb_code: toolbox Code
+        timestamp: internal timestamp (Unix seconds)
+
+    Returns:
+        21-byte binary serialized credential
+    """
+    presence = 0xC4  # type=1, tb_code present, timestamp present
+    return (
+        bytes([presence])
+        + struct.pack(">Q", hu_code)
+        + struct.pack(">Q", tb_code)
+        + struct.pack(">I", timestamp)
+    )
+
+
+def build_delegation_prefix(hu_code: int, tb_code: int, hu_secret: int) -> bytes:
+    """Build the 17-byte delegation prefix for 0x68 request bodies.
+
+    prefix = 0x86 || HMAC-MD5(hu_secret_BE, serialized_credential)
+
+    The serialized credential is the igo-binary format from FUN_101a9930:
+    [presence][hu_code 8B BE][tb_code 8B BE][timestamp 4B BE]
+
+    Args:
+        hu_code: head unit Code from delegator response
+        hu_secret: head unit Secret from delegator response
+        tb_code: toolbox Code from registration response
+
+    Returns:
+        17-byte delegation prefix
+    """
+    timestamp = int(time.time()) & 0xFFFFFFFF
+    data = _serialize_credential_binary(hu_code, tb_code, timestamp)
+    key = struct.pack(">Q", hu_secret)
+    hmac_result = hmac.new(key, data, hashlib.md5).digest()
+    return b"\x86" + hmac_result
 
 
 def build_credential_block(name_bytes: bytes) -> bytes:

@@ -2248,3 +2248,33 @@ HMAC-MD5(key=hu_secret_BE_8B, data=binary_from_FUN_101a9930) → 16-byte credent
 **Remaining issue:** ±30 day timestamp search found no HMAC match. The `0xC4` presence byte may vary depending on which credential fields are set. The real session credential may have different fields present than our test credential.
 
 **Next step:** Vary the credential field flags in Unicorn to find the correct `0xC4` value, or run FUN_101aa050 end-to-end to capture the exact binary output.
+
+
+---
+
+### 2026-04-18 22:10 — Live server test: 0x60=200, 0x68=409
+
+**Implemented and tested delegation prefix generation against live server.**
+
+**Python implementation:**
+- `build_delegation_name3(hu_code, tb_code)` → `0xC4 || hu_code(8B BE) || tb_code(7B BE)` ✓
+- `build_delegation_prefix(hu_code, tb_code, hu_secret)` → `0x86 || HMAC-MD5(hu_secret_BE, binary_credential)`
+- `_serialize_credential_binary()` → `[0xC4][hu_code 8B BE][tb_code 8B BE][timestamp 4B BE]`
+
+**Query format corrections:**
+- 0x60 query: only 2 bytes `[counter][flags]` — NO credential block. Body at offset 18.
+- 0x68 query: 25 bytes `[0xC7][0x68][D8 + Name₃ XOR IGO_KEY][extra 6B]`. Body at offset 41.
+- The 0x68 credential block contains **Name₃** (not tb_name).
+
+**Live server results:**
+- Login: 200 ✓
+- Delegator: code=3362879562238844, secret=4196269328295954 ✓
+- 0x60 senddevicestatus: **200** ✓
+- 0x68 senddevicestatus: **409** (Conflict) ✗
+
+**Analysis:** The 409 confirms the server parses and validates the delegation prefix. The HMAC in the prefix doesn't match what the server computes. The binary serialization format from FUN_101a9930 is slightly different from our implementation. The Unicorn produces `[0xC4][hu_code 8B BE][tb_code 8B BE][timestamp 4B BE]` = 21 bytes, but the exhaustive search (which DID complete for 0xC4 presence) found no matching timestamp. This means either:
+1. The presence byte is different in the real credential
+2. There are additional fields in the serialized data
+3. The timestamp encoding is different
+
+**Next:** Run FUN_101aa050 end-to-end in Unicorn to capture the exact binary output and HMAC computation.
