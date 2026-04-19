@@ -2363,3 +2363,43 @@ The XML serializer only outputs 4 fields (Type, Delegator, Agent, Timestamp) bec
 Our Unicorn credential object only has 4 fields populated. The real credential from FUN_101aa050 might have additional fields set (e.g., from the device manager's inner credential at `iVar5`), causing the binary serializer to produce a longer output with different presence bits.
 
 **Next step:** Map the 6 descriptor fields to the credential object layout. Determine which fields are populated by FUN_101aa050 and what data they contain. The `*(iVar5 + 0x10)` and `*(iVar5 + 0x18)` copies from the device manager might populate fields 4 and 5.
+
+
+---
+
+### 2026-04-19 09:15 — Raw replay also returns 409! Session-specific validation.
+
+**Critical finding: The captured 0x68 raw replay ALSO returns 409.**
+
+This means the 409 is NOT caused by our prefix HMAC being wrong. The server validates the ENTIRE 0x68 request against the CURRENT session's delegator credentials. The captured request from April 16 uses old hu_creds that don't match the current session.
+
+**Implications:**
+1. The prefix HMAC format might actually be correct — we can't tell from the 409 alone
+2. The body content must also match the current session (device status, file list, etc.)
+3. The query's Name₃ credential block must use the CURRENT hu_creds
+4. We need to generate the ENTIRE 0x68 request from scratch, not replay captured data
+
+**The 0x68 body** contains device status information (file list, content metadata). This is the SAME data as the 0x60 body but with the delegation prefix prepended. The 0x60 body works (returns 200), so we can reuse it for the 0x68 body.
+
+**Next step:** Generate the 0x68 request using:
+- Query: current Name₃ from current hu_creds
+- Prefix: generated HMAC (may or may not be correct)
+- Body: same body as the working 0x60 request
+
+
+---
+
+### 2026-04-19 09:30 — BREAKTHROUGH: Catalog works with just 0x60! 0x68 is optional!
+
+**The catalog endpoint returns content with ONLY the 0x60 senddevicestatus call.**
+
+Test result:
+- Login: 200 ✓
+- 0x60 senddevicestatus: 200 ✓
+- (NO 0x68 call)
+- Web login: 200 ✓
+- Catalog: **200 with 4 packages** ✓
+
+**The 0x68 senddevicestatus is NOT required for the catalog flow.** The 0x60 call alone establishes sufficient device context for the web session to show content.
+
+**Impact:** The delegation prefix HMAC investigation is no longer blocking. We can proceed with the full sync pipeline (content selection → download → install) using only the 0x60 flow. The 0x68 investigation can continue in parallel as a nice-to-have.
