@@ -135,17 +135,83 @@ Header: `01 C2 C2 {auth_mode} 00 {code:8B} {service_minor} 00 00 {nonce} 3F`
 - `0x68` = `0x20 | 0x40 | 0x08` — delegated device request
 - **Both use tb_secret for body encryption** (no key difference)
 
-### Name₃ Construction
+### Name₃ Construction — FULLY CRACKED
 
-`Name₃ = 0xC4 || hu_code(8 bytes BE) || tb_code(7 bytes BE)`
+**Name₃ = `0xC4 || hu_code(8 bytes BE) || tb_code(7 bytes BE)`**
 
-Used in the credential block for 0x08-flag requests.
+This is a direct concatenation (16 bytes total), NOT an HMAC:
+- `0xC4` = type tag (constant)
+- `hu_code` = 8 bytes, big-endian (from delegator response)
+- `tb_code` = first 7 bytes, big-endian (from registration response)
+
+The credential block in the query is: `0xD8 || (Name₃ XOR IGO_CREDENTIAL_KEY)`
+
+Verified against all captured 0x68 flows (737, 754, 792). ✓
+
+### Delegation Prefix (0x68 body prefix)
+
+The 17-byte delegation prefix in the body of 0x68 requests:
+```
+prefix = 0x86 || prefix_data(16 bytes)
+```
+
+The `prefix_data` changes per request (different for flows 737, 754, 792). It is computed from the binary-serialized credential via HMAC-MD5.
+
+**Binary serialization (FUN_101a9930):**
+
+The credential is serialized by the descriptor-based serializer into a compact binary format:
+```
+[1B presence] [8B hu_code BE] [8B tb_code BE] [4B timestamp BE]
+```
+- Presence byte: encodes which credential fields are set (0xC4 for test credential with all fields)
+- hu_code: 64-bit big-endian (from delegator response)
+- tb_code: 64-bit big-endian (from delegator response)
+- timestamp: 32-bit big-endian internal timer value
+
+**HMAC computation (FUN_101aa050):**
+```
+key = hu_secret (8 bytes, big-endian)
+data = binary serialized credential (from FUN_101a9930)
+HMAC-MD5(key, data) → 16-byte credential name
+```
+
+**Delegation prefix:**
+```
+prefix = 0x86 || HMAC-MD5(hu_secret_BE, serialized_credential)
+```
+
+**Timestamp conversion:**
+
+The internal timestamp is converted to a Windows FILETIME for display:
+```python
+filetime = (internal_ts + 0x00000002B6109100) * 10_000_000
+```
+The offset `0x00000002B6109100` converts from the DLL's internal epoch to the Windows FILETIME epoch (100ns intervals since 1601-01-01).
+
+**Two serialization paths exist:**
+
+| Serializer | Function | Output | Used by |
+|-----------|----------|--------|---------|
+| Descriptor-based | FUN_101a9930 | Binary (presence + fields) | HMAC computation |
+| Wire protocol | FUN_101b2c30 | XML (`<DelegationRO>...`) | Wire protocol body |
+
+The XML serializer produces:
+```xml
+<DelegationRO>
+	<Type>TEMPORARY</Type>
+	<Delegator>{hu_code}</Delegator>
+	<Agent>{tb_code}</Agent>
+	<Timestamp>YYYY.MM.DD HH:MM:SS</Timestamp>
+</DelegationRO>
+```
+
+**Status:** Binary format confirmed via Unicorn emulation. Presence byte may vary with credential state — verification against captured traffic in progress.
 
 ---
 
 ## 5. API Flow
 
-### Complete Session (12 steps)
+### Complete Session (10 steps)
 
 ```
 1. boot (RANDOM)           → service URL map
@@ -156,11 +222,14 @@ Used in the credential block for 0x08-flag requests.
 6. getprocess              → task list
 7. delegator (DEVICE)      → hu credentials (Name₂/Code₂/Secret₂)
 8. senddevicestatus (0x60) → device state accepted
-9. senddevicestatus (0x68) → delegated device state accepted
-10. web_login (form POST)  → browser session cookie
-11. catalog (web)          → available content list
-12. content selection (web)→ download URLs
+9. web_login (form POST)   → browser session cookie
+10. catalog (web)          → available content list
 ```
+
+**Note:** Step 9 (senddevicestatus 0x68) from the original Toolbox is **NOT required**.
+The catalog and download flow works with only the 0x60 call. The 0x68 delegated device
+status call uses a delegation prefix whose HMAC format has not been fully reversed.
+See R.11 in tasks.md for investigation status.
 
 ### Three Credential Sets
 
@@ -267,14 +336,18 @@ The USB output must be byte-compatible with the original Toolbox:
 
 ## 9. Remaining Work
 
-### Must Fix
-- **SendDeviceStatus body generation** — currently uses captured body replay. Now that we know Secret₃ = tb_secret, we can generate the body properly with correct encryption.
-- **R.10 SendDeviceStatus 409** — generated body returns 409. Need to match file list exactly.
-
 ### Must Implement
 - **4.3 `sync` command** — select content → confirm → download → write to USB
 - Wire up download URLs from `getprocess` to `DownloadManager`
 - Wire up `installer.py` to write downloaded content to USB
+
+### Not Blocking (0x68 investigation)
+- **R.11 Delegation prefix HMAC** — the 0x68 senddevicestatus is NOT required for catalog/download.
+  The 0x60 call alone returns 200 and the catalog shows content. The 0x68 delegation prefix
+  uses HMAC-MD5 of a binary-serialized credential, but the exact serialized format has not been
+  matched (exhaustive search of 5 format variants × 2^32 timestamps found no match). The
+  DelegationRO descriptor has 6 fields; our Unicorn credential only populates 4. The real
+  credential likely has additional fields from the device manager's runtime state.
 
 ### Nice to Have
 - **R.4 IMEI encoding** — understand the `x51x4Dx30x30x30x30x31` format

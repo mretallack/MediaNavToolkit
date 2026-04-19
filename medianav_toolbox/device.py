@@ -172,3 +172,64 @@ def read_installed_content(usb_path: Path) -> list[InstalledContent]:
     if not content_dir.is_dir():
         return []
     return [parse_stm_file(p) for p in sorted(content_dir.rglob("*.stm"))]
+
+
+def scan_device_files(usb_path: Path) -> list:
+    """Scan NaviSync directory and return DeviceFileEntry list for senddevicestatus.
+
+    Scans: NaviSync/CONTENT/brand.txt, NaviSync/license/ directory and all files in it.
+    Returns entries with MD5 hashes, sizes, and modification timestamps.
+    """
+    import hashlib
+    from medianav_toolbox.wire_codec import DeviceFileEntry
+
+    entries = []
+    navisync = usb_path / "NaviSync"
+    if not navisync.is_dir():
+        return entries
+
+    # brand.txt
+    brand_txt = navisync / "CONTENT" / "brand.txt"
+    if brand_txt.is_file():
+        data = brand_txt.read_bytes()
+        md5 = hashlib.md5(data).hexdigest().upper()
+        mtime_ms = int(brand_txt.stat().st_mtime * 1000)
+        entries.append(DeviceFileEntry(
+            md5=md5, filename="brand.txt", mount="primary",
+            path="NaviSync/CONTENT", size=len(data), modified_ms=mtime_ms,
+        ))
+
+    # license directory + files
+    license_dir = navisync / "license"
+    if license_dir.is_dir():
+        mtime_ms = int(license_dir.stat().st_mtime * 1000)
+        entries.append(DeviceFileEntry(
+            md5="", filename="license", mount="primary",
+            path="NaviSync", size=0, modified_ms=mtime_ms,
+        ))
+        for f in sorted(license_dir.iterdir()):
+            if f.is_file():
+                data = f.read_bytes()
+                md5 = hashlib.md5(data).hexdigest().upper()
+                mtime_ms = int(f.stat().st_mtime * 1000)
+                ctime_ms = int(f.stat().st_ctime * 1000)
+                entries.append(DeviceFileEntry(
+                    md5=md5, filename=f.name, mount="primary",
+                    path="NaviSync/license", size=len(data),
+                    modified_ms=mtime_ms, created_ms=ctime_ms,
+                ))
+
+    return entries
+
+
+def compute_overall_md5(usb_path: Path) -> str:
+    """Compute the overall MD5 for senddevicestatus from NaviSync files."""
+    import hashlib
+    h = hashlib.md5()
+    navisync = usb_path / "NaviSync"
+    if not navisync.is_dir():
+        return ""
+    for f in sorted(navisync.rglob("*")):
+        if f.is_file():
+            h.update(f.read_bytes())
+    return h.hexdigest().upper()

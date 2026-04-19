@@ -120,7 +120,21 @@ Wire: [16B header] [SnakeOil(query, q_key)] [SnakeOil(body, b_key)]
 |------|---------------|-----------|----------|
 | RANDOM | counter(1) + flags(1) + envelope_data | random seed | random seed |
 | DEVICE (flags=0x20) | counter(1) + flags(1) + credential_block(17) | Code | **Secret** |
-| DEVICE (flags=0x60, JSESSIONID) | counter(1) + flags(1) | Code | **Secret** |
+| DEVICE (flags=0x60) | counter(1) + flags(1) | Code | **Secret** |
+| DEVICE (flags=0x68) | counter(1) + flags(1) | Code | **Secret₃** (unknown, see R.9) |
+
+**Query flags byte values:**
+| Flags | Meaning |
+|-------|---------|
+| 0x20 | Unauthenticated (no JSESSIONID), query includes credential block |
+| 0x28 | Unauthenticated, delegated |
+| 0x60 | Authenticated (has JSESSIONID), query is 2 bytes only |
+| 0x68 | Authenticated, delegated |
+
+**Body offset depends on query size:**
+- flags=0x20: query = 19B (2B + 17B credential block), body at offset 35
+- flags=0x60: query = 2B, body at offset 18
+- flags=0x68: query = 2B, body at offset 18 (but encrypted with unknown Secret₃)
 
 The body uses the **same igo-binary tagged format** as responses:
 - `0x80` = message envelope
@@ -128,18 +142,14 @@ The body uses the **same igo-binary tagged format** as responses:
 - Integers: `[0x01][LE32]` (int32), `[0x04][LE64]` (int64)
 - Arrays: `[count:1]` followed by count elements
 
-**This was the main R.6 blocker.** The body appeared as random data because we were decrypting query+body as a single stream. Once split correctly, the body is plaintext igo-binary.
-
-**Response**: payload at bytes 4+ encrypted as a single stream with response PRNG seed
+**Response**: payload at bytes 4+ encrypted as a single stream with Secret as PRNG seed.
 
 **Response header byte 3**: `0x6B` = RANDOM mode, `0xBC` = DEVICE mode
 
-**Verified decryptions (all 8 captured requests + responses):**
-- Boot request body → empty (envelope only) ✓
-- Register request body → BrandName, ModelName, Swid, Imei, etc. as plaintext ✓
-- Login request body → OperatingSystemName, AgentVersion, Language, etc. ✓
-- Fingerprint request body → device.nng data, paths, checksums ✓
-- Model list request body → array of 30 {Version, Id} pairs ✓
+**Verified decryptions:**
+- All 0x20 flows (login, hasActivatable, sendfingerprint) — body at offset 35 with Secret ✓
+- All 0x60 flows (senddevicestatus pre-delegation) — body at offset 18 with Secret ✓
+- 0x68 flows — body encryption key unknown (Secret₃), currently replayed from capture
 - All responses → igo-binary tagged format ✓
 
 ### XML Semantics (from decrypted http_dump)

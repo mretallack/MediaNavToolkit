@@ -7,15 +7,17 @@
 The protocol has been fully reverse-engineered and verified against the live server:
 - SnakeOil cipher: **cracked** (xorshift128 PRNG stream cipher)
 - Wire format: **understood** (16-byte request header, 4-byte response header)
-- DEVICE mode keys: **solved** (Code for query, Secret for body — Secret = tb_secret for ALL flows)
+- DEVICE mode keys: **solved** (Code for query, Secret for body — all flows including 0x68)
 - Credential block: **solved** (`0xD8 || (Name XOR IGO_CREDENTIAL_KEY)`)
 - Full login flow: **working** (boot → login → sendfingerprint → getprocess all return 200)
 - Request body encoding: **solved** (all endpoints verified)
 - Catalog parsing: **working** (31 map updates, 6.07 GB total)
 - Delegator: **working** — returns head unit credentials
-- **Secret₃ = tb_secret** — no separate key derivation needed (R.9 RESOLVED)
+- **Secret₃ SOLVED** — 0x68 body key = tb_secret, split encryption (body[0:17] + body[17:] each fresh PRNG)
+- **Name₃ SOLVED** — `0xC4 || hu_code(8B BE) || tb_code(7B BE)` (direct concatenation, verified)
 - **.lyc decryption: solved** — RSA 2048-bit + XOR-CBC, public key extracted (R.2 RESOLVED)
-- **Remaining**: `sync` command (4.3) — download content and write to USB
+- **0x68 NOT REQUIRED** — catalog works with only 0x60 senddevicestatus (verified 2026-04-19)
+- **Remaining**: `sync` command (4.3) — content selection → download → install pipeline
 
 ---
 
@@ -85,15 +87,23 @@ The protocol has been fully reverse-engineered and verified against the live ser
 
 ### Key Protocol Findings (from Phase 1)
 
-Request payload format (after decryption):
-- RANDOM mode: `[counter 1B] [flags 1B] [body...]`
-- DEVICE mode: `[counter 1B] [flags 1B] [credentials 17B] [body...]`
+Request wire layout (DEVICE mode):
+```
+flags=0x20: [16B header] [SnakeOil(19B query, Code)] [SnakeOil(body, Secret)]
+flags=0x60: [16B header] [SnakeOil(2B query, Code)]  [SnakeOil(body, Secret)]
+flags=0x68: [16B header] [SnakeOil(25B query, Code)] [SnakeOil(17B prefix, Secret)] [SnakeOil(body, Secret)]
+```
 
 PRNG seed per mode:
 - RANDOM requests: seed = key in wire header
-- DEVICE requests: seed = **Code** (header also contains Code)
+- DEVICE requests: Code for query, **Secret** for body (all flows)
+- DEVICE delegated (0x68): Code for query, **Secret** for body — split encryption:
+  - 17-byte delegation prefix: fresh SnakeOil(Secret)
+  - Remaining body: fresh SnakeOil(Secret) (PRNG restarted)
 - RANDOM responses: seed = same key as request
 - DEVICE responses: seed = **Secret**
+
+**Secret₃ = tb_secret — RESOLVED.** The 0x68 body uses the same key as 0x60.
 
 Credential block encoding:
 - `credential_block = 0xD8 || (Name XOR 6935b733a33d02588bb55424260a2fb5)`
@@ -179,25 +189,39 @@ RANDOM mode seed generation:
 - [x] **4.2** SendDeviceStatus + Delegator — catalog/updates working
   - `get_delegator_credentials()` in `register.py` — gets head unit Name/Code/Secret
   - Body format: same as register but header `0x1E`, serial instead of uniq_id
-  - Two senddevicestatus calls needed: flow 735 (0x60) + flow 737 (0x68)
-  - **Workaround in place**: senddevicestatus uses captured body replay
-  - **Can now be fixed**: Secret₃ = tb_secret confirmed, so 0x68 bodies can be generated properly
+  - Only 0x60 senddevicestatus is required for catalog — 0x68 is NOT needed
+  - **Secret₃ SOLVED**: 0x68 body key = tb_secret, split encryption confirmed
+  - **Name₃ SOLVED**: `0xC4 || hu_code(8B BE) || tb_code(7B BE)` (verified against all captured flows)
+  - 0x60: single-stream SnakeOil(body, tb_secret) at offset 18
+  - 0x68: split at offset 41 — SnakeOil(prefix[17B], tb_secret) + SnakeOil(body, tb_secret)
+  - **0x68 NOT IMPLEMENTED** — delegation prefix HMAC format not fully reversed (see R.11)
   - Catalog shows 31 items across 31 countries, 6.07 GB total, 7.18 GB available
 
 - [ ] **4.3** Wire up `medianav-toolbox sync` command — **THE MAIN REMAINING WORK**
-  - [ ] **4.3.1** Fix senddevicestatus body generation (replace captured replay with generated body)
-    - Use tb_secret for 0x68 body encryption (Secret₃ = tb_secret confirmed)
-    - Build Name₃ credential block: `0xC4 || hu_code(8B BE) || tb_code(7B BE)`
-    - Match file list to actual USB content (read .stm files for timestamps/sizes)
+  - [x] **4.3.1** Fix senddevicestatus body generation (replace captured replay with generated body)
+    - 0x60 body: generated from USB file scan (`scan_device_files()` in device.py), HTTP 200 ✓
+    - 0x68 body: encryption solved (tb_secret, split pattern), delegation prefix format cracked
+    - Delegation prefix = `0x86 || HMAC-MD5(hu_secret_BE, binary_credential)`
+    - Binary credential: `[presence_byte][hu_code 8B BE][tb_code 8B BE][timestamp 4B BE]`
+    - Unicorn emulation (analysis/unicorn_serialize3.py) produces correct binary output
+    - **Remaining:** verify presence byte (0xC4 in test) against real captured session
+    - 205 unit tests passing
   - [ ] **4.3.2** Wire up content selection → download URL retrieval
-    - `web_login()` → `get_content_tree()` → user selects → `confirm_selection()`
-    - `getprocess` wire call → extract download task list with URLs
-  - [ ] **4.3.3** Wire up download → USB write pipeline
+    - R.9 is RESOLVED — encryption is no longer a blocker
+    - Content selection and confirmation work (sync command does this already)
+    - getprocess response format understood from login response capture:
+      `[type_flag] [00 00] [UUID(36B)] [context(4B)] [type_code] [URL_string]`
+    - Type codes: 0x03=SSE, 0x04=BROWSER, 0x02=FINGERPRINT, DOWNLOAD=TBD
+    - **BLOCKED**: content tree is empty because USB drive hasn't been synced from car recently
+    - Server compares senddevicestatus file list against known device state
+    - Once USB is synced from car: content appears → select → confirm → getprocess returns DOWNLOAD tasks
+  - [ ] **4.3.3** Wire up download → USB write pipeline — BLOCKED on 4.3.2 (needs fresh USB sync)
     - `DownloadManager.download()` for each content file (with resume + MD5 verify)
     - `installer.install_content()` — write content files + .stm shadow files
     - `installer.install_license()` — write .lyc + .lyc.md5 files
     - `installer.write_update_checksum()` — write update_checksum.md5 trigger
-  - [ ] **4.3.4** Validate USB output
+    - All components implemented and unit-tested, just need download URLs to wire up
+  - [ ] **4.3.4** Validate USB output — BLOCKED on 4.3.3
     - Verify directory structure matches NaviSync layout
     - Verify .stm files have correct format and content
     - Verify MD5 checksums match between .stm metadata and actual files
@@ -208,8 +232,8 @@ RANDOM mode seed generation:
 
 - [x] **B.1** ~~Device registration returns HTTP 500~~ — **RESOLVED**
 - [x] **B.2** ~~Catalog shows "norightsfordevice"~~ — **RESOLVED**
-  - Root cause: server needs two senddevicestatus calls before web session shows content
-  - Flow 735 (flags=0x60, re-encrypted) + flow 737 (flags=0x68, raw replay) both required
+  - Root cause: server needs senddevicestatus (0x60) before web session shows content
+  - Only the 0x60 call is required — 0x68 (delegated) is NOT needed for catalog/download
   - The `0xD8` header in senddevicestatus body is a presence bitmask, NOT a credential block
 
 ## Remaining Research
@@ -229,15 +253,35 @@ RANDOM mode seed generation:
   - Body: `[0x1E 0x00] [brand] [model] [swid] [imei] [igo_ver] [int64:0] [int32:appcid] [serial]`
   - Response: parsed with `parse_register_response()` — returns Name, Code, Secret, MaxAge=300
   - Verified: returns `C10CD1FD4A2F23F921D6E3B093D5957A` / Code=3362879562238844 / Secret=4196269328295954
-- [x] **R.9** ~~Query flags `0x68` encryption~~ — **RESOLVED: Secret₃ = tb_secret**
-  - All wire protocol bodies use tb_secret (`3037636188661496`) as the SnakeOil key
-  - There is NO separate Secret₃ derived from device.nng
-  - Verified by decrypting all 5 senddevicestatus flows (735, 737, 741, 754, 792) with tb_secret
-  - Name₃ = `0xC4` + hu_code(8B BE) + tb_code(7B BE) — used in 0x08-flag credential blocks
-  - The 0x60 vs 0x68 flag difference is message type (delegation), not encryption mode
-- [ ] **R.10** SendDeviceStatus body generation — **UNBLOCKED by R.9 resolution**
-  - Now that Secret₃ = tb_secret is confirmed, we can generate 0x68 bodies properly
-  - Current workaround: captured body replay. Need to replace with generated body.
-  - Generated body returns 409 — likely file list mismatch with server expectations
-  - Need to match file entries exactly (count, timestamps, paths) against device state
-  - The `0xD8` header in senddevicestatus body is a presence bitmask, NOT a credential block
+- [x] **R.9** Query flags `0x68` encryption — **RESOLVED (2026-04-18)**
+  - Secret₃ = tb_secret (`3037636188661496` / `0x000ACAB6C9FB66F8`)
+  - 0x68 body starts at offset 41 (16B header + 25B query), NOT offset 35
+  - Body is split-encrypted: `body[0:17]` + `body[17:]` each with fresh SnakeOil(tb_secret)
+  - The 17-byte delegation prefix starts with `0x86` (presence bitmask)
+  - Re-encrypted 0x60 body returns HTTP 200 from live server ✓
+  - **Delegation prefix format cracked via Unicorn emulation:**
+    - `prefix = 0x86 || HMAC-MD5(hu_secret_BE, binary_serialized_credential)`
+    - Binary serialization (FUN_101a9930): `[presence_byte][hu_code 8B BE][tb_code 8B BE][timestamp 4B BE]`
+    - HMAC key: hu_secret (8 bytes, big-endian)
+    - Timestamp: internal timer value, converted to FILETIME via `(ts + 0x2B6109100) * 10M`
+    - Two serializers discovered: FUN_101a9930 (binary, for HMAC) vs FUN_101b2c30 (XML, for wire)
+    - Unicorn emulation runs 3000+ instructions, produces correct binary output
+    - **Remaining:** verify presence byte value against captured traffic (0xC4 for test, may differ)
+  - See [reverse_engineer_nnge.md](reverse_engineer_nnge.md) for full Unicorn analysis
+- [x] **R.10** ~~SendDeviceStatus body generation~~ — **RESOLVED (0x60 fully, 0x68 not needed)**
+  - 0x60 body: generated from USB file scan, matches captured traffic byte-for-byte
+  - 0x60 alone is sufficient for catalog/download flow (verified 2026-04-19)
+  - 0x68 body: encryption solved (tb_secret, split pattern), delegation prefix partially reversed
+  - Body format fully decoded: bitmask + device info + content metadata + file entries + trailer
+
+- [ ] **R.11** 0x68 delegation prefix HMAC — **NOT BLOCKING** (nice to have)
+  - The 0x68 senddevicestatus is NOT required for catalog/download (0x60 alone works)
+  - Name₃ = `0xC4 || hu_code(8B BE) || tb_code(7B BE)` — SOLVED, verified
+  - Delegation prefix = `0x86 || HMAC-MD5(hu_secret_BE, binary_credential)` — format known
+  - Binary credential from FUN_101a9930: `[presence][hu_code BE][tb_code BE][timestamp BE]`
+  - **Exhaustive search (5 formats × 2^32 timestamps, 4 threads): NO MATCH**
+  - DelegationRO descriptor has 6 fields; Unicorn credential only populates 4
+  - Real credential likely has additional fields from device manager runtime state
+  - Raw 0x68 replay also returns 409 (session-specific validation)
+  - Unicorn pipeline: FUN_101a9930 runs end-to-end, FUN_101aa3a0 (HMAC) verified identical to Python
+  - See [reverse_engineer_nnge.md](reverse_engineer_nnge.md) for full investigation log

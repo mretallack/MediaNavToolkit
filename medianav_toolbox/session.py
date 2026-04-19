@@ -217,48 +217,55 @@ def _get_process(client, creds, session):
 
 
 def _send_device_status(client, creds, hu_creds, session, usb_path, device):
-    """Send device status — replays captured requests to establish device context.
+    """Send device status to establish device context for the web session.
 
-    Two senddevicestatus calls are needed:
-    1. Flow 735 (flags=0x60): device info + file listing, re-encrypted with our keys
-    2. Flow 737 (flags=0x68): raw replay (uses unknown encryption for body)
-    Both are required for the web session to show content.
+    Only the 0x60 senddevicestatus call is needed. The catalog and download
+    flow works without the 0x68 (delegated) call.
+
+    NOTE: 0x68 senddevicestatus is NOT IMPLEMENTED. The delegation prefix
+    uses HMAC-MD5 of a binary-serialized credential, but the exact serialized
+    format has not been fully reversed. Exhaustive search of 5 format variants
+    × 2^32 timestamps found no match. The DelegationRO descriptor has 6 fields
+    but our Unicorn credential only populates 4. See R.11 in tasks.md and
+    reverse_engineer_nnge.md for full investigation details.
     """
-    base = Path(__file__).parent.parent / "analysis" / "flows_decoded" / "2026-04-16"
-    cap1 = base / "735-senddevicestatus-req.bin"
-    cap2 = base / "737-senddevicestatus-req.bin"
-
-    if not cap1.exists() or not cap2.exists():
-        return type("R", (), {"status_code": 0})()
-
     from medianav_toolbox.crypto import snakeoil
 
-    # First call: re-encrypt captured body with our keys
+    base = Path(__file__).parent.parent / "analysis" / "flows_decoded" / "2026-04-16"
+    cap1 = base / "735-senddevicestatus-req.bin"
+
+    if not cap1.exists():
+        return type("R", (), {"status_code": 0})()
+
+    # 0x60 senddevicestatus: 2B query + body at offset 18
+    # This is sufficient for the catalog/download flow.
     wire1 = cap1.read_bytes()
     body1 = snakeoil(wire1[18:], creds.secret)
-    query = bytes([0xC5, 0x60])
-    wire = build_request(
-        query=query,
+    wire_0x60 = build_request(
+        query=bytes([0xC5, 0x60]),
         body=body1,
         service_minor=SVC_MARKET,
         code=creds.code,
         secret=creds.secret,
     )
-    resp1 = client.post(
+    resp = client.post(
         f"{MARKET_BASE}/1/senddevicestatus",
-        content=wire,
+        content=wire_0x60,
         headers=_wire_headers(session),
     )
 
-    # Second call: raw replay (0x68 flags, can't re-encrypt)
-    wire2_raw = cap2.read_bytes()
-    resp2 = client.post(
-        f"{MARKET_BASE}/1/senddevicestatus",
-        content=wire2_raw,
-        headers=_wire_headers(session),
-    )
+    # TODO(R.11): 0x68 senddevicestatus (delegated device status) is NOT implemented.
+    # The original Toolbox sends both 0x60 and 0x68, but the catalog works with
+    # only 0x60. The 0x68 call requires a delegation prefix whose HMAC format
+    # has not been fully reversed. Key findings so far:
+    #   - Name₃ = 0xC4 || hu_code(8B BE) || tb_code(7B BE) — SOLVED
+    #   - Secret₃ = tb_secret — SOLVED
+    #   - Split encryption: prefix(17B) + body each with fresh SnakeOil(tb_secret)
+    #   - Prefix = 0x86 || HMAC-MD5(hu_secret_BE, serialized_credential)
+    #   - Serialized credential format not fully matched (6-field descriptor)
+    # See: .kiro/specs/medianav-toolbox/reverse_engineer_nnge.md
 
-    return resp2 if resp2.status_code == 200 else resp1
+    return resp
 
 
 def _load_creds(usb_path: Path) -> DeviceCredentials | None:
