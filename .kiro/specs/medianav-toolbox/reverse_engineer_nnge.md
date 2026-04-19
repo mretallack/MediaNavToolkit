@@ -2278,3 +2278,88 @@ HMAC-MD5(key=hu_secret_BE_8B, data=binary_from_FUN_101a9930) → 16-byte credent
 3. The timestamp encoding is different
 
 **Next:** Run FUN_101aa050 end-to-end in Unicorn to capture the exact binary output and HMAC computation.
+
+
+---
+
+### 2026-04-19 07:35 — Exhaustive search + bitstream format analysis
+
+**Brute-force results (presence=0xC4, all 2^32 timestamps): NO MATCH.**
+
+This definitively proves the 21-byte format `[0xC4][hu_code 8B BE][tb_code 8B BE][timestamp 4B BE]` does NOT produce any of the 3 captured prefix HMACs for any possible timestamp value.
+
+**Running parallel search** of alternative formats (4 threads, ~35 min total):
+- `0x44` + hu_code + tb_code + timestamp (21B) — presence with even cred+0x2C
+- `0x44` + hu_code + timestamp (13B) — no tb_code
+- `0xC0` + hu_code + tb_code + timestamp (21B) — type=0
+- `0x07` + hu_code + tb_code + timestamp (21B) — version 0x0100 encoding
+- `0x84` + hu_code + tb_code (17B, no timestamp) — single HMAC check
+
+**Bitstream format decoded:**
+```
+Byte 0: [Agent_present:1][Timestamp_present:1][Type_value:4][padding:2]
+```
+- Version 0x0101 (used by real DLL): `0xC4` for type=1, agent=1, timestamp=1
+- Version 0x0100: `0x07` for same fields (different bit layout)
+
+**Verified correct:**
+- HMAC-MD5 implementation: Unicorn matches Python exactly ✓
+- HMAC key: hu_secret big-endian (traced byte-by-byte from SHRD instructions) ✓
+- Binary serializer output: 21 bytes confirmed by write trace ✓
+- Version field: 0x0101 confirmed from assembly at 0x1AA29F ✓
+
+**If parallel search also finds no match**, the remaining possibilities are:
+1. The data includes a version/length prefix we're not seeing
+2. The credential has additional sub-fields from a nested descriptor
+3. The serializer produces different output when called from within FUN_101aa050's full context
+
+
+---
+
+### 2026-04-19 08:30 — ALL exhaustive searches complete: NO MATCH
+
+**Tested 5 formats × 2^32 timestamps (4 threads, ~35 min total). Zero matches.**
+
+| Format | Presence | Length | Result |
+|--------|----------|--------|--------|
+| 0xC4 + hu + tb + ts | 0xC4 | 21B | NO MATCH |
+| 0x44 + hu + tb + ts | 0x44 | 21B | NO MATCH |
+| 0x44 + hu + ts | 0x44 | 13B | NO MATCH |
+| 0xC0 + hu + tb + ts | 0xC0 | 21B | NO MATCH |
+| 0x07 + hu + tb + ts | 0x07 | 21B | NO MATCH |
+| 0x84 + hu + tb (no ts) | 0x84 | 17B | NO MATCH (single check) |
+
+**Conclusion:** The binary format from our Unicorn emulation is **fundamentally different** from what the real DLL produces. The Unicorn's isolated FUN_101a9930 call produces `[presence][hu_code BE][tb_code BE][timestamp BE]`, but the real DLL must produce different data when called from within FUN_101aa050's full context.
+
+**Possible causes:**
+1. The credential object has additional sub-objects or nested descriptors that our simplified credential doesn't have
+2. The serializer's behavior depends on global state (thread-local serializer context, version negotiation)
+3. The descriptor vtable chain produces different field iteration when the full object graph is present
+4. The credential's vtable functions return different data than what we hardcoded
+
+**Next step:** Must run FUN_101aa050 end-to-end in Unicorn with proper device manager setup, or find a way to capture the exact HMAC input from the real DLL.
+
+
+---
+
+### 2026-04-19 08:45 — Parallel search complete + 6-field descriptor discovery
+
+**All 5 format variants exhaustively searched (4 threads). ZERO matches across all 2^32 timestamps.**
+
+**Critical discovery: The DelegationRO descriptor has 6 fields, not 4!**
+
+The serialization descriptor at `0x1030DE38` contains 6 field entries (12 bytes each):
+```
+Field 0: sub-descriptor at 0x102D0A10 (compound — has nested vtable)
+Field 1: sub-descriptor at 0x102D0AA0 (compound — has nested vtable)
+Field 2: sub-descriptor at 0x102D0AE8 (references DelegationRO itself — recursive?)
+Field 3: sub-descriptor at 0x102D0B30 (references another compound type)
+Field 4: sub-descriptor at 0x102D0C00 (compound — has nested vtable)
+Field 5: sub-descriptor at 0x102D0C60 (compound type)
+```
+
+The XML serializer only outputs 4 fields (Type, Delegator, Agent, Timestamp) because the other 2 are absent/null. But the binary serializer encodes presence bits for ALL 6 fields. With 6 fields, the presence bitmask is 6+ bits, which changes the first byte encoding.
+
+Our Unicorn credential object only has 4 fields populated. The real credential from FUN_101aa050 might have additional fields set (e.g., from the device manager's inner credential at `iVar5`), causing the binary serializer to produce a longer output with different presence bits.
+
+**Next step:** Map the 6 descriptor fields to the credential object layout. Determine which fields are populated by FUN_101aa050 and what data they contain. The `*(iVar5 + 0x10)` and `*(iVar5 + 0x18)` copies from the device manager might populate fields 4 and 5.
