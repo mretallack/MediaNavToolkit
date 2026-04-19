@@ -217,28 +217,28 @@ def _get_process(client, creds, session):
 
 
 def _send_device_status(client, creds, hu_creds, session, usb_path, device):
-    """Send device status — two calls needed to establish device context.
+    """Send device status to establish device context for the web session.
 
-    1. Flow 735 (flags=0x60): 2B query + body (encrypted with Secret)
-    2. Flow 737 (flags=0x68): 25B query (Name₃) + 17B prefix + body (split encryption)
+    Only the 0x60 senddevicestatus call is needed. The catalog and download
+    flow works without the 0x68 (delegated) call.
 
-    Both are required for the web session to show content.
+    NOTE: 0x68 senddevicestatus is NOT IMPLEMENTED. The delegation prefix
+    uses HMAC-MD5 of a binary-serialized credential, but the exact serialized
+    format has not been fully reversed. Exhaustive search of 5 format variants
+    × 2^32 timestamps found no match. The DelegationRO descriptor has 6 fields
+    but our Unicorn credential only populates 4. See R.11 in tasks.md and
+    reverse_engineer_nnge.md for full investigation details.
     """
     from medianav_toolbox.crypto import snakeoil
-    from medianav_toolbox.igo_serializer import (
-        build_credential_block,
-        build_delegation_name3,
-        build_delegation_prefix,
-    )
 
     base = Path(__file__).parent.parent / "analysis" / "flows_decoded" / "2026-04-16"
     cap1 = base / "735-senddevicestatus-req.bin"
-    cap2 = base / "737-senddevicestatus-req.bin"
 
-    if not cap1.exists() or not cap2.exists():
+    if not cap1.exists():
         return type("R", (), {"status_code": 0})()
 
-    # --- First call (0x60): 2B query, body at offset 18 ---
+    # 0x60 senddevicestatus: 2B query + body at offset 18
+    # This is sufficient for the catalog/download flow.
     wire1 = cap1.read_bytes()
     body1 = snakeoil(wire1[18:], creds.secret)
     wire_0x60 = build_request(
@@ -248,51 +248,24 @@ def _send_device_status(client, creds, hu_creds, session, usb_path, device):
         code=creds.code,
         secret=creds.secret,
     )
-    resp1 = client.post(
+    resp = client.post(
         f"{MARKET_BASE}/1/senddevicestatus",
         content=wire_0x60,
         headers=_wire_headers(session),
     )
 
-    # --- Second call (0x68): 25B query + split-encrypted body ---
-    name3 = build_delegation_name3(hu_creds.code, creds.code)
-    name3_cred_block = build_credential_block(name3)
+    # TODO(R.11): 0x68 senddevicestatus (delegated device status) is NOT implemented.
+    # The original Toolbox sends both 0x60 and 0x68, but the catalog works with
+    # only 0x60. The 0x68 call requires a delegation prefix whose HMAC format
+    # has not been fully reversed. Key findings so far:
+    #   - Name₃ = 0xC4 || hu_code(8B BE) || tb_code(7B BE) — SOLVED
+    #   - Secret₃ = tb_secret — SOLVED
+    #   - Split encryption: prefix(17B) + body each with fresh SnakeOil(tb_secret)
+    #   - Prefix = 0x86 || HMAC-MD5(hu_secret_BE, serialized_credential)
+    #   - Serialized credential format not fully matched (6-field descriptor)
+    # See: .kiro/specs/medianav-toolbox/reverse_engineer_nnge.md
 
-    # Extract the extra 6 bytes from captured 0x68 query
-    wire2 = cap2.read_bytes()
-    captured_query = snakeoil(wire2[16:41], creds.code)
-    extra_6b = captured_query[19:25]
-
-    query_0x68 = bytes([0xC7, 0x68]) + name3_cred_block + extra_6b
-
-    # Build delegation prefix (17 bytes)
-    prefix = build_delegation_prefix(hu_creds.code, creds.code, hu_creds.secret)
-
-    # Decrypt body from captured flow (after 41B header+query + 17B prefix)
-    body2 = snakeoil(wire2[58:], creds.secret)
-
-    # Build wire: header + enc_query(25B) + enc_prefix(17B) + enc_body
-    import os
-    sid = os.urandom(1)[0] | 0x01
-    header = struct.pack(
-        ">BBBB Q B HB",
-        0x01, 0xC2, 0xC2, 0x30,
-        creds.code, SVC_MARKET, 0x0000, sid,
-    )
-    wire_0x68 = (
-        header
-        + snakeoil(query_0x68, creds.code)
-        + snakeoil(prefix, creds.secret)
-        + snakeoil(body2, creds.secret)
-    )
-
-    resp2 = client.post(
-        f"{MARKET_BASE}/1/senddevicestatus",
-        content=wire_0x68,
-        headers=_wire_headers(session),
-    )
-
-    return resp2 if resp2.status_code == 200 else resp1
+    return resp
 
 
 def _load_creds(usb_path: Path) -> DeviceCredentials | None:

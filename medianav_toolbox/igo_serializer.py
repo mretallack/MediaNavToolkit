@@ -70,6 +70,16 @@ def _serialize_credential_binary(hu_code: int, tb_code: int, timestamp: int) -> 
 def build_delegation_prefix(hu_code: int, tb_code: int, hu_secret: int) -> bytes:
     """Build the 17-byte delegation prefix for 0x68 request bodies.
 
+    WARNING: NOT FULLY WORKING. The HMAC format has not been verified against
+    the live server. Exhaustive search of 5 binary format variants × 2^32
+    timestamps found no match. The DelegationRO descriptor has 6 fields but
+    this implementation only serializes 4. The real credential likely includes
+    additional fields from the device manager's runtime state.
+
+    The 0x68 senddevicestatus is NOT REQUIRED for catalog/download — the 0x60
+    call alone is sufficient. This function is kept for future investigation.
+    See R.11 in tasks.md and reverse_engineer_nnge.md.
+
     prefix = 0x86 || HMAC-MD5(hu_secret_BE, serialized_credential)
 
     The serialized credential is the igo-binary format from FUN_101a9930:

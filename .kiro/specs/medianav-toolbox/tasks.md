@@ -14,7 +14,9 @@ The protocol has been fully reverse-engineered and verified against the live ser
 - Catalog parsing: **working** (31 map updates, 6.07 GB total)
 - Delegator: **working** — returns head unit credentials
 - **Secret₃ SOLVED** — 0x68 body key = tb_secret, split encryption (body[0:17] + body[17:] each fresh PRNG)
+- **Name₃ SOLVED** — `0xC4 || hu_code(8B BE) || tb_code(7B BE)` (direct concatenation, verified)
 - **.lyc decryption: solved** — RSA 2048-bit + XOR-CBC, public key extracted (R.2 RESOLVED)
+- **0x68 NOT REQUIRED** — catalog works with only 0x60 senddevicestatus (verified 2026-04-19)
 - **Remaining**: `sync` command (4.3) — content selection → download → install pipeline
 
 ---
@@ -187,10 +189,12 @@ RANDOM mode seed generation:
 - [x] **4.2** SendDeviceStatus + Delegator — catalog/updates working
   - `get_delegator_credentials()` in `register.py` — gets head unit Name/Code/Secret
   - Body format: same as register but header `0x1E`, serial instead of uniq_id
-  - Two senddevicestatus calls needed: flow 735 (0x60) + flow 737 (0x68)
+  - Only 0x60 senddevicestatus is required for catalog — 0x68 is NOT needed
   - **Secret₃ SOLVED**: 0x68 body key = tb_secret, split encryption confirmed
+  - **Name₃ SOLVED**: `0xC4 || hu_code(8B BE) || tb_code(7B BE)` (verified against all captured flows)
   - 0x60: single-stream SnakeOil(body, tb_secret) at offset 18
   - 0x68: split at offset 41 — SnakeOil(prefix[17B], tb_secret) + SnakeOil(body, tb_secret)
+  - **0x68 NOT IMPLEMENTED** — delegation prefix HMAC format not fully reversed (see R.11)
   - Catalog shows 31 items across 31 countries, 6.07 GB total, 7.18 GB available
 
 - [ ] **4.3** Wire up `medianav-toolbox sync` command — **THE MAIN REMAINING WORK**
@@ -228,8 +232,8 @@ RANDOM mode seed generation:
 
 - [x] **B.1** ~~Device registration returns HTTP 500~~ — **RESOLVED**
 - [x] **B.2** ~~Catalog shows "norightsfordevice"~~ — **RESOLVED**
-  - Root cause: server needs two senddevicestatus calls before web session shows content
-  - Flow 735 (flags=0x60, re-encrypted) + flow 737 (flags=0x68, raw replay) both required
+  - Root cause: server needs senddevicestatus (0x60) before web session shows content
+  - Only the 0x60 call is required — 0x68 (delegated) is NOT needed for catalog/download
   - The `0xD8` header in senddevicestatus body is a presence bitmask, NOT a credential block
 
 ## Remaining Research
@@ -264,10 +268,20 @@ RANDOM mode seed generation:
     - Unicorn emulation runs 3000+ instructions, produces correct binary output
     - **Remaining:** verify presence byte value against captured traffic (0xC4 for test, may differ)
   - See [reverse_engineer_nnge.md](reverse_engineer_nnge.md) for full Unicorn analysis
-- [x] **R.10** ~~SendDeviceStatus body generation~~ — **RESOLVED (0x60 fully, 0x68 in progress)**
+- [x] **R.10** ~~SendDeviceStatus body generation~~ — **RESOLVED (0x60 fully, 0x68 not needed)**
   - 0x60 body: generated from USB file scan, matches captured traffic byte-for-byte
-  - 0x68 body: encryption solved (tb_secret, split pattern), delegation prefix format cracked
-  - Delegation prefix = `0x86 || HMAC-MD5(hu_secret_BE, binary_credential)`
-  - Binary credential = `[presence][hu_code BE][tb_code BE][timestamp BE]` (21 bytes)
-  - **Remaining:** verify presence byte and timestamp against captured traffic
+  - 0x60 alone is sufficient for catalog/download flow (verified 2026-04-19)
+  - 0x68 body: encryption solved (tb_secret, split pattern), delegation prefix partially reversed
   - Body format fully decoded: bitmask + device info + content metadata + file entries + trailer
+
+- [ ] **R.11** 0x68 delegation prefix HMAC — **NOT BLOCKING** (nice to have)
+  - The 0x68 senddevicestatus is NOT required for catalog/download (0x60 alone works)
+  - Name₃ = `0xC4 || hu_code(8B BE) || tb_code(7B BE)` — SOLVED, verified
+  - Delegation prefix = `0x86 || HMAC-MD5(hu_secret_BE, binary_credential)` — format known
+  - Binary credential from FUN_101a9930: `[presence][hu_code BE][tb_code BE][timestamp BE]`
+  - **Exhaustive search (5 formats × 2^32 timestamps, 4 threads): NO MATCH**
+  - DelegationRO descriptor has 6 fields; Unicorn credential only populates 4
+  - Real credential likely has additional fields from device manager runtime state
+  - Raw 0x68 replay also returns 409 (session-specific validation)
+  - Unicorn pipeline: FUN_101a9930 runs end-to-end, FUN_101aa3a0 (HMAC) verified identical to Python
+  - See [reverse_engineer_nnge.md](reverse_engineer_nnge.md) for full investigation log

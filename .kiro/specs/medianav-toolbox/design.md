@@ -211,7 +211,7 @@ The XML serializer produces:
 
 ## 5. API Flow
 
-### Complete Session (12 steps)
+### Complete Session (10 steps)
 
 ```
 1. boot (RANDOM)           → service URL map
@@ -222,11 +222,14 @@ The XML serializer produces:
 6. getprocess              → task list
 7. delegator (DEVICE)      → hu credentials (Name₂/Code₂/Secret₂)
 8. senddevicestatus (0x60) → device state accepted
-9. senddevicestatus (0x68) → delegated device state accepted
-10. web_login (form POST)  → browser session cookie
-11. catalog (web)          → available content list
-12. content selection (web)→ download URLs
+9. web_login (form POST)   → browser session cookie
+10. catalog (web)          → available content list
 ```
+
+**Note:** Step 9 (senddevicestatus 0x68) from the original Toolbox is **NOT required**.
+The catalog and download flow works with only the 0x60 call. The 0x68 delegated device
+status call uses a delegation prefix whose HMAC format has not been fully reversed.
+See R.11 in tasks.md for investigation status.
 
 ### Three Credential Sets
 
@@ -333,14 +336,18 @@ The USB output must be byte-compatible with the original Toolbox:
 
 ## 9. Remaining Work
 
-### Must Fix
-- **Delegation prefix generation** — binary serializer format cracked (presence byte + hu_code + tb_code + timestamp in BE). Need to verify exact presence byte value against captured traffic. Unicorn emulation pipeline working end-to-end.
-- **R.10 SendDeviceStatus 409** — generated body returns 409. Need to match file list exactly.
-
 ### Must Implement
 - **4.3 `sync` command** — select content → confirm → download → write to USB
 - Wire up download URLs from `getprocess` to `DownloadManager`
 - Wire up `installer.py` to write downloaded content to USB
+
+### Not Blocking (0x68 investigation)
+- **R.11 Delegation prefix HMAC** — the 0x68 senddevicestatus is NOT required for catalog/download.
+  The 0x60 call alone returns 200 and the catalog shows content. The 0x68 delegation prefix
+  uses HMAC-MD5 of a binary-serialized credential, but the exact serialized format has not been
+  matched (exhaustive search of 5 format variants × 2^32 timestamps found no match). The
+  DelegationRO descriptor has 6 fields; our Unicorn credential only populates 4. The real
+  credential likely has additional fields from the device manager's runtime state.
 
 ### Nice to Have
 - **R.4 IMEI encoding** — understand the `x51x4Dx30x30x30x30x31` format
