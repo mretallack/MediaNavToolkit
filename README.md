@@ -55,32 +55,35 @@ Create a `.env` file with your credentials:
 ```ini
 NAVIEXTRAS_USER=your.email@example.com
 NAVIEXTRAS_PASS=your_password
+NAVIEXTRAS_USB_PATH=/mnt/pen
 ```
+
+With `NAVIEXTRAS_USB_PATH` set, you can omit `--usb-path`:
 
 ## CLI Commands
 
 ```bash
 # Detect your MediaNav USB drive
-medianav-toolbox --usb-path /media/usb detect
+medianav-toolbox detect
 
 # Authenticate and show session info
-medianav-toolbox --usb-path /media/usb login
+medianav-toolbox login
 
 # Browse available content (maps, POIs, safety cameras)
-medianav-toolbox --usb-path /media/usb catalog
+medianav-toolbox catalog
 
 # Show and install available licenses
-medianav-toolbox --usb-path /media/usb licenses
-medianav-toolbox --usb-path /media/usb licenses --install
+medianav-toolbox licenses
+medianav-toolbox licenses --install
 
 # Quick update check
-medianav-toolbox --usb-path /media/usb updates
+medianav-toolbox updates
 
 # Sync updates to USB drive (select → download → install)
-medianav-toolbox --usb-path /media/usb sync
+medianav-toolbox sync
 ```
 
-> **Note:** `--usb-path` is a global option that goes **before** the command name.
+> **Note:** You can also pass `--usb-path /mnt/pen` before the command instead of using the env var.
 > If the USB is read-only, credentials are cached in `~/.config/medianav-toolbox/`.
 ```
 
