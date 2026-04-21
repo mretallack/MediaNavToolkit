@@ -5,6 +5,8 @@ Usage:
     medianav-toolbox register --usb-path /media/usb
     medianav-toolbox login --usb-path /media/usb
     medianav-toolbox catalog --usb-path /media/usb
+    medianav-toolbox licenses --usb-path /media/usb
+    medianav-toolbox licenses --usb-path /media/usb --install
     medianav-toolbox updates --usb-path /media/usb
 """
 
@@ -418,3 +420,87 @@ def sync(ctx, country, dry_run):
             "\n\nTo complete the update now, run the Windows Toolbox to download,"
             "\nor capture a post-confirmation mitmproxy trace to enable direct download.[/dim]"
         )
+
+
+@cli.command()
+@click.option("--install", is_flag=True, help="Install licenses to USB drive.")
+@click.pass_context
+def licenses(ctx, install):
+    """Show and install available licenses from NaviExtras.
+
+    Fetches license files (.lyc) via the wire protocol and shows what's
+    available. Use --install to write them to the USB drive.
+
+    Examples:
+        medianav-toolbox licenses --usb-path /media/usb
+        medianav-toolbox licenses --usb-path /media/usb --install
+    """
+    from datetime import datetime
+
+    from medianav_toolbox.session import run_session
+
+    usb = ctx.obj["usb_path"]
+    username = os.environ.get("NAVIEXTRAS_USER", "")
+    password = os.environ.get("NAVIEXTRAS_PASS", "")
+
+    if not username or not password:
+        console.print("[red]Set NAVIEXTRAS_USER and NAVIEXTRAS_PASS environment variables[/red]")
+        sys.exit(1)
+
+    console.print("Connecting...")
+    result = run_session(usb, username, password)
+    if result["errors"]:
+        for e in result["errors"]:
+            console.print(f"[red]✗ {e}[/red]")
+        sys.exit(1)
+
+    lics = result.get("licenses", [])
+    if not lics:
+        console.print("[yellow]No licenses available from server[/yellow]")
+        console.print(
+            "[dim]The licenses endpoint requires 0x68 delegated credentials.\n"
+            "This currently uses a replayed request that may be session-bound.\n"
+            "See tasks.md 4.3.2 for details on the 0x68 delegation prefix.[/dim]"
+        )
+        return
+
+    # Show available licenses
+    license_dir = usb / "NaviSync" / "license"
+    table = Table(title="Available Licenses")
+    table.add_column("License File", style="cyan", max_width=55)
+    table.add_column("SWID", style="dim")
+    table.add_column("Size", justify="right")
+    table.add_column("Status")
+
+    for lic in sorted(lics, key=lambda l: l.lyc_file):
+        existing = license_dir / lic.lyc_file
+        if existing.exists():
+            usb_size = existing.stat().st_size
+            status = (
+                "[green]✓ installed[/green]"
+                if usb_size == len(lic.lyc_data)
+                else "[yellow]⬆ update[/yellow]"
+            )
+        else:
+            status = "[red]✗ missing[/red]"
+        table.add_row(lic.lyc_file, lic.swid, f"{len(lic.lyc_data):,} B", status)
+
+    console.print(table)
+
+    if not install:
+        console.print(f"\n{len(lics)} licenses. Use --install to write to USB.")
+        return
+
+    # Install licenses
+    from medianav_toolbox.installer import install_license
+
+    installed = 0
+    for lic in lics:
+        try:
+            install_license(usb, lic.lyc_file, lic.lyc_data)
+            console.print(f"[green]✓[/green] {lic.lyc_file} ({len(lic.lyc_data):,} B)")
+            installed += 1
+        except Exception as e:
+            console.print(f"[red]✗ {lic.lyc_file}: {e}[/red]")
+
+    console.print(f"\n[green]Installed {installed}/{len(lics)} licenses[/green]")

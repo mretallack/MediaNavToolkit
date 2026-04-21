@@ -150,62 +150,33 @@ Verified against all captured 0x68 flows (737, 754, 792). ✓
 
 ### Delegation Prefix (0x68 body prefix)
 
-The 17-byte delegation prefix in the body of 0x68 requests:
+The 0x68 wire format splits the body into a prefix and content, each encrypted with
+a fresh SnakeOil PRNG seeded with `tb_secret`:
 ```
-prefix = 0x86 || prefix_data(16 bytes)
-```
-
-The `prefix_data` changes per request (different for flows 737, 754, 792). It is computed from the binary-serialized credential via HMAC-MD5.
-
-**Binary serialization (FUN_101a9930):**
-
-The credential is serialized by the descriptor-based serializer into a compact binary format:
-```
-[1B presence] [8B hu_code BE] [8B tb_code BE] [4B timestamp BE]
-```
-- Presence byte: encodes which credential fields are set (0xC4 for test credential with all fields)
-- hu_code: 64-bit big-endian (from delegator response)
-- tb_code: 64-bit big-endian (from delegator response)
-- timestamp: 32-bit big-endian internal timer value
-
-**HMAC computation (FUN_101aa050):**
-```
-key = hu_secret (8 bytes, big-endian)
-data = binary serialized credential (from FUN_101a9930)
-HMAC-MD5(key, data) → 16-byte credential name
+[16B header][25B query, SnakeOil(tb_code)][17B prefix, SnakeOil(tb_secret)][body, SnakeOil(tb_secret)]
 ```
 
-**Delegation prefix:**
+The 17-byte prefix: `0x86 || prefix_data(16 bytes)`
+
+**Status: NOT fully reversed.** The 17-byte wire prefix is a compressed encoding of the
+41-byte internal delegation prefix. The transformation happens inside `FUN_1005d860`
+(RVA 0x05D860). The SnakeOil debugger hook never sees a `len=17` call with `tb_secret` —
+the encryption of the 17-byte segment happens internally within FUN_1005d860.
+
+**41-byte internal prefix (fully understood):**
 ```
-prefix = 0x86 || HMAC-MD5(hu_secret_BE, serialized_credential)
+[0880][C4][hu_code 8B BE][tb_code 8B BE][timestamp 4B BE][3010][HMAC-MD5 16B]
 ```
+Where HMAC = HMAC-MD5(hu_secret_BE, [C4][hu_code][tb_code][timestamp]).
+Verified with 7 live HMAC captures from Win32 debugger (run16/16b).
 
-**Timestamp conversion:**
+**The 41B→17B transformation is the remaining unsolved piece.** The 17-byte encoding
+is NOT a truncation of the 41-byte format (first 17 bytes differ completely).
+It appears to be an igo-binary bitstream encoding of the credential sub-fields.
 
-The internal timestamp is converted to a Windows FILETIME for display:
-```python
-filetime = (internal_ts + 0x00000002B6109100) * 10_000_000
-```
-The offset `0x00000002B6109100` converts from the DLL's internal epoch to the Windows FILETIME epoch (100ns intervals since 1601-01-01).
-
-**Two serialization paths exist:**
-
-| Serializer | Function | Output | Used by |
-|-----------|----------|--------|---------|
-| Descriptor-based | FUN_101a9930 | Binary (presence + fields) | HMAC computation |
-| Wire protocol | FUN_101b2c30 | XML (`<DelegationRO>...`) | Wire protocol body |
-
-The XML serializer produces:
-```xml
-<DelegationRO>
-	<Type>TEMPORARY</Type>
-	<Delegator>{hu_code}</Delegator>
-	<Agent>{tb_code}</Agent>
-	<Timestamp>YYYY.MM.DD HH:MM:SS</Timestamp>
-</DelegationRO>
-```
-
-**Status:** Binary format confirmed via Unicorn emulation. Presence byte may vary with credential state — verification against captured traffic in progress.
+**Practical impact:** The `licenses` endpoint requires 0x68 flags. The `licinfo` endpoint
+accepts 0x28 flags (which includes the full 41-byte prefix inline in the query).
+Free content can be browsed and downloaded via the web UI without 0x68.
 
 ---
 
@@ -221,11 +192,29 @@ The XML serializer produces:
 5. senddevicestatus (0x60)    → device state accepted (generated from USB)
 6. sendfingerprint            → accepted
 7. licinfo (36B, DEVICE)      → license status (service_minor=14)
-8. licinfo (76B, 0x28 flags)  → extended license info
+8. licinfo (76B, 0x28 flags)  → extended license info (replayed — 0x28 extra bytes are static)
 9. licenses (94B, 0x68 flags) → available content packs with embedded .lyc data
 10. senddevicestatus (0x60)   → second status update
 11. sendfingerprint           → second fingerprint
 12. web_login (form POST)     → browser session cookie (optional, for web UI)
+```
+
+**Content is obtained from step 9 (`licenses`).** The response contains available
+.lyc files with embedded license data. Response format:
+`[0x40][2B count BE]` then entries `[0xC0][4B ts][4B expiry][1B swid_len][swid][1B fname_len][fname][4B lyc_size][lyc_data]`
+
+**The `licenses` request (step 9) requires 0x68 flags** with a 17-byte delegation prefix
+in the body. This prefix is a compressed encoding of the 41-byte internal format that
+we cannot generate from scratch (see §4 Delegation Prefix).
+
+**The 0x68 flow is only needed for paid/premium content.** Free content (e.g.,
+RenaultDealers_Pack) can be browsed and downloaded via the web UI without 0x68.
+The Windows Toolbox on QEMU confirms this — catalog browsing and free downloads
+work without the delegation flow being triggered.
+
+**Workaround:** The `licinfo` (76B) and `licenses` (94B) requests can be replayed
+from Win32 captures. The 0x28 `licinfo` replay works across sessions (static extra
+bytes). The 0x68 `licenses` replay is session-bound (returns 409 in new sessions).
 ```
 
 **Content is obtained from step 9 (`licenses`).** The response contains available
