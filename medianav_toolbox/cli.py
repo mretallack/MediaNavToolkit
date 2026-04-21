@@ -390,8 +390,11 @@ def sync(ctx, country, dry_run):
         console.print("[green]✓ Selection confirmed[/green]")
 
         # Install licenses from the session
-        from medianav_toolbox.installer import install_license
-        from medianav_toolbox.session import run_session as _rs
+        from medianav_toolbox.installer import (
+            install_license,
+            write_content_stms,
+            write_device_checksum,
+        )
 
         lics = result.get("licenses", [])
         if lics:
@@ -407,16 +410,19 @@ def sync(ctx, country, dry_run):
                 except OSError as e:
                     console.print(f"  [red]✗ {lic.lyc_file}: {e}[/red]")
             if installed:
-                console.print(f"\n[green]Installed {installed} license(s)[/green]")
+                console.print(f"[green]Installed {installed} license(s)[/green]")
 
-        if total_size == 0:
-            console.print("\n[green]✓ Update complete (license-only, no files to download)[/green]")
-        else:
-            console.print(
-                f"\n[yellow]Content files ({total_size / 1024 / 1024:.0f} MB) need downloading.[/yellow]"
-                "\n[dim]Download support is not yet implemented. Use the Windows Toolbox"
-                "\nto download content files, or wait for a future release.[/dim]"
-            )
+        # Write directory-level STMs
+        stms = write_content_stms(usb)
+        if stms:
+            for s in stms:
+                console.print(f"  [green]✓[/green] {Path(s).name}")
+
+        # Update device_checksum.md5
+        write_device_checksum(usb)
+        console.print("  [green]✓[/green] device_checksum.md5 updated")
+
+        console.print("\n[green]✓ Sync complete — insert USB into head unit to apply[/green]")
 
 
 @cli.command()
