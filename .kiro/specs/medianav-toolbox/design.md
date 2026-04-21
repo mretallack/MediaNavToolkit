@@ -211,25 +211,34 @@ The XML serializer produces:
 
 ## 5. API Flow
 
-### Complete Session (10 steps)
+### Complete Session (12 steps)
 
 ```
-1. boot (RANDOM)           → service URL map
-2. register (RANDOM)       → tb credentials (Name₁/Code₁/Secret₁) — cached permanently
-3. login (DEVICE)          → session token
-4. hasActivatableService   → boolean
-5. sendfingerprint         → accepted
-6. getprocess              → task list
-7. delegator (DEVICE)      → hu credentials (Name₂/Code₂/Secret₂)
-8. senddevicestatus (0x60) → device state accepted
-9. web_login (form POST)   → browser session cookie
-10. catalog (web)          → available content list
+1. boot (RANDOM)              → service URL map
+2. register (RANDOM)          → tb credentials (Name₁/Code₁/Secret₁) — cached permanently
+3. login (DEVICE)             → session token
+4. hasActivatableService      → boolean (service_minor=14)
+5. senddevicestatus (0x60)    → device state accepted (generated from USB)
+6. sendfingerprint            → accepted
+7. licinfo (36B, DEVICE)      → license status (service_minor=14)
+8. licinfo (76B, 0x28 flags)  → extended license info
+9. licenses (94B, 0x68 flags) → available content packs with embedded .lyc data
+10. senddevicestatus (0x60)   → second status update
+11. sendfingerprint           → second fingerprint
+12. web_login (form POST)     → browser session cookie (optional, for web UI)
 ```
 
-**Note:** Step 9 (senddevicestatus 0x68) from the original Toolbox is **NOT required**.
-The catalog and download flow works with only the 0x60 call. The 0x68 delegated device
-status call uses a delegation prefix whose HMAC format has not been fully reversed.
-See R.11 in tasks.md for investigation status.
+**Content is obtained from step 9 (`licenses`).** The response contains available
+packs with license keys, filenames, and the encrypted .lyc file data embedded
+directly in the response. No separate download step is needed for license files.
+
+**Note:** The `licenses` request (step 9) uses 0x68 flags with a delegation prefix
+in the body. Currently this is replayed from a captured request. Building it from
+scratch requires the igo-binary bitstream serializer which is not yet implemented.
+The replay works because the same device credentials are used.
+
+**Service minor for register endpoints is 14** (not 1). Using the wrong value
+causes 409 responses from licinfo/licenses.
 
 ### Three Credential Sets
 
@@ -241,21 +250,18 @@ See R.11 in tasks.md for investigation status.
 
 ### Endpoints
 
-| Endpoint | Mode | Service |
-|----------|------|---------|
-| `/services/index/rest/3/boot` | RANDOM | Boot |
-| `/services/register/rest/1/device` | RANDOM | Register |
-| `/rest/1/login` | DEVICE | Market |
-| `/services/register/rest/1/hasActivatableService` | DEVICE | Register |
-| `/rest/1/sendfingerprint` | DEVICE | Market |
-| `/rest/1/getprocess` | DEVICE | Market |
-| `/services/register/rest/1/delegator` | DEVICE | Register |
-| `/rest/1/senddevicestatus` | DEVICE | Market |
-| `/rest/1/licinfo` | DEVICE | Market |
-| `/toolbox/login` | Web POST | Browser session |
-| `/toolbox/cataloglist` | Web GET | Catalog HTML |
-| `/toolbox/managecontentinitwithhierarchy/install` | Web GET | Content tree |
-| `/rest/managecontent/supermarket/v1/updateselection` | Web POST | Content sizes |
+| Endpoint | Mode | Service Minor |
+|----------|------|---------------|
+| `/services/index/rest/3/boot` | RANDOM | — |
+| `/services/register/rest/1/device` | RANDOM | 14 |
+| `/rest/1/login` | DEVICE | 25 |
+| `/services/register/rest/1/hasActivatableService` | DEVICE | 14 |
+| `/rest/1/senddevicestatus` | DEVICE | 25 |
+| `/rest/1/sendfingerprint` | DEVICE | 25 |
+| `/services/register/rest/1/licinfo` | DEVICE | 14 |
+| `/services/register/rest/1/licenses` | DEVICE (0x68) | 14 |
+| `/services/register/rest/1/delegator` | DEVICE | 14 |
+| `/toolbox/login` | Web POST | — |
 
 ---
 
@@ -336,18 +342,11 @@ The USB output must be byte-compatible with the original Toolbox:
 
 ## 9. Remaining Work
 
-### Must Implement
-- **4.3 `sync` command** — select content → confirm → download → write to USB
-- Wire up download URLs from `getprocess` to `DownloadManager`
-- Wire up `installer.py` to write downloaded content to USB
+### Must Fix
+- **R.11 Delegation prefix (0x68)** — without 0x68, managecontent returns `norightsfordevice` and catalog is empty. The delegation prefix HMAC format is partially reversed but the exact binary serialization has not been matched. See R.11 in tasks.md for investigation plan.
 
-### Not Blocking (0x68 investigation)
-- **R.11 Delegation prefix HMAC** — the 0x68 senddevicestatus is NOT required for catalog/download.
-  The 0x60 call alone returns 200 and the catalog shows content. The 0x68 delegation prefix
-  uses HMAC-MD5 of a binary-serialized credential, but the exact serialized format has not been
-  matched (exhaustive search of 5 format variants × 2^32 timestamps found no match). The
-  DelegationRO descriptor has 6 fields; our Unicorn credential only populates 4. The real
-  credential likely has additional fields from the device manager's runtime state.
+### Must Implement
+- **4.3 `sync` command** — select content → confirm → download → write to USB (blocked on R.11)
 
 ### Nice to Have
 - **R.4 IMEI encoding** — understand the `x51x4Dx30x30x30x30x31` format

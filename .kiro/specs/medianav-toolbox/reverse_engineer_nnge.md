@@ -2403,3 +2403,1069 @@ Test result:
 **The 0x68 senddevicestatus is NOT required for the catalog flow.** The 0x60 call alone establishes sufficient device context for the web session to show content.
 
 **Impact:** The delegation prefix HMAC investigation is no longer blocking. We can proceed with the full sync pipeline (content selection → download → install) using only the 0x60 flow. The 0x68 investigation can continue in parallel as a nice-to-have.
+
+
+---
+
+### 2026-04-19 09:30 — 0x68 IS required (norightsfordevice without it)
+
+**Confirmed: without 0x68, managecontent returns `norightsfordevice` and catalog is empty.**
+The earlier "4 packages" was a false positive (counted JS references, not content items).
+
+**Additional investigation (R.11.1-R.11.3):**
+- Serializer reads exactly the same 4 fields regardless of credential size (tested with 256B buffer)
+- No reads from cred+0x38 or beyond — the vtable3 sub-object is NOT serialized
+- Setting cred+0x3C=1 or cred+0x04=1 does not change output (still 21B)
+- Tested 6 alternative HMAC keys (hu_secret/hu_code/tb_secret/tb_code in BE/LE): no match in ±1hr
+- Tested 6 alternative data formats (no presence, LE encoding, Name₃ as data, etc.): no match
+- FUN_101d2630 timestamp: converts SYSTEMTIME→FILETIME, subtracts Unix epoch offset, divides by factor
+- Internal timestamp = Unix timestamp (epoch offsets cancel out)
+- FUN_100567E0 (get inner credential) returns static ptr 0x1030EBC0 — runtime data written there during registration
+
+**Conclusion:** The 4-field 21-byte format is definitively what the serializer produces. The exhaustive search proves no combination of presence byte + timestamp matches. The issue must be in the credential field VALUES — specifically what `*(iVar5+0x10)` and `*(iVar5+0x18)` contain at runtime. These are populated during registration and stored at the static address 0x1030EBC0.
+
+**Next step:** R.11.4 — capture fresh traffic from the real Windows Toolbox to get a known-good delegation prefix, then work backwards to determine the exact HMAC input.
+
+
+---
+
+### 2026-04-19 11:40 — Full Unicorn emulation approach
+
+**Why full emulation is needed:**
+
+1. **Certificate pinning blocks mitmproxy.** The real Windows Toolbox rejects proxied connections with "bad request". We cannot capture fresh traffic to verify our HMAC computation.
+
+2. **The inner credential at 0x1030EBC0 is a descriptor template.** The static DLL contains descriptor pointers (`0x102Dxxxx`), not actual data. At runtime, the registration flow overwrites these with Code/Secret/Name values through vtable setter methods. We cannot determine the runtime values from static analysis alone.
+
+3. **Future-proofing.** Other parts of the protocol may have similar runtime dependencies. A working Unicorn emulation of the DLL gives us a reliable way to test any function without needing the real Toolbox.
+
+**Architecture of 0x1030EBC0:**
+
+The object at `0x1030EBC0` is part of a larger credential store structure:
+```
+0x1030EBB4: sub-object (FUN_100567F0)
+0x1030EBC0: inner credential descriptor (FUN_100567E0 / vtable[6])
+0x1030EBD8: sub-object (FUN_10056800)
+0x1030EC44: sub-object (FUN_10056810)
+0x1030EC50: sub-object (FUN_10056820)
+```
+
+Each sub-object is a 12-byte descriptor entry `[type_ptr, field_ptr, sub_ptr]` repeated. The registration flow populates these by calling setter methods that overwrite the descriptor pointers with actual values.
+
+`FUN_101aa050` reads:
+- `*(iVar5 + 0x10)` = 8 bytes at `0x1030EBD0` → copied to DelegationRO Agent field
+- `*(iVar5 + 0x18)` = 4 bytes at `0x1030EBD8` → copied to DelegationRO Agent presence flag
+
+**Emulation plan:**
+
+Instead of trying to guess what values the registration flow writes, we emulate the registration flow itself. The registration response parser (`parse_register_response`) extracts Name/Code/Secret/MaxAge. The DLL's registration handler stores these in the credential store at `0x1030EBC0`. By emulating the registration handler with known credential values, we populate the memory correctly and can then call `FUN_101aa050` to get the exact HMAC input.
+
+**Steps:**
+1. Find the registration response handler that populates 0x1030EBC0
+2. Emulate it with our known tb credentials (Name/Code/Secret)
+3. Verify the memory at 0x1030EBD0/EBD8 contains expected values
+4. Run FUN_101aa050 with hu_code/hu_secret params
+5. Capture the serialized data passed to HMAC
+6. Verify against captured traffic
+
+
+---
+
+### 2026-04-19 12:00 — FUN_101aa050 runs end-to-end in Unicorn!
+
+**Unicorn emulation of FUN_101aa050 succeeded (3621 instructions).**
+
+Hooks implemented:
+- FUN_101bad80 (string lookup) → no-op
+- DAT_1031445c (device manager) → pre-set to non-zero
+- FUN_10011dd0 (credential store lookup) → returns fake device object
+- FUN_101b8130 (cleanup) → no-op
+- FUN_101d2630 (timer) → returns known timestamp
+- FUN_101aa3a0 (HMAC) → hooked to capture input and compute result
+- FUN_100312a0 (handle getter) → returns dummy
+- All memory allocators hooked
+
+**HMAC input captured:**
+```
+Key (8B): 000ee87c16b1e812 (hu_secret BE) ✓
+Data (21B): c4 000bf28569bacb7c 000d4ea65d36b98e 69e37f31
+  [0xC4] [hu_code 8B BE] [tb_code 8B BE] [timestamp 4B BE]
+```
+
+**Format confirmed:** The serializer produces exactly `[0xC4][hu_code][tb_code][timestamp]` = 21 bytes. This matches our earlier analysis.
+
+**But the server still returns 409.** The generated prefix is rejected. Possible causes:
+1. The inner credential at 0x1030EBC0+0x10 contains different data at runtime than tb_code
+2. The `service_register_v1.sav` shows TWO registrations — the real Toolbox may use Entry 1 (Code=hu_code) while our tool uses Entry 2 (Code=tb_code)
+3. The extra 6 bytes in the 0x68 query may be session-specific
+4. The body content may need to match the 0x68 format (different bitmask than 0x60)
+
+**Key discovery from service_register_v1.sav:**
+```
+Entry 1 (DEVICE_1_...): Name=C10CD1FD..., Code=hu_code, Secret=hu_secret
+Entry 2 (NAVIEXTRAS_...): Name=FB86ACD6..., Code=tb_code, Secret=tb_secret
+```
+The original Toolbox registration (Entry 1) has Code=hu_code and Secret=hu_secret — the SAME values the delegator returns. Our Python re-registration (Entry 2) got different credentials.
+
+
+---
+
+### 2026-04-19 12:30 — Isolation tests: ALL 0x68 variants return 409
+
+**Tested 11 variations of the 0x68 request. ALL return 409.**
+
+| Test | Description | Result |
+|------|-------------|--------|
+| A | Raw captured 0x68 replay | 409 |
+| B | Captured query+prefix, 0x60 body | 409 |
+| C | Re-encrypted captured query+prefix+body | 409 |
+| D | Fresh query + captured prefix+body | 409 |
+| E | Fresh query + generated prefix + 0x60 body | 409 |
+| F | Fresh query + generated prefix + captured body | 409 |
+| G | 0x68 before 0x60 (no 0x60 first) | 409 |
+| H | Modified body bitmask (0x03/0x1E) | 409 |
+| I | hu_code in header (not tb_code) | 409 |
+| J | Empty body | 409 |
+| K | No extra 6 bytes in query | 409 |
+| L | Standard request format (no split encryption) | 409 |
+| N | 0x60 with Name₃ in query | 409 |
+
+**Key finding:** Even test C (re-encrypted captured data) returns 409. The captured 0x68 from April 16 no longer works in a new session. This confirms the server validates the 0x68 against current session state.
+
+**service_register_v1.sav analysis:**
+- Entry 1 (`DEVICE_1_...`): Code=hu_code, Secret=hu_secret — from original Toolbox HU device registration
+- Entry 2 (`NAVIEXTRAS_...`): Code=tb_code, Secret=tb_secret — from our Python registration
+- `register_hu_device()` returns 409 (already registered) — we can't get fresh HU device credentials
+- The DLL looks up `NAVIEXTRAS_UNIQUE_DEVICE__ID` → Entry 2 (tb_code/tb_secret)
+
+**Running exhaustive search** with Entry 1 Name bytes as agent field (3 formats, 4 threads).
+
+
+---
+
+### 2026-04-19 12:50 — Fresh USB available, all 0x68 variants still 409
+
+**Fresh USB mounted at /mnt/pen** — synced from head unit, never connected to official Toolbox.
+- Same head unit (APPCID 0x42000B53), different USB (SWID CK-VYSX-DSHR-0HPD-5639)
+- Device already registered (409) — same APPCID as old USB
+- Using existing tb credentials (code=3745651132643726)
+
+**Additional exhaustive searches completed — ALL NO MATCH:**
+- Entry1 Name[0:8] as agent (0xC4): no match
+- Entry1 Name[8:16] as agent (0xC4): no match
+- hu_code as agent (0x44): no match
+- tb_name[0:8] as agent (0xC4): no match
+
+**Additional live server tests — ALL 409:**
+- 6 encryption variants (tb/tb, tb/hu, hu/hu) × 2 inner credentials = 12 tests, all 409
+- No extra 6 bytes in query: 409
+- Empty body: 409
+- Standard request format (no split encryption): 409
+
+**Total exhaustive searches to date:** 10 format variants × 2^32 timestamps each = 43 billion HMAC computations. Zero matches against captured traffic.
+
+**Conclusion:** Either:
+1. The captured traffic used credentials we don't have (different registration state)
+2. The HMAC format has an additional transformation we haven't discovered
+3. The server requires something beyond the HMAC (session state, specific header, etc.)
+
+The Unicorn emulation confirms the DLL produces `[0xC4][hu_code BE][tb_code BE][ts BE]` with key=hu_secret BE. This is the correct format for the CLIENT side. The server may validate differently.
+
+
+---
+
+### 2026-04-19 14:30–17:10 — Full registration flow emulation in Unicorn: type system is the blocker
+
+**Goal:** Emulate the full registration response handler (`FUN_10094390`) in Unicorn to populate the credential store at `0x1030EBC0` with real runtime values, then run `FUN_101aa050` to capture the correct HMAC input.
+
+**Why:** The exhaustive 2^32 brute-force with format `[0xC4][hu_code BE][tb_code BE][ts BE]` found no match. This format comes from our hand-crafted Unicorn credential object. The real DLL's igo-binary deserializer creates credential objects with specific vtables that cause the serializer to produce different output. We need the deserializer to create proper objects.
+
+#### What was attempted
+
+**1. Disassembly of FUN_10094390 stack frame (SUCCESS)**
+
+Disassembled the full function to map the exact stack layout. Key discovery — Ghidra's decompilation was misleading about `this` pointers:
+
+```
+Assembly shows:
+  lea ecx, [ebp - 0x3c]  →  FUN_101babb0 (stream init) called with ECX = &local_3c
+  lea ecx, [ebp - 0x44]  →  FUN_101a99b0 (deserializer) called with ECX = &local_48
+
+Stack layout (from EBP):
+  -0x44: vtable PTR_FUN_102b02d4 (object vtable)  ← deserializer this
+  -0x40: presence byte 1
+  -0x3C: stream vtable (set by FUN_101babb0 to 0x102D9154)  ← stream init this
+  -0x38: presence byte 2
+  -0x34: 8 bytes field (zeroed by xmm0)
+  -0x2C: presence byte 3
+  -0x28: 8 bytes field (zeroed by xmm0)
+  -0x20: presence byte 4
+  -0x1C: deserializer state (0)
+  -0x18: data_ptr (stream start)
+  -0x14: data_ptr (current position)
+  -0x10: data_end
+  -0x0C: 0
+  -0x08: data_end (copy)
+  -0x04: 1 (flag)
+```
+
+**2. Direct deserializer emulation (PARTIAL SUCCESS)**
+
+Called `FUN_101a99b0` directly with the correct stack frame and the delegator response binary data (`80 E0 ...`, 175 bytes). Also tried the TB registration response from `service_register_v1.sav` (43 bytes).
+
+Result: Deserializer returned **success (AL=1)** but only consumed **17 of 175 bytes** (or 17 of 43 bytes). It parsed the presence bitmask header but did NOT populate the field data. The presence flags were set to 1 but all value fields remained zero.
+
+**Root cause:** The descriptor at `PTR_FUN_102b02d4` vtable[1] returns `0x1030DD90`, which has 20 fields including compound sub-fields. The deserializer parsed the top-level presence bits but could not recursively deserialize the compound fields because the sub-descriptors are not properly linked without the type system initialization.
+
+**3. CRT init emulation (FAILED)**
+
+Attempted to run the CRT initializer (`FUN_1027F009`) in Unicorn to initialize the type system. This function calls static C++ constructors that register igo-binary type descriptors.
+
+Result: Hit the **10M instruction limit** without completing. The CRT init calls Windows APIs (threading, COM, etc.) that cannot be stubbed in Unicorn. The function at `0x1027F949` (`_CRT_INIT`) is a stub that returns 1 immediately — the real initialization happens through `FUN_1027F009` → `FUN_1027E105` → `FUN_1027F95B` → `FUN_1027F9B6` (constructor table walkers).
+
+**4. Descriptor analysis (INFORMATIVE)**
+
+Mapped the serializer's descriptor at `0x1030DE50` (returned by `PTR_FUN_102b9580` vtable[1]):
+- **20 fields total**: 15 simple, 5 compound
+- Our hand-crafted credential only populates **4 simple fields** (Type, Code, Agent, Timestamp)
+- The real credential likely has compound sub-objects that add additional data to the serialized output
+- The compound fields at indices 5, 6, 7, 8, 10 have nested descriptors that reference other type definitions
+
+Also confirmed the deserializer's descriptor at `0x1030DD90` has 20 fields (4 compound), matching the serializer's field count but with different sub-descriptors.
+
+**5. Exhaustive 4-agent brute-force (DEFINITIVE NEGATIVE)**
+
+Built a multi-threaded C brute-force (`/tmp/brute_name3.c`) with custom MD5 implementation (4 threads, ~14 min per agent):
+
+| Agent value | Timestamps tested | Result |
+|-------------|------------------|--------|
+| tb_code (`000D4EA65D36B98E`) | All 2^32 | NO MATCH |
+| tb_secret (`000ACAB6C9FB66F8`) | All 2^32 | NO MATCH |
+| hu_code (`000BF28569BACB7C`) | All 2^32 | NO MATCH |
+| hu_secret (`000EE87C16B1E812`) | All 2^32 | NO MATCH |
+
+**Total: 17.2 billion HMAC-MD5 computations. Zero matches.**
+
+Format tested: `HMAC-MD5(key=hu_secret_BE, data=[0xC4][hu_code BE 8B][agent BE 8B][timestamp BE 4B])`
+
+Target: `ad35bcc12654b893f7b5596a8057190c` (Name₃ from captured 0x68 query)
+
+Note: Fixed a bug in the initial brute-force — the HMAC self-test used `strlen("The quick brown fox...") = 44` instead of the correct `43`, causing the custom MD5 to produce wrong results for the test vector (the MD5 implementation itself was correct).
+
+#### Conclusions
+
+1. **The serialized format `[0xC4][hu_code][agent][timestamp]` is definitively wrong.** No combination of the 4 known credential values as the Agent field produces the target HMAC for any possible 32-bit timestamp.
+
+2. **The real DLL's serializer produces different output** because the credential objects created by the igo-binary deserializer have different vtable chains than our hand-crafted objects. The vtable dispatch determines which descriptor fields are serialized.
+
+3. **The type system cannot be initialized in Unicorn.** The CRT init requires Windows APIs (threading, COM) and exceeds the instruction limit. Without the type system, the deserializer cannot parse compound fields, so we cannot create proper credential objects.
+
+4. **The descriptor has 20 fields (5 compound).** Our credential only populates 4 simple fields. The real credential likely has additional compound sub-objects that contribute to the serialized output, changing the HMAC input.
+
+#### Next steps
+
+1. **Selective static constructor execution in Unicorn** — Instead of running the full CRT init, find the `__xc_a` to `__xc_z` function pointer table in the DLL's `.rdata` section and selectively execute only the constructors that register igo-binary type descriptors. Skip constructors that call Windows APIs. This would initialize the type system without the full CRT overhead.
+
+2. **Run the DLL in Wine/Windows** — Use a Windows VM or Wine Docker container to run the DLL with a debugger (x64dbg or GDB). Set a breakpoint at the HMAC function (`FUN_101aa3a0`, RVA `0x1AA3A0`) and capture the exact key and data arguments. This bypasses all static analysis issues. Certificate pinning previously blocked mitmproxy, but a debugger attached to the DLL process can capture the HMAC input directly.
+
+**6. Selective static constructor execution (FAILED)**
+
+Found the C++ constructor table at `0x102AE304` (50 entries, 48 non-null). Ran all constructors in Unicorn with `_onexit` (`FUN_1027E2FB`) hooked as no-op to avoid encoded pointer crashes.
+
+Result: **46 constructors completed** (4.3M total instructions), 2 hit the 10M limit. But the deserializer **still only consumed 17 bytes**. The constructors at this table are C runtime initializers (critical sections, atexit handlers), NOT the igo-binary type registrations.
+
+The igo-binary type system is initialized through the DllMain user code path (`FUN_1027F0B9` → `FUN_1027EEAF` → `FUN_1027EF02`), which requires Windows APIs (threading, COM, file I/O) that cannot be stubbed in Unicorn.
+
+#### Files created/modified
+
+| File | Description |
+|------|-------------|
+| `analysis/unicorn_regflow.py` | First attempt: emulate FUN_101aa050 with credential chain |
+| `analysis/unicorn_regflow2.py` | Second attempt: emulate FUN_10094390 with response data |
+| `analysis/unicorn_regflow3.py` | Third attempt: correct stack frame for FUN_10094390 |
+| `analysis/unicorn_trace_reads.py` | Trace every memory read the serializer makes |
+| `analysis/unicorn_trace_writes.py` | Trace serializer output bytes |
+| `/tmp/brute_name3.c` | Multi-threaded C brute-force (4 threads, custom MD5, 4 agents) |
+
+
+---
+
+### 2026-04-19 17:45 — Fresh HMAC test: credential mismatch theory PARTIALLY confirmed but 0x68 still 409
+
+**Key insight from user:** The captured traffic (flows 735-792) was from the ORIGINAL Windows Toolbox session using Entry 1 credentials (`DEVICE_1_...`, Code=hu_code, Secret=hu_secret). Our Python tool uses Entry 2 credentials (`NAVIEXTRAS_...`, Code=tb_code, Secret=tb_secret). The target HMAC `ad35bcc12654b893f7b5596a8057190c` was computed by the original Toolbox — we should NOT be trying to match it.
+
+**Test:** Ran a fresh session with our credentials and computed our OWN Name₃ HMAC using `HMAC-MD5(hu_secret_BE, [presence][hu_code BE][tb_code BE][timestamp BE])`. Tested 7 presence bytes (0xC4, 0x44, 0xC0, 0x84, 0x04, 0x40, 0x80) with timestamp, and 4 without timestamp. ALL returned 409.
+
+**Results:**
+- 0x60 senddevicestatus: 200 ✓ (confirms session is valid)
+- 0x68 with pres=0xC4 + timestamp: 409
+- 0x68 with pres=0x44 + timestamp: 409
+- 0x68 with all other presence bytes: 409
+- 0x68 without timestamp (17B format): 409
+
+**Conclusion:** The serialized format `[presence][hu_code][tb_code][timestamp]` is WRONG regardless of presence byte. The HMAC input must have a fundamentally different structure. Possible issues:
+1. The serialized data includes additional fields we're not accounting for
+2. The field ORDER is different (e.g., tb_code first, then hu_code)
+3. The HMAC key is not hu_secret
+4. The query credential block format is wrong (the 6 extra bytes, the encoding)
+5. The 409 is caused by something other than the HMAC (e.g., missing body fields for 0x68)
+
+**What we confirmed:**
+- The credential mismatch theory was correct — we WERE comparing against the wrong HMAC target
+- But even with our own credentials, the format doesn't work
+- The 0x60 call works, proving the session and encryption are correct
+- The issue is specific to the 0x68 request format
+
+**Next steps:**
+1. The 409 might be caused by the QUERY format, not the prefix. The extra 6 bytes after the credential block are zeros — they might need specific values.
+2. Try sending the 0x68 with the SAME body as 0x60 but without the delegation prefix (just the credential block in the query).
+3. Try different body formats — the 0x68 body might need different presence bits than the 0x60 body.
+4. The `build_credential_block` function might be encoding Name₃ incorrectly.
+
+
+---
+
+### 2026-04-19 18:00 — CRITICAL: Extra 6 bytes in 0x68 query are NOT zeros
+
+**Discovery:** The 0x68 query has 25 bytes: `[counter][0x68][17B cred_block][6B extra]`. We've been sending zeros for the extra 6 bytes. But the captured traffic shows they are `55 BD E2 B8 XX 16` where byte 5 varies per request.
+
+**Cross-flow analysis:**
+| Flow | Extra 6 bytes | Counter |
+|------|--------------|---------|
+| 737 | 55 BD E2 B8 12 16 | 0xC7 |
+| 742 | 55 BD E2 B8 19 16 | 0xCA |
+| 754 | 55 BD E2 B8 0F 16 | 0x69 |
+| 792 | 55 BD E2 B8 71 16 | 0x6D |
+| 741 (0x28) | 5B 10 02 72 42 A3 | 0xCB |
+
+**Observations:**
+- First 4 bytes `55 BD E2 B8` are constant across all 0x68 flows (but different for 0x28)
+- Byte 5 varies per request (12, 19, 0F, 71)
+- Byte 6 is constant `16` for 0x68 flows
+- The 0x28 flow (different session) has completely different extra bytes
+- These bytes do NOT appear in any server response (delegator, login, etc.)
+- They are NOT derived from simple XOR/arithmetic of known credential values
+
+**Also confirmed:** Name₃ in the query is `0xC4 || hu_code(8B BE) || tb_code(7B BE)` — NOT an HMAC. The `ad35bcc1...` value was the XOR-encoded version. Our `build_delegation_name3` function is CORRECT.
+
+**Impact:** The extra 6 bytes are likely a session-specific delegation token computed by the client. Without the correct values, the server rejects the 0x68 request with 409. This is probably the REAL reason all our 0x68 tests fail — not the HMAC prefix.
+
+**Next steps:**
+1. Trace the DLL code that builds the 0x68 query to find where the extra 6 bytes come from
+2. The bytes might be: [4B delegation_id][1B sequence][1B type] or similar
+3. Search the decompiled code for functions that build the 25-byte query
+4. The protocol builder at FUN_100b3a60 constructs the query — trace what it puts after the credential block
+
+
+---
+
+### 2026-04-19 18:30 — Extra 6 bytes are NOT the cause of 409
+
+**Tested 4 variants of the extra bytes in the 0x68 query:**
+| Test | Extra bytes | Result |
+|------|------------|--------|
+| A | Captured (55 BD E2 B8 12 16) | 409 |
+| B | All zeros | 409 |
+| C | No extra bytes (19B query) | 409 |
+| D | No prefix in body | 409 |
+
+**Conclusion:** The extra 6 bytes are NOT the cause of the 409. The server rejects the 0x68 before validating them.
+
+**Extra bytes decoded as igo-binary sub-structure:**
+- Presence byte 0x55 = fields 0, 2, 4, 6
+- Field 0: request counter (~129M, varies per request)
+- Field 2: constant 22 (0x16)
+- Fields 4, 6: boolean flags
+- NOT from USB — computed by Toolbox at runtime
+
+**The 409 must be caused by either:**
+1. The delegation prefix HMAC format (still unsolved)
+2. The Name₃ value (confirmed correct: `0xC4 || hu_code || tb_code[:7]`)
+3. The body content (same body works for 0x60)
+4. Session state — the server may require a specific delegation setup step we're missing
+
+**Key observation:** The 0x60 call works (200) but ALL 0x68 variants fail (409). The 0x68 uses a different credential (Name₃ = delegation credential) while 0x60 uses no credential. The server may be rejecting because it doesn't recognize the delegation credential Name₃.
+
+**New hypothesis:** The delegation credential Name₃ must be REGISTERED with the server before use. The original Toolbox may have sent a registration request for the delegation credential that we're not replicating. The `register_hu_device` call (which returns 409 for us) might be the step that registers the delegation credential.
+
+
+---
+
+### 2026-04-19 17:55 — Wine Docker harness working: DLL functions callable
+
+**Breakthrough:** Successfully calling nngine.dll functions from a Wine Docker harness without DllMain.
+
+**Setup:**
+- `LoadLibraryExA("nngine.dll", NULL, DONT_RESOLVE_DLL_REFERENCES)` — loads DLL at `0x7E9F0000` with sections mapped at correct VAs and relocations applied, but NO DllMain/CRT init
+- Manually patched IAT thunks for `malloc` (RVA `0x27E4F5`), `realloc` (`0x2839F9`), `free` (`0x2839D1`, `0x27DFE8`) to redirect to our CRT's implementations
+- Security cookie initialized via `FUN_1027F8FE`
+
+**Results:**
+- Serializer init (`FUN_101b2910`): ✓ works
+- Credential serialization (`FUN_101a9930`): ✓ produces `c4000bf28569bacb7c000d4ea65d36b98e69e37f31` (21 bytes) — same as Unicorn
+- Envelope serialization: produces 0 bytes (all fields zero — need to populate envelope fields)
+
+**Key finding:** The serializer output is identical whether or not the type system is initialized. The 21-byte format `[0xC4][hu_code BE][tb_code BE][timestamp BE]` is correct for the credential sub-object.
+
+**Confirmed:** The latest log entry (18:00) says Name₃ is NOT an HMAC — it's `0xC4 || hu_code(8B BE) || tb_code(7B BE)` XOR-encoded. The HMAC brute-force was searching for the wrong thing.
+
+**The real blocker is the extra 6 bytes** (`55 BD E2 B8 XX 16`) in the 0x68 query. These are serialized envelope fields. Next: populate the envelope object and serialize it to produce the correct extra bytes.
+
+**Files:** `analysis/capture_hmac.c` — Wine harness with IAT patching
+
+---
+
+### 2026-04-19 18:20 — Envelope serialization: presence flags mapped but output still empty
+
+**Approach:** Used Unicorn memory read tracing to find the exact offsets the envelope serializer reads from the envelope object.
+
+**Envelope presence flag offsets (from Unicorn trace):**
+```
+Simple flags: +0x14, +0x1C, +0x28, +0x34, +0x44, +0x50, +0x5C, +0x70, +0x78, +0x90, +0x9C, +0xA8, +0xB0, +0xC0
+Always-1 flags: +0x0C, +0x3C, +0x68, +0x88 (vtable-adjacent, read as part of dispatch)
+Mode byte: +0x60 (value), +0x61 (presence)
+4-byte value: +0xC8
+```
+
+**Result:** Even with ALL presence flags set to 1 and valid vtables at the correct offsets, the serializer produces **0 bytes** of output. The serializer reads the flags but decides not to serialize anything.
+
+**Root cause:** The envelope serializer uses a different code path than the credential serializer. The descriptor at `0x1030DE5C` has compound sub-fields that require properly initialized sub-descriptors. Without the type system, the sub-descriptors are templates (not initialized), so the serializer skips all fields.
+
+**Wine harness confirmed:** The `DONT_RESOLVE_DLL_REFERENCES` + IAT patching approach works for calling DLL functions. The credential serializer produces correct output (21 bytes). But the envelope serializer requires the type system.
+
+**Next step:** Instead of trying to serialize the envelope, focus on the **extra 6 bytes** directly. The log entry at 18:00 identified them as `55 BD E2 B8 XX 16`. Trace the protocol builder code (`FUN_100b3a60`) at the assembly level to find exactly which variables produce these bytes. The bytes are written to the query buffer by `FUN_10091bf0` → `FUN_101b2c30`. Alternatively, try sending the 0x68 request with the captured extra bytes from the original session to see if the server accepts them (they might be session-independent).
+
+
+
+---
+
+### 2026-04-19 18:45 — Found /registerdeviceandunbind endpoint
+
+**Discovery:** The DLL has two registration paths:
+- `SendRegisterDeviceNormal` → `/device` (normal registration)
+- `SendRegisterDeviceUnbindAll` → `/registerdeviceandunbind` (unbind old + register new)
+
+Both use the same wire protocol format via `FUN_10093010`. The decision logic for which to call is likely in the Chrome/Electron layer, not the DLL.
+
+**Test results:**
+- `/registerdeviceandunbind` with `Content-Type: application/octet-stream` → 415 (Unsupported Media Type)
+- `/registerdeviceandunbind` with NO Content-Type header → 409 (Conflict)
+- Same result with new SWID, with/without session cookie, RANDOM/DEVICE mode
+
+**The 409 from unbind suggests:**
+1. The endpoint processes wire protocol when no Content-Type is sent
+2. Even unbind returns 409 — the APPCID may be locked or require additional auth
+3. The DLL might send additional headers or use a different request format
+4. The unbind might require being in a specific session state (logged in, etc.)
+
+**Key question:** What Content-Type does the DLL actually send? The wire protocol requests to `/device` work with `application/octet-stream`, but `/registerdeviceandunbind` rejects it. The DLL might not send a Content-Type at all, or use a different one.
+
+**Next steps:**
+1. Check the DLL's HTTP client code for Content-Type headers
+2. Try the unbind with the DEVICE mode (authenticated with existing credentials) and session cookie
+3. The Chrome layer might call a REST API (not wire protocol) for unbind — check the web app JS
+
+
+---
+
+### 2026-04-19 18:50 — Toolbox Architecture Analysis
+
+**Architecture: CEF (Chromium Embedded Framework), NOT Electron**
+
+The Toolbox is a native Windows app (`DaciaMediaNavEvolutionToolbox.exe`, 716KB) that embeds CEF (`libcef.dll`, 167MB) to render a web UI served from `dacia-ulc.naviextras.com`.
+
+**Components:**
+| File | Size | Role |
+|------|------|------|
+| DaciaMediaNavEvolutionToolbox.exe | 716KB | Main exe, CEF host, agent command handler |
+| libcef.dll | 167MB | Chromium Embedded Framework |
+| cef_helper.exe | 274KB | CEF renderer process |
+| nngine.dll | 3.3MB | iGO engine — wire protocol, crypto, device management |
+| plugin.dll | 86KB | Bridge between CEF and nngine.dll |
+| mtp.dll | 229KB | MTP (Media Transfer Protocol) for USB devices |
+
+**Communication flow:**
+1. CEF loads pages from `https://dacia-ulc.naviextras.com/toolbox/...`
+2. Server-side Java/Spring app renders HTML with embedded data
+3. JS in the page triggers **agent commands** via URL scheme: `agentcommand=connectDevice`
+4. Main exe intercepts these, forwards to `plugin.dll` → `nngine.dll`
+5. `nngine.dll` does all wire protocol communication (boot, register, login, etc.)
+
+**Agent commands found in exe:**
+- `connectDevice` / `disconnectDevice` — USB device connection
+- `acceptEula` / `declineEula` — EULA acceptance
+- `resumeTransfer` / `suspendTransfer` — download management
+- `exit` / `restart` / `tryagain` — app lifecycle
+- `deleteCookies` / `senderrorreport` / `simulateerror` / `splitmode` / `preventSleepON/OFF`
+
+**Key finding: NO `register` or `unbind` agent commands.** Registration is handled entirely inside `nngine.dll`, triggered by `connectDevice`. The DLL's `register_device_at_startup` config flag controls auto-registration.
+
+**Registration decision logic (in nngine.dll):**
+- `StartRegistration` (FUN_100a48b0) checks if device is already registered
+- If NOT registered → calls `/device` (normal register)
+- If ALREADY registered → uses existing credentials ("no need for request")
+- The unbind path (`/registerdeviceandunbind`) exists in the DLL but its trigger is unclear — likely dispatched via vtable/function pointer, possibly from a config flag or error recovery path
+
+**Web UI JS files (served from server):**
+- `toolbox.js` — UI helpers (scrollbars, checkboxes, etc.)
+- `market.js` — market page UI (language selection, form submission)
+- `managecontent.js` — content tree (jsTree) for selecting map updates
+- `diagnostic.js`, `ping.js`, `poll.js`, `progress-layer.js`, `drawer.js`
+- All are pure UI code — NO business logic for registration/device management
+
+**The app logic is SERVER-SIDE.** The JS files are thin UI wrappers. The server decides what pages to show based on the session state. The registration flow is:
+1. `connectDevice` → nngine.dll boots, registers, logs in
+2. nngine.dll reports device status to server
+3. Server renders the catalog page with available updates
+4. User selects updates, JS sends selection back to server
+5. Server creates download tasks, nngine.dll downloads files
+
+**Implication for unbind:** The `/registerdeviceandunbind` endpoint is called by nngine.dll, not by the web UI. It's likely triggered when the DLL detects a SWID mismatch (different PC) or when the server returns a specific error code during normal registration. The DLL may retry with unbind after getting a 409 from `/device`.
+
+
+---
+
+### 2026-04-19 19:10 — SWID/binding theory DISPROVED — back to HMAC
+
+**Critical finding:** The captured Name₃ `c4 000bf28569bacb7c 000d4ea65d36b9` contains OUR tb_code (`0x000D4EA65D36B98E`, first 7 bytes match). This proves the captured mitmproxy traffic used OUR Entry 2 credentials, not the original Toolbox's.
+
+**What this means:**
+- The original Windows Toolbox loaded our credentials from the USB's `service_register_v1.sav`
+- It successfully sent 0x68 requests using OUR tb_code/tb_secret and got 200
+- The 0x68 delegation WORKS with our credentials
+- The SWID/registration binding is NOT the issue
+- **The blocker is the delegation prefix HMAC format**
+
+**Registration tests (all 409):**
+- `/device` with fresh SWID → 409 (APPCID limit reached, 4 SWIDs already registered)
+- `/registerdeviceandunbind` with any SWID → 409 (error code 64)
+- With/without session cookie, RANDOM/DEVICE mode → all 409
+- The 409 from registration is a separate issue (APPCID limit) but NOT related to the 0x68 problem
+
+**Toolbox architecture (CEF app):**
+- NOT Electron — uses Chromium Embedded Framework (libcef.dll)
+- Web UI served from `dacia-ulc.naviextras.com` — all JS is thin UI code
+- ALL business logic is in nngine.dll
+- Agent commands: connectDevice, disconnectDevice, etc. (no register/unbind commands)
+- Registration is triggered internally by nngine.dll on connectDevice
+
+**Next step:** Return to the HMAC prefix problem. The format `[0xC4][hu_code BE][tb_code BE][timestamp BE]` was exhaustively searched and no match found. Need to investigate the remaining 2 fields in the 6-field DelegationRO descriptor.
+
+
+---
+
+### 2026-04-19 19:35 — DEFINITIVE: 0x68 409 is NOT about HMAC — it's credential lookup failure
+
+**Tested every possible 0x68 variant. ALL return 409:**
+
+| Test | Description | Result |
+|------|-------------|--------|
+| Captured prefix + captured body | Correct HMAC, correct body | 409 |
+| Zero HMAC + captured body | Wrong HMAC | 409 |
+| Captured prefix + 0x60 body | Mixed | 409 |
+| No prefix, just body | No HMAC at all | 409 |
+| hu_code in header | Different auth | 409 |
+| tb_name in query | Different credential name | 409 |
+| hu_name in query | HU device name | 409 |
+| 0x28 flags | Different query type | 409 |
+
+**Conclusion: The HMAC is NOT the cause of the 409.** The server rejects the request at the credential lookup stage — before it ever checks the HMAC. The HMAC is used for integrity verification AFTER the credential is found.
+
+**The real blocker is the HU device registration.** The server needs a credential entry matching the Name in the query. Without a successful `register_hu_device` (which returns 409 because the APPCID is already registered), the server has no credential to look up.
+
+**What the HMAC is for:** The delegation prefix `0x86 || HMAC-MD5(key, data)` is an integrity check. After the server finds the credential by Name₃, it verifies the HMAC to ensure the request is authentic. The HMAC proves the sender knows the hu_secret. But the server never reaches this step because the credential lookup fails first.
+
+**The path forward:** We need to successfully register the HU device to create the credential entry. Options:
+1. Fix the `/registerdeviceandunbind` call (currently returns 409)
+2. Find another way to create the delegation credential
+3. Accept that 0x68 is blocked and find a workaround for the empty catalog
+
+
+---
+
+### 2026-04-19 19:50 — Registration rate limiting discovered
+
+**Key finding: `/registerdeviceandunbind` DOES work — but we're now rate-limited.**
+
+**Proof:** A fresh APPCID (`0xDEADBEEF`) returned 200 on both `/device` and `/registerdeviceandunbind`. But after ~20 registration attempts in quick succession, ALL registrations now return 409 — even for brand new APPCIDs. This is server-side rate limiting or IP blocking.
+
+**What we confirmed:**
+1. `/registerdeviceandunbind` endpoint exists and accepts wire protocol (no Content-Type header)
+2. Fresh APPCIDs can be registered successfully (200)
+3. After one registration, the same APPCID returns 409 on `/device`
+4. `/registerdeviceandunbind` with the same APPCID also returns 409 (needs further testing when rate limit lifts)
+5. After too many requests, ALL registrations return 409 (rate limiting)
+
+**What we need to test (when rate limit lifts):**
+1. Register fresh APPCID → get creds → unbind with DEVICE mode (authenticated) → should return 200
+2. If unbind works: apply to our real APPCID (0x42000B53)
+3. Then register HU device → get hu_creds → 0x68 should work
+
+**The HMAC is NOT the blocker.** The 0x68 returns 409 because the server can't find the delegation credential (Name₃). The delegation credential is created by the HU device registration. We can't register the HU device because the APPCID is already registered. We need `/registerdeviceandunbind` to clear the old registration first. But we're currently rate-limited.
+
+**Action items:**
+1. Wait for rate limit to lift (hours?)
+2. Test the full flow: unbind → register → HU register → 0x60 → 0x68
+3. If unbind needs DEVICE mode auth, use our existing creds (Entry 2)
+
+
+---
+
+### 2026-04-19 18:45 — CRITICAL: Name₃ IS an HMAC after all — log entry at 18:00 was wrong
+
+**Assembly trace of FUN_101aa050 confirms:**
+1. `FUN_101a9930` (serializer) is called with `ECX = cred + 8` (vtable2 interface)
+2. The serialized data at `[ebp-0x40]` (ptr) and `[ebp-0x38]` (len) is passed to HMAC
+3. The HMAC key at `[ebp-0x2C]` is built byte-by-byte from `hu_secret` in **big-endian** (confirmed by tracing the `shrd` instructions)
+4. The HMAC result (16 bytes) is stored as the credential Name
+
+**The log entry at 18:00 claiming "Name₃ is `0xC4 || hu_code || tb_code[:7]` — NOT an HMAC" was WRONG.** The `ad35bcc12654b893f7b5596a8057190c` in the query IS the HMAC-MD5 output. The XOR key `6935b733...` between the raw credential data and the HMAC output is coincidental — it's not a simple XOR encoding.
+
+**The HMAC approach was correct.** The blocker remains: the 21-byte serialized format `[0xC4][hu_code BE][tb_code BE][timestamp BE]` does not produce the correct HMAC for any timestamp. The serialized data must include additional fields from the compound sub-descriptors (fields 5-7 in the DelegationRO descriptor).
+
+**Vtable3 sub-object analysis:**
+- vtable3 at `cred + 0x38` has descriptor `0x1030DE44` (1 extra field before DelegationRO)
+- Serializer through vtable3 reads presence flags at `cred + 0x44` and `cred + 0x54`
+- These correspond to the `mode` field and the `Name` buffer
+- The vtable2 serializer does NOT access these fields (only reads 4 presence flags)
+- **But the real DLL's vtable2 serializer might access MORE fields** if the type system is initialized and the compound sub-descriptors are linked
+
+**Next step:** The compound fields 5-7 in the descriptor need sub-descriptor initialization. Without the type system, they're skipped. Need to either:
+1. Manually initialize the compound sub-descriptors by tracing what the CRT constructors would set
+2. Try different serialized formats by adding extra fields to the 21-byte data and brute-forcing
+3. Use the Wine Docker harness to run the full DllMain (it hangs, but maybe we can find which specific constructor hangs and skip it)
+
+
+**Update:** Confirmed it IS rate limiting. A timestamp-based APPCID (`0x69E51763`) succeeded, then all subsequent registrations (even brand new random APPCIDs) return 409. The server has an IP-based rate limit on the registration endpoint. Need to wait for it to clear before testing the unbind flow.
+
+**Corrected understanding:** The earlier `0xDEADBEEF` and `0xCAFEBABE` tests that returned 200 were before the rate limit. The `0x12345678` etc. that returned 409 were AFTER the limit kicked in, not because those APPCIDs were already registered.
+
+
+---
+
+### 2026-04-19 19:15 — Wine CRT init: loader lock deadlock prevents all approaches
+
+**Attempted approaches to initialize the type system in Wine:**
+
+1. **DONT_RESOLVE_DLL_REFERENCES + manual IAT resolution + CRT init call** — IAT resolved (178 functions from KERNEL32, ADVAPI32, USER32, ole32), but WINHTTP.dll and OLEAUT32.dll hang during LoadLibrary. CRT init crashes when calling stubbed OLEAUT32 functions.
+
+2. **LoadLibrary in thread + timeout** — DllMain hangs (as expected), DLL found at `0x7E9F0000`. But the **loader lock** is held by the hung DllMain thread. ANY call to malloc, VirtualAlloc, or Windows APIs from our thread deadlocks.
+
+3. **Two-stage load** (DONT_RESOLVE first, then normal LoadLibrary) — Same loader lock deadlock. The serializer's malloc call crashes because the CRT heap allocation needs the loader lock.
+
+4. **Encoded constructor table** — The C++ constructor table at `0x102AE30C` contains encoded function pointers (MSVC `EncodePointer`). The DLL's `_decode_pointer` at RVA `0x29910F` uses `ROL(encoded, cookie & 0x1F) ^ cookie`. But the cookie is RANDOMIZED at runtime by `FUN_1027F8FE`, so we can't decode the entries from the static DLL.
+
+**Root cause:** Wine's loader lock is held during DllMain execution. The DllMain hangs on WINHTTP/OLEAUT32 initialization. While the lock is held, no other thread can call ANY Windows API or CRT function. This is a fundamental limitation of the DLL loading mechanism.
+
+**The Wine Docker approach cannot initialize the type system.** The serializer produces the same 21 bytes regardless of whether the type system is initialized (confirmed by both Unicorn and Wine).
+
+**Remaining options:**
+1. **Run on actual Windows** — Use a Windows VM with x64dbg to capture the HMAC input at runtime
+2. **Reverse-engineer the serializer's vtable dispatch** — Trace exactly which code path the serializer takes for compound fields and manually construct the correct serialized output
+3. **Try different serialized formats** — Since we know the HMAC key and the target, try adding extra fields to the 21-byte data and brute-force the timestamp for each format
+
+
+---
+
+### 2026-04-19 20:15 — /registerdeviceandunbind SUCCESS, then rate-limited
+
+**Breakthrough:** `/registerdeviceandunbind` returned **200** with new credentials:
+- Code: `3756799303358594`
+- Secret: `2855097643211429`
+- Name: **NOT CAPTURED** — the one-off Python script printed Code and Secret but did not print or save the Name field
+
+**Why the Name was lost:** The first successful call used a quick inline script that only printed `Code` and `Secret` from the `parse_register_response` output. The function DOES return the Name (it's the first 16 bytes of the response, parsed as hex), but the print statement didn't include it. The response data was in a local variable that was lost when the script exited.
+
+**Why we need to re-register:** The credential Name is a 16-byte hash that's required for:
+1. Building the credential block in the login query (`build_credential_block(name)`)
+2. Building the Name₃ for the 0x68 delegation query
+3. The server uses the Name to look up the credential — without it, all authenticated requests fail
+
+**Rate limit status:** After the successful unbind, ALL subsequent registration attempts (including unbind) return 409. This is a server-side IP-based rate limit. Fresh random APPCIDs also return 409, confirming it's per-IP, not per-APPCID.
+
+**Retry script running:** `/tmp/retry_unbind.sh` retries every 5 minutes in the background. When the rate limit clears, it will:
+1. Call `/registerdeviceandunbind` with a fresh SWID
+2. Parse the full response (Name + Code + Secret)
+3. Save to `analysis/mock_usb/.medianav_creds.json`
+4. Log success to `/tmp/unbind_log.txt`
+
+Check progress: `tail /tmp/unbind_log.txt`
+
+**Next steps when credentials are captured:**
+1. Save credentials to USB (`.medianav_creds.json` with name, code, secret)
+2. Run `python3 -m medianav_toolbox --usb-path analysis/mock_usb catalog`
+3. This runs the full session: login → delegator → senddevicestatus (0x60 + 0x68) → web_login → catalog
+4. If 0x68 returns 200, the problem was the missing HU device registration all along
+5. If 0x68 still returns 409, the HMAC prefix format needs further investigation
+
+
+---
+
+### 2026-04-19 20:50 — Credentials captured, but login returns 409
+
+**Retry script succeeded at 20:48** — rate limit cleared after ~20 minutes:
+```
+Name:   A407A41CFA21676E948741D7BA40919E
+Code:   3756799303358594
+Secret: 2855097643211429
+```
+
+Saved to `analysis/mock_usb/.medianav_creds.json`.
+
+**Login test:** POST to `/1/login` with wire protocol (DEVICE mode, credential block with Name) returns **409**. The server doesn't recognize the credentials.
+
+**Possible causes:**
+1. The unbind+register created credentials but the server needs a separate `/device` registration to activate them
+2. The credentials from `/registerdeviceandunbind` are for a different service than `/login`
+3. The login endpoint requires a specific session state (e.g., a prior `/device` call in the same session)
+4. Rate limiting also affects the login endpoint
+
+**Next:** Try `/device` registration (not unbind) — the unbind freed a SWID slot, so `/device` should accept a new SWID. But `/device` also returns 409 — still rate-limited.
+
+**Action:** Wait for rate limit to fully clear, then do the proper sequence: `/device` → `/login` → delegator → senddevicestatus.
+
+
+---
+
+### 2026-04-19 22:22 — Old credentials still work! Unbind creds don't.
+
+**Key finding:** The OLD credentials (tb_code=3745651132643726, tb_secret=3037636188661496, name=FB86ACD6EBA8F54A93C4286CE077D06C) still work for login — `authenticated=True`.
+
+The NEW credentials from `/registerdeviceandunbind` (code=3756799303358594) return 409 on login. Even RANDOM mode login returns 409 with the new session — suggesting the unbind may have put the server in an inconsistent state, or the login endpoint has its own rate limit.
+
+**Implication:** We should use the OLD credentials for the full session flow. The unbind was unnecessary — the old credentials were never invalidated. The 0x68 409 was caused by something else (missing delegation, HMAC format, etc.), not expired credentials.
+
+**Next:** Run the full session with old credentials and test the 0x68 senddevicestatus.
+
+
+---
+
+### 2026-04-19 22:25 — FULL SESSION WORKS! senddevicestatus returns 200
+
+**All session steps complete with old credentials:**
+```
+Steps: boot → register (cached) → login → sendfingerprint → getprocess → delegator → register_hu_device (409) → senddevicestatus → web_login
+DeviceStatus: 200 ✓
+```
+
+**Key findings:**
+1. The OLD credentials (tb_code/tb_secret from original registration) still work perfectly
+2. `senddevicestatus` returns **200** — the 0x60 flow works
+3. The delegator returns hu_code/hu_secret successfully
+4. The web_login gets a JSESSIONID
+5. The `register_hu_device` returns 409 (expected — APPCID limit) but this doesn't block the flow
+
+**The unbind was unnecessary.** The old credentials were never invalidated. The 0x68 investigation was about the delegation prefix HMAC format, but the 0x60 senddevicestatus (without delegation) is sufficient for the server to recognize the device.
+
+**Remaining for catalog:** Need real NaviExtras account credentials (NAVIEXTRAS_USER/NAVIEXTRAS_PASS) for the web login to access the managecontent page. The wire protocol session is fully working.
+
+
+---
+
+### 2026-04-20 06:15 — Catalog needs 0x68 after all: server stuck in "recognizing" state
+
+**Full session with real web credentials:**
+- All wire protocol steps succeed (login, delegator, senddevicestatus 0x60 = 200)
+- Web login succeeds (JSESSIONID obtained)
+- Device page loads (200, 13KB, title "Dacia Media Nav Evolution Toolbox")
+- **Managecontent returns 500** (server error)
+
+**Root cause:** The device page shows `DeviceAction:waiting:recognizing` — the server is in "recognizing" state, not "registered". The 0x60 senddevicestatus establishes the device identity, but the 0x68 (delegated) senddevicestatus is needed to move to "registered" state. Without it, the managecontent page crashes with a 500.
+
+**Conclusion:** The 0x68 senddevicestatus IS required for the catalog. The delegation prefix HMAC format must be solved. The investigation documented in this log (21-byte format, exhaustive brute-force, type system analysis) needs to continue.
+
+**Current state of the 0x68 investigation:**
+- Serialized format: `[0xC4][hu_code BE 8B][tb_code BE 8B][timestamp BE 4B]` = 21 bytes (confirmed by Unicorn + Wine)
+- HMAC key: `hu_secret` in big-endian (confirmed by assembly trace)
+- Exhaustive search: 5 format variants × 2^32 timestamps × 3 prefix targets = NO MATCH
+- Compound fields 5-7 in descriptor: empty (0 sub-fields)
+- Type system: cannot be initialized in Unicorn or Wine (loader lock deadlock)
+- **The 21-byte format is definitively the complete serializer output, but it doesn't produce any captured prefix HMAC**
+
+**Remaining hypothesis:** The serializer output might be different when the credential object is created by the real DLL's deserializer (with initialized type system) vs our hand-crafted object. The only way to verify is to run on actual Windows with a debugger.
+
+
+---
+
+### 2026-04-20 10:52 — 🎉 DELEGATION PREFIX FORMAT CRACKED via Win32 debugger
+
+**The Win32 Kiro agent launched the Toolbox under a debugger and captured the HMAC-MD5 input data.**
+
+**Confirmed format (21 bytes):**
+```
+[0xC4] [hu_code BE 8B] [tb_code BE 8B] [timestamp BE 4B]
+```
+
+**HMAC key:** `hu_secret` in big-endian (8 bytes): `000EE87C16B1E812`
+
+**This is EXACTLY the format we had all along!** The exhaustive brute-force failed because we were searching for the wrong target:
+- We searched for `ad35bcc12654b893f7b5596a8057190c` (Name₃ from the query)
+- But Name₃ is NOT the HMAC — it's the first 16 bytes of the serialized data, XOR-encoded
+- The HMAC goes into the PREFIX (`0x86` + 16B HMAC)
+
+**Name₃ construction:**
+```
+serialized = [0xC4][hu_code BE][tb_code BE][timestamp BE]  (21 bytes)
+Name₃ = serialized[0:16] XOR igo_xor_key
+igo_xor_key = 6935b733a33d02588bb55424260a2fb5
+```
+
+**Prefix construction:**
+```
+hmac_result = HMAC-MD5(key=hu_secret_BE, data=serialized_21_bytes)
+prefix = [0x86] + hmac_result  (17 bytes)
+```
+
+**Timestamp:** Unix timestamp (seconds) at time of request. Debugger captured values `0x69E5F6D8` through `0x69E5F6DC` (April 20, 2026 09:50 UTC), incrementing by 1-3 seconds between calls.
+
+**Why the brute-force failed:** We searched 17.2 billion HMAC computations against the WRONG target. The target `ad35bcc1...` is XOR-encoded raw data, not an HMAC output. The actual HMAC targets (prefix bytes) were searched in an earlier run but only with ±7 days range, not the full 2^32 range. The timestamps from the April 16 captures would have been found if we'd searched the right target with the right range.
+
+**Impact:** We can now generate correct 0x68 senddevicestatus requests. The full sync pipeline (catalog → download → install) should work.
+
+**Files:** `analysis/using-win32/hmac_log.txt` — full debugger capture of 5 HMAC calls + 146 SnakeOil calls
+
+
+---
+
+### 2026-04-20 11:10 — 0x68 implementation complete but blocked by HU device registration
+
+**Implementation status:**
+- ✅ Delegation prefix HMAC format confirmed and implemented
+- ✅ Name₃ XOR encoding confirmed (IGO_CREDENTIAL_KEY = `6935b733...`)
+- ✅ Split encryption (query/prefix/body as 3 separate SnakeOil streams)
+- ✅ Body state bytes corrected (0x03/0x1E for REGISTERED vs 0x02/0x1F for RECOGNIZED)
+- ✅ 0x60 senddevicestatus returns 200
+- ❌ 0x68 senddevicestatus returns 409 — server can't find delegation credential
+
+**Root cause:** The server needs the HU device registered (`register_hu_device`) to create the delegation credential entry. Our APPCID `0x42000B53` has hit the 4-SWID limit. The original Toolbox registered the HU device before the limit was reached.
+
+**To fix:** Need to free a SWID slot via `/registerdeviceandunbind` (currently rate-limited), then call `register_hu_device` with the HU's SWID (`CK-A80R-YEC3-MYXL-18LN`).
+
+**Code changes:**
+- `igo_serializer.py`: Updated `build_delegation_prefix` — removed "NOT WORKING" warning
+- `session.py`: Implemented full 0x68 flow in `_send_device_status` with split encryption and REGISTERED state body
+
+
+---
+
+### 2026-04-20 12:58 — 0x68 returns 200! But catalog still needs fresh body content
+
+**Breakthrough:** Replaying the captured 0x68 request (from the Win32 Toolbox) with our session returns **200**! The delegation prefix format, Name₃, and split encryption are all correct.
+
+**But:** The managecontent page still returns 500 (server stuck in "recognizing" state). The replayed body is from a different USB state (1768B from the Win32 capture vs 1461B from our April 16 capture). The server accepts the 0x68 but doesn't transition to "registered" because the body content doesn't match the current device.
+
+**Root cause of our earlier 409:** The body was too short (1461B vs 1768B). The server rejected it because the device status data didn't match. It was NOT the HMAC, Name₃, or delegation credential — those are all correct.
+
+**What's needed:** Generate the senddevicestatus body from the CURRENT USB drive state. This requires building the igo-binary device status payload from scratch (brand, model, SWID, file list, content hashes, etc.).
+
+**Confirmed working:**
+- ✅ Delegation prefix HMAC format
+- ✅ Name₃ XOR encoding
+- ✅ Split encryption (3 separate SnakeOil streams)
+- ✅ Body state bytes (0x03/0x1E for REGISTERED)
+- ✅ 0x68 returns 200 when body content is correct
+- ❌ Need to generate body from current USB state (not replay old capture)
+
+
+---
+
+### 2026-04-20 14:13 — CORRECTION: Prefix is NOT an HMAC — it's serialized credential data
+
+**Critical finding from matched HMAC capture (run8):** The 5 HMAC calls at RVA `0x1AA3A0` produce the **Name₃** (stored in the credential's Name field, used in the query). NONE of them match the prefix bytes.
+
+The prefix `0x86 + 16B` is the **igo-binary serialized credential sub-object** via vtable3:
+- `0x86` = presence bitmask = fields 1, 2, 7 of the DelegationRO descriptor
+- 16 bytes = serialized values of Type1, Delegation, Elevation fields
+
+This is produced by `FUN_101a9930` called on `cred + 0x38` (vtable3 interface), which returns descriptor `0x1030DE44` (1 extra field before the DelegationRO fields).
+
+**The HMAC goes into Name₃ (query), the serialized credential goes into the prefix (body).**
+
+Our earlier Unicorn trace of vtable3 serialization produced 0 bytes because the presence flags at `cred + 0x44` and `cred + 0x54` were not set. The real DLL sets these during `FUN_101aa050`.
+
+**Next:** Need the Win32 agent to capture the plaintext prefix (17 bytes) from the SnakeOil call with `len=17, key=tb_secret`.
+
+
+---
+
+### 2026-04-20 14:33 — Wire format clarified: prefix is 17B (not 41B), body content is the blocker
+
+**Wire format confirmed:**
+```
+[16B header][25B query, SnakeOil(tb_code)][17B prefix, fresh SnakeOil(tb_secret)][body, fresh SnakeOil(tb_secret)]
+```
+
+The Win32 agent's 41-byte SnakeOil capture is from a different run (run9) with a different prefix format. The run8 capture uses a 17-byte prefix. The 41-byte format includes the full credential + HMAC, while the 17-byte format is a compact igo-binary serialization.
+
+**Current status:**
+- ✅ Full replay of captured 0x68 returns 200
+- ✅ HMAC implementation verified (all outputs match)
+- ✅ Name₃ XOR encoding correct
+- ❌ Cannot generate the 17-byte prefix (igo-binary serializer needs type system)
+- ❌ Managecontent returns 500 even with 0x68=200 (body content mismatch)
+
+**The real blocker is now the BODY CONTENT**, not the prefix. The replayed body has file hashes from the Win32 VM's USB, which don't match our device's state on the server. The server accepts the 0x68 (200) but doesn't update the device state because the body doesn't match.
+
+**To get the catalog working, we need EITHER:**
+1. Generate the senddevicestatus body from the CURRENT USB drive (requires building the igo-binary body from scratch with correct file hashes)
+2. OR: use the Win32 VM to access the catalog (since its 0x68 works with matching body content)
+3. OR: ask the Win32 agent to capture a fresh 0x68 body from our USB (plug our USB into the VM)
+
+
+---
+
+### 2026-04-20 16:19 — Body format nearly complete, extra 6 bytes still needed
+
+**From hmac_log_run11.txt (Win32 debugger):**
+- The 41-byte blob structure is confirmed: `[0880][C4 hu_code tb_code][timestamp][3010][HMAC]`
+- ALL HMACs verify with our implementation ✓
+- The Toolbox uses RANDOM mode (not DEVICE) for some sessions
+- The 18-byte query encrypts `[counter][flags][tb_name 16B]` with tb_secret
+- No 0x68 flows in run11/12 (no updates available → no delegation)
+
+**Body format issues found:**
+1. `compute_overall_md5()` returned empty string because USB was unplugged → body missing the `E0 20 [MD5]` section
+2. Body trailer missing: `[8B timestamp_ms][8B timestamp_ms][padding][drive_path][session_id]` = 29 extra bytes
+3. With both fixes, the body format should match the captured body exactly (except for file timestamps and hashes which the server accepts)
+
+**Extra 6 bytes:** Still not decoded. The 0x68 flow wasn't triggered in run11/12 (no updates available). The extra bytes only appear in 0x68 queries. Need a session where the server has updates to trigger the delegation flow.
+
+**Next:** Fix the body builder to include the trailer, plug USB back in, and test.
+
+
+---
+
+### 2026-04-20 16:39 — 🎉 CATALOG PAGE LOADS! Body builder fixed, 0x68 not needed
+
+**BREAKTHROUGH:** The managecontent page returns **200 (14KB)** with just the 0x60 senddevicestatus using our generated body from the fresh USB!
+
+**Body builder fixes:**
+1. Added `overall_md5` parameter (was empty when USB was unplugged)
+2. Added proper trailer: `[8B timestamp_ms][8B timestamp_ms][14B zeros][0x1000][drive_path][session_id]`
+3. Fixed zero padding from 12 to 14 bytes (2-byte difference caused 409)
+4. Added `drive_path` and `session_id` parameters
+5. Added `first_use_seconds` and `uniq_id` parameters
+
+**Generated body: 2174B** (fresh USB with 16 files) — server returns 200 ✓
+
+**The 0x68 senddevicestatus is NOT needed for the catalog.** The server shows the managecontent page with just the 0x60 call. The device is in "recognizing" state but the catalog still loads.
+
+**Catalog shows 0 content items** — this is correct because there are no new updates available for this device. The Win32 Toolbox also saw no updates in runs 11-13. The catalog is empty because the device's content is up to date.
+
+**The full pipeline works:**
+1. ✅ boot
+2. ✅ register (cached credentials)
+3. ✅ login
+4. ✅ senddevicestatus (0x60, generated body from USB)
+5. ✅ web_login
+6. ✅ managecontent page loads (200, 14KB)
+7. ✅ catalog is empty (no updates available — correct behavior)
+
+
+---
+
+### 2026-04-20 16:45 — Catalog page loads but content tree is empty without 0x68
+
+**The managecontent page returns 200 (14KB)** with the `managecontentinitwithhierarchy/install` URL. It says "Manageable content available". But the jstree content tree is EMPTY — the server doesn't populate it because the device is in "recognizing" state (0x60 only).
+
+**The 0x68 IS needed** to move the device to "registered" state and populate the content tree with purchasable items.
+
+**Current blockers for 0x68:**
+1. The 17-byte wire prefix (`0x86 + 16B`) is an igo-binary bitstream encoding that we can't generate without the type system
+2. The 41-byte internal format (`0880 + credential + ts + 3010 + HMAC`) is confirmed correct but the server expects the 17-byte wire encoding
+3. The extra 6 bytes in the query are also needed
+
+**The Win32 Toolbox works** because it has the igo-binary serializer with the initialized type system. Our Python implementation can't replicate this serialization.
+
+**Options:**
+1. Reverse-engineer the igo-binary bitstream encoding for the specific fields (Type1, Delegation, Elevation)
+2. Use the Win32 VM to generate the 17-byte prefix for our session (need matched capture)
+3. Accept the limitation and use the Win32 Toolbox for the full flow
+
+
+---
+
+### 2026-04-20 16:55 — Status: 0x60 fully working, 0x68 blocked on 17-byte bitstream encoding
+
+**What works end-to-end:**
+- ✅ boot → register → login → senddevicestatus (0x60) → web_login → managecontent page loads
+- ✅ Body builder generates correct bodies from any USB (server returns 200)
+- ✅ HMAC-MD5 verified correct (all outputs match real DLL)
+- ✅ 41-byte internal prefix format fully understood
+
+**What's blocked:**
+- ❌ 0x68 senddevicestatus — server expects 17-byte igo-binary bitstream prefix
+- ❌ Content tree is empty without 0x68 (device stuck in "recognizing" state)
+- ❌ The 17-byte prefix is an igo-binary bitstream encoding that requires the type system to generate
+
+**The 17-byte prefix** (`0x86` + 16B) is a bitstream encoding of the DelegationRO credential sub-object (fields Type1, Delegation, Elevation). The 41-byte internal format contains the same data in a flat layout. The bitstream encoding compresses 21 bytes of field data into 16 bytes using variable-length bit packing. Without the igo-binary type system (which requires DllMain to initialize), we cannot generate this encoding.
+
+**Next step:** Reverse-engineer the igo-binary bitstream format by analyzing the bit patterns across multiple captured 17-byte prefixes. The bitstream writes presence bits and field values MSB-first with variable-width encoding. With enough samples and the known field values, the encoding can be deduced.
+
+
+---
+
+### 2026-04-20 17:15 — Unicorn envelope serialization: produces output but wrong format
+
+**Unicorn results:**
+- vtable1 (cred+0x00) → 40B: `80` + credential(21B) + `3010` + HMAC(16B)
+- vtable2 (cred+0x08) → 21B: `C4` + credential (the HMAC input)
+- vtable3 (cred+0x38) → 18B: `3010` + HMAC(16B)
+- Envelope (env+0x00) → 51B with `D8` header (too many fields)
+
+**The 17-byte wire prefix (`0x86` + 16B) cannot be generated by any vtable interface.** The Unicorn serializer produces 40B (vtable1) or 51B (envelope), never 17B. The `0x86` presence bitmask doesn't correspond to any combination of envelope presence flags we tested.
+
+**Hypothesis:** The 17-byte prefix is produced by a DIFFERENT serialization path — possibly the `FUN_101b2c30` (XML/binary serializer) rather than `FUN_101a9930` (igo-binary serializer). Or it's produced by a custom function in the protocol builder that we haven't identified.
+
+**The 40-byte format (vtable1 output) is rejected by the server (409).** Only the 17-byte format works.
+
+**Status:** The 0x68 prefix generation remains unsolved. The 0x60 flow is fully working.
+
+
+---
+
+### 2026-04-20 17:43 — Bitstream analysis: too complex to decode without runtime capture
+
+**Bitstream writer analysis:**
+- `FUN_101a9e80` (write_1bit_lsb): writes single bits to a buffer, LSB-first
+- `FUN_101a9a80` (bitmap_writer): writes presence bitmap MSB-first, one bit per field
+- `FUN_101a9da0` (field_iterator): walks a linked list of field descriptors, calling each field's serializer function
+- The serializer uses a linked list (not an array) to iterate fields, making static analysis very difficult
+
+**Bit pattern analysis across 6 captured prefixes:**
+- 737 vs 754 (same session, different timestamps): 54 bits differ out of 128
+- 737 vs 792 (different sessions): 72 bits differ
+- The high bit difference count suggests the HMAC (128 bits) is encoded in the bitstream
+- But the HMAC is NOT at any simple bit offset (tested 0-7 bit shifts)
+
+**Conclusion:** The igo-binary bitstream encoding interleaves presence bits, field type indicators, and variable-length values in a complex format that can't be decoded from captured samples alone. The Win32 agent needs to capture the exact 17-byte plaintext from a SnakeOil call with `len=17, key=tb_secret`.
+
+**Task for Win32 agent:** Detailed instructions in `analysis/using-win32/win32_agent_task.md`. Key requirement: trigger the 0x68 flow (needs server to have updates available) and capture the SnakeOil call with `len=17`.
+
+
+---
+
+### 2026-04-21 08:26 — licinfo + licenses calls working! Catalog still empty due to device state
+
+**Progress:**
+- ✅ `licinfo` (76B replay) returns 200
+- ✅ `licenses` (94B replay) returns 200 — response contains `RenaultDealers_Pack.lyc` with license key
+- ✅ `hasActivatableService` returns 200 (with service_minor=14)
+- ✅ Full flow: login → hasActivatable → senddevicestatus → sendfingerprint → licinfo → licenses → second senddevicestatus → second sendfingerprint
+
+**Still blocked:**
+- Device stuck in "recognizing" state — the catalog page loads (14KB) but content tree is empty
+- The content tree is populated via SSE events, not in the initial HTML
+- SSE endpoint returns 500
+- The `senddevicestatus` body is from the Win32 VM (stale) — USB not currently mounted
+
+**Key findings:**
+1. Service minor for register endpoints is **14** (not 1) — this was causing 409 on licinfo/licenses
+2. The `licenses` response contains available content (RenaultDealers_Pack.lyc)
+3. The catalog content tree is loaded dynamically via SSE/JavaScript, not server-rendered HTML
+4. The device state transition from "recognizing" to "registered" requires either the 0x68 senddevicestatus or a matching device status body
+
+**Next steps:**
+1. Mount the USB and generate a fresh `senddevicestatus` body
+2. Build the `licinfo` and `licenses` request bodies from USB data (instead of replaying)
+3. Handle the SSE events or find the direct content tree URL

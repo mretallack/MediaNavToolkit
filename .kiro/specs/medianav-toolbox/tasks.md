@@ -11,13 +11,15 @@ The protocol has been fully reverse-engineered and verified against the live ser
 - Credential block: **solved** (`0xD8 || (Name XOR IGO_CREDENTIAL_KEY)`)
 - Full login flow: **working** (boot → login → sendfingerprint → getprocess all return 200)
 - Request body encoding: **solved** (all endpoints verified)
-- Catalog parsing: **working** (31 map updates, 6.07 GB total)
 - Delegator: **working** — returns head unit credentials
 - **Secret₃ SOLVED** — 0x68 body key = tb_secret, split encryption (body[0:17] + body[17:] each fresh PRNG)
 - **Name₃ SOLVED** — `0xC4 || hu_code(8B BE) || tb_code(7B BE)` (direct concatenation, verified)
 - **.lyc decryption: solved** — RSA 2048-bit + XOR-CBC, public key extracted (R.2 RESOLVED)
-- **0x68 NOT REQUIRED** — catalog works with only 0x60 senddevicestatus (verified 2026-04-19)
-- **Remaining**: `sync` command (4.3) — content selection → download → install pipeline
+- **HMAC-MD5 verified** — Win32 debugger confirmed format, Python implementation matches DLL output exactly
+- **senddevicestatus body builder: working** — generates correct body from USB (server returns 200)
+- **licenses API: working** — returns available content packs with embedded .lyc data
+- **Service minor for register endpoints: 14** (not 1) — fixed, licinfo/licenses now return 200
+- **Remaining**: Build `licenses` request body from scratch (currently replayed from capture), wire up full sync pipeline
 
 ---
 
@@ -198,35 +200,36 @@ RANDOM mode seed generation:
   - Catalog shows 31 items across 31 countries, 6.07 GB total, 7.18 GB available
 
 - [ ] **4.3** Wire up `medianav-toolbox sync` command — **THE MAIN REMAINING WORK**
-  - [x] **4.3.1** Fix senddevicestatus body generation (replace captured replay with generated body)
-    - 0x60 body: generated from USB file scan (`scan_device_files()` in device.py), HTTP 200 ✓
-    - 0x68 body: encryption solved (tb_secret, split pattern), delegation prefix format cracked
-    - Delegation prefix = `0x86 || HMAC-MD5(hu_secret_BE, binary_credential)`
-    - Binary credential: `[presence_byte][hu_code 8B BE][tb_code 8B BE][timestamp 4B BE]`
-    - Unicorn emulation (analysis/unicorn_serialize3.py) produces correct binary output
-    - **Remaining:** verify presence byte (0xC4 in test) against real captured session
-    - 205 unit tests passing
-  - [ ] **4.3.2** Wire up content selection → download URL retrieval
-    - R.9 is RESOLVED — encryption is no longer a blocker
-    - Content selection and confirmation work (sync command does this already)
-    - getprocess response format understood from login response capture:
-      `[type_flag] [00 00] [UUID(36B)] [context(4B)] [type_code] [URL_string]`
-    - Type codes: 0x03=SSE, 0x04=BROWSER, 0x02=FINGERPRINT, DOWNLOAD=TBD
-    - **BLOCKED**: content tree is empty because USB drive hasn't been synced from car recently
-    - Server compares senddevicestatus file list against known device state
-    - Once USB is synced from car: content appears → select → confirm → getprocess returns DOWNLOAD tasks
-  - [ ] **4.3.3** Wire up download → USB write pipeline — BLOCKED on 4.3.2 (needs fresh USB sync)
-    - `DownloadManager.download()` for each content file (with resume + MD5 verify)
-    - `installer.install_content()` — write content files + .stm shadow files
-    - `installer.install_license()` — write .lyc + .lyc.md5 files
-    - `installer.write_update_checksum()` — write update_checksum.md5 trigger
-    - All components implemented and unit-tested, just need download URLs to wire up
-  - [ ] **4.3.4** Validate USB output — BLOCKED on 4.3.3
+  - [x] **4.3.1** Fix senddevicestatus body generation
+    - 0x60 body: generated from USB file scan, server returns 200 ✓
+    - Body builder fixed: trailer with timestamps, drive path, session ID, 14-byte padding
+    - Service minor for register endpoints = **14** (was incorrectly 1, causing 409)
+  - [x] **4.3.2** Get available content via `licenses` API
+    - `licinfo` (36B + 76B) → 200 ✓
+    - `licenses` (94B) → 200, returns available packs with embedded .lyc data ✓
+    - Response contains license key + filename + encrypted .lyc content
+    - **LIMITATION:** `licenses` request body is currently a replay from Win32 capture
+      The 94B request uses 0x68 flags with a delegation prefix in the body that we
+      cannot generate from scratch (requires igo-binary bitstream serializer).
+      The replay works because the same credentials are used.
+    - **TODO:** Build `licenses` request body from scratch (requires understanding the
+      53B body format — it contains the delegation prefix `0x86 + 16B` which is an
+      igo-binary bitstream encoding of the credential sub-object)
+  - [ ] **4.3.3** Parse licenses response and present catalog
+    - Parse available packs from `licenses` response (license key, filename, .lyc data)
+    - Compare against installed files on USB
+    - Present available/installed status to user
+  - [ ] **4.3.4** Download and install content to USB
+    - Extract .lyc data from `licenses` response
+    - Write .lyc file to `NaviSync/license/` on USB
+    - Write .lyc.md5 checksum file
+    - Write .stm shadow file
+    - Verify installation
+  - [ ] **4.3.5** Validate USB output
     - Verify directory structure matches NaviSync layout
-    - Verify .stm files have correct format and content
-    - Verify MD5 checksums match between .stm metadata and actual files
-    - Verify update_checksum.md5 is correct (MD5 of sorted .stm concatenation)
-    - Compare output against original Toolbox output for known content
+    - Verify .stm files have correct format
+    - Verify MD5 checksums match
+    - Compare output against original Toolbox output
 
 ## Known Bugs
 
@@ -274,14 +277,54 @@ RANDOM mode seed generation:
   - 0x68 body: encryption solved (tb_secret, split pattern), delegation prefix partially reversed
   - Body format fully decoded: bitmask + device info + content metadata + file entries + trailer
 
-- [ ] **R.11** 0x68 delegation prefix HMAC — **NOT BLOCKING** (nice to have)
-  - The 0x68 senddevicestatus is NOT required for catalog/download (0x60 alone works)
-  - Name₃ = `0xC4 || hu_code(8B BE) || tb_code(7B BE)` — SOLVED, verified
-  - Delegation prefix = `0x86 || HMAC-MD5(hu_secret_BE, binary_credential)` — format known
-  - Binary credential from FUN_101a9930: `[presence][hu_code BE][tb_code BE][timestamp BE]`
-  - **Exhaustive search (5 formats × 2^32 timestamps, 4 threads): NO MATCH**
-  - DelegationRO descriptor has 6 fields; Unicorn credential only populates 4
-  - Real credential likely has additional fields from device manager runtime state
-  - Raw 0x68 replay also returns 409 (session-specific validation)
-  - Unicorn pipeline: FUN_101a9930 runs end-to-end, FUN_101aa3a0 (HMAC) verified identical to Python
+- [ ] **R.11** 0x68 delegation prefix HMAC — **BLOCKING** (required for content rights)
+  - **What 0x68 does:** Sends device status using delegated head unit credentials (hu_code/hu_secret)
+    rather than toolbox credentials (tb_code/tb_secret). The 0x08 flag means "delegated device" —
+    it asserts the head unit hardware identity, not just the toolbox software identity.
+  - **Why it's blocking:** Without 0x68, managecontent returns `norightsfordevice` and the catalog
+    is empty. The earlier "4 packages" result was a false positive (counted JS references, not content).
+    The 0x68 call grants content rights to the session — it IS required for the full pipeline.
+  - **What's solved:**
+    - Name₃ = `0xC4 || hu_code(8B BE) || tb_code(7B BE)` — verified against all captured flows ✓
+    - Secret₃ = tb_secret — verified ✓
+    - Split encryption: prefix(17B) + body each with fresh SnakeOil(tb_secret) ✓
+    - Prefix = `0x86 || HMAC-MD5(hu_secret_BE, serialized_credential)` — format known ✓
+    - HMAC-MD5 implementation verified identical (Unicorn vs Python) ✓
+    - HMAC key = hu_secret big-endian (traced byte-by-byte from SHRD instructions) ✓
+    - 0x68 query = 25B: `[counter][0x68][D8 + Name₃ XOR IGO_KEY][extra 6B]` ✓
+  - **What's NOT solved:** The exact binary data passed to the HMAC
+    - Exhaustive search (5 formats × 2^32 timestamps, 4 threads): NO MATCH
+    - DelegationRO descriptor has 6 fields; Unicorn credential only populates 4
+    - Real credential has additional fields from device manager runtime state
+    - FUN_100567E0 (get inner credential) returns a static descriptor ptr, not runtime data
+  - **Investigation plan — full Unicorn emulation of nngine.dll:**
+    - [ ] R.11.1: Find the registration response handler that populates 0x1030EBC0
+      - The inner credential at 0x1030EBC0 is a descriptor template (12-byte entries)
+      - At runtime, registration overwrites descriptor pointers with actual Name/Code/Secret
+      - Need to find the function that parses the registration response and calls setters
+      - Look for callers of the credential store's setter vtable methods
+    - [ ] R.11.2: Emulate the registration handler in Unicorn
+      - Feed it our known tb credentials (Name/Code/Secret from `.medianav_creds.json`)
+      - Verify memory at 0x1030EBD0 and 0x1030EBD8 contains expected values
+      - This tells us exactly what `*(iVar5+0x10)` and `*(iVar5+0x18)` contain
+    - [ ] R.11.3: Set up FUN_101aa050 dependencies in Unicorn
+      - Pre-set DAT_1031445c (device manager singleton) to skip creation
+      - Hook FUN_10011dd0 (credential store lookup) to return fake device object
+      - Device object needs vtable PTR_FUN_102b5268, vtable[6] returns 0x1030EBC0
+      - Hook FUN_101d2630 (timer) to return a known timestamp
+      - Hook DAT_10326d38 (object manager) vtable chain for timer access
+    - [ ] R.11.4: Run FUN_101aa050 end-to-end in Unicorn
+      - Call with hu_code/hu_secret as params (from delegator response)
+      - Capture the exact data passed to FUN_101aa3a0 (HMAC-MD5)
+      - Capture the 16-byte HMAC output
+    - [ ] R.11.5: Verify against captured traffic
+      - Compute HMAC with captured timestamp range
+      - Match against the 3 captured prefix values (flows 737, 754, 792)
+      - If match: implement `build_delegation_prefix()` with correct format
+      - If no match: compare Unicorn output byte-by-byte with our Python implementation
+    - [ ] R.11.6: Implement and test against live server
+      - Update `build_delegation_prefix()` in igo_serializer.py
+      - Update `_send_device_status()` in session.py to send 0x68
+      - Test: managecontent should return content (not `norightsfordevice`)
+      - Test: catalog should show map updates
   - See [reverse_engineer_nnge.md](reverse_engineer_nnge.md) for full investigation log

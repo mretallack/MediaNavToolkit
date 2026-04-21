@@ -46,9 +46,12 @@ def build_0x68_request(
     # Build header (16 bytes)
     header = struct.pack(
         ">BBBB Q B HB",
-        0x01, 0xC2, 0xC2, 0x30,  # magic + AUTH_DEVICE
-        code,                      # Code in header
-        SVC_MARKET,                # 0x19
+        0x01,
+        0xC2,
+        0xC2,
+        0x30,  # magic + AUTH_DEVICE
+        code,  # Code in header
+        SVC_MARKET,  # 0x19
         0x0000,
         session_id,
     )
@@ -91,8 +94,9 @@ def test_decrypt_captured_traffic():
     prefix_dec = snakeoil(body_enc[:17], tb_secret)
     body_dec = snakeoil(body_enc[17:], tb_secret)
 
-    assert body_dec[4:20] == b"\x0fDaciaAutomotive", \
-        f"Expected DaciaAutomotive, got {body_dec[4:20]}"
+    assert (
+        body_dec[4:20] == b"\x0fDaciaAutomotive"
+    ), f"Expected DaciaAutomotive, got {body_dec[4:20]}"
     print(f"✓ Body[17:] decrypts with tb_secret: {body_dec[:8].hex()}...")
     print(f"  Brand: {body_dec[5:20].decode('ascii')}")
     print(f"✓ Delegation prefix: {prefix_dec.hex()}")
@@ -107,7 +111,7 @@ def test_roundtrip_encryption():
     name3 = bytes.fromhex("ad35bcc12654b893f7b5596a8057190c")
 
     # Build a test body
-    test_body = b"\xD8\x03\x1E\x40\x0FDaciaAutomotive" + b"\x00" * 100
+    test_body = b"\xd8\x03\x1e\x40\x0fDaciaAutomotive" + b"\x00" * 100
     test_prefix = bytes(17)  # placeholder delegation prefix
 
     # Build the request
@@ -121,7 +125,7 @@ def test_roundtrip_encryption():
     )
 
     # Verify header
-    assert wire[:4] == b"\x01\xC2\xC2\x30", f"Bad header: {wire[:4].hex()}"
+    assert wire[:4] == b"\x01\xc2\xc2\x30", f"Bad header: {wire[:4].hex()}"
     assert struct.unpack(">Q", wire[4:12])[0] == tb_code, "Bad code in header"
     print(f"✓ Header: {wire[:16].hex()}")
 
@@ -209,8 +213,14 @@ def test_live_api():
     # Build header
     header = struct.pack(
         ">BBBB Q B HB",
-        0x01, 0xC2, 0xC2, 0x30,
-        code, SVC_MARKET, 0x0000, 0x67,
+        0x01,
+        0xC2,
+        0xC2,
+        0x30,
+        code,
+        SVC_MARKET,
+        0x0000,
+        0x67,
     )
 
     wire = header + encrypted_query + encrypted_prefix + encrypted_body

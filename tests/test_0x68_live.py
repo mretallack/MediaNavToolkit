@@ -15,9 +15,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from dotenv import load_dotenv
+
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 import os
+
 import httpx
 
 from medianav_toolbox.crypto import snakeoil
@@ -65,6 +67,7 @@ def main():
 
     # Run the session flow
     from medianav_toolbox.session import run_session
+
     print("\n--- Running full session flow ---")
     result = run_session(USB_PATH, USERNAME, PASSWORD)
 
@@ -121,8 +124,14 @@ def main():
 
     header = struct.pack(
         ">BBBB Q B HB",
-        0x01, 0xC2, 0xC2, 0x30,
-        code, SVC_MARKET, 0x0000, 0x67,
+        0x01,
+        0xC2,
+        0xC2,
+        0x30,
+        code,
+        SVC_MARKET,
+        0x0000,
+        0x67,
     )
 
     wire = header + encrypted_query + encrypted_prefix + encrypted_body
