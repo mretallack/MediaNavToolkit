@@ -504,3 +504,145 @@ def licenses(ctx, install):
             console.print(f"[red]✗ {lic.lyc_file}: {e}[/red]")
 
     console.print(f"\n[green]Installed {installed}/{len(lics)} licenses[/green]")
+
+
+@cli.command()
+@click.argument("package_code", type=int)
+@click.pass_context
+def buy(ctx, package_code):
+    """Purchase a catalog item (free or paid) and install its license.
+
+    Browse available items with 'catalog', then buy by package code:
+
+        medianav-toolbox buy 61811
+    """
+    import re
+
+    import httpx
+
+    from medianav_toolbox.session import BROWSER_UA, run_session
+
+    usb = ctx.obj["usb_path"]
+    username = os.environ.get("NAVIEXTRAS_USER", "")
+    password = os.environ.get("NAVIEXTRAS_PASS", "")
+
+    if not username or not password:
+        console.print("[red]Set NAVIEXTRAS_USER and NAVIEXTRAS_PASS environment variables[/red]")
+        sys.exit(1)
+
+    console.print("Connecting...")
+    result = run_session(usb, username, password)
+    if result["errors"]:
+        for e in result["errors"]:
+            console.print(f"[red]✗ {e}[/red]")
+        sys.exit(1)
+
+    jsid = result.get("web_jsessionid")
+    if not jsid:
+        console.print("[red]Web login failed[/red]")
+        sys.exit(1)
+
+    with httpx.Client(timeout=30, follow_redirects=True) as hc:
+        h = {"User-Agent": BROWSER_UA, "Cookie": f"JSESSIONID={jsid}"}
+
+        # 1. View catalog item
+        console.print(f"Loading package {package_code}...")
+        resp = hc.get(
+            f"https://dacia-ulc.naviextras.com/toolbox/catalogitem?packageCode={package_code}",
+            headers=h,
+        )
+        if resp.status_code != 200:
+            console.print(f"[red]Package {package_code} not found[/red]")
+            sys.exit(1)
+
+        # Extract sales options
+        form = re.search(r"<form[^>]*catalogbuyableitem[^>]*>(.*?)</form>", resp.text, re.DOTALL)
+        if not form:
+            console.print("[red]No purchase options available for this package[/red]")
+            sys.exit(1)
+
+        radios = re.findall(r'<input[^>]*name="salesPackageCode"[^>]*value="(\d+)"', form.group(1))
+        prices = re.findall(r'<span class="price">([^<]+)</span>', form.group(1))
+
+        if not radios:
+            console.print("[red]No sales packages found[/red]")
+            sys.exit(1)
+
+        sales_code = radios[0]
+        price = prices[0] if prices else "unknown"
+        console.print(f"  Package: {package_code}, price: {price}")
+
+        # 2. Submit purchase form
+        resp = hc.post(
+            "https://dacia-ulc.naviextras.com/toolbox/catalogbuyableitem",
+            data=f"salesPackageCode={sales_code}",
+            headers={**h, "Content-Type": "application/x-www-form-urlencoded"},
+        )
+
+        # 3. Check what the next step is
+        btn = re.search(r'id="btn-next"[^>]*onClick="([^"]+)"', resp.text)
+        if not btn:
+            console.print("[red]Purchase flow failed — no next action[/red]")
+            sys.exit(1)
+
+        action = btn.group(1)
+        free_match = re.search(r"getfreecontent/(\d+)", action)
+        cart_match = re.search(r"addtocartonlyoneitem/(\d+)", action)
+
+        if free_match:
+            # Free item — complete purchase
+            console.print("  Completing free purchase...")
+            resp = hc.get(
+                f"https://dacia-ulc.naviextras.com/toolbox/getfreecontent/{free_match.group(1)}",
+                headers=h,
+            )
+            if resp.status_code == 200:
+                console.print("[green]✓ Purchased![/green]")
+            else:
+                console.print(f"[red]Purchase failed: {resp.status_code}[/red]")
+                sys.exit(1)
+        elif cart_match:
+            console.print(f"  This is a paid item ({price}).")
+            console.print(
+                "  Adding to cart — complete payment at [link]https://dacia-ulc.naviextras.com[/link]"
+            )
+            hc.get(
+                f"https://dacia-ulc.naviextras.com/toolbox/addtocartonlyoneitem/{cart_match.group(1)}",
+                headers=h,
+            )
+            console.print(
+                "[yellow]Item added to cart. Pay via the NaviExtras website to complete.[/yellow]"
+            )
+            return
+        else:
+            console.print(f"[red]Unknown purchase action: {action[:80]}[/red]")
+            sys.exit(1)
+
+    # 4. Fetch and install the license
+    console.print("Fetching license...")
+    result2 = run_session(usb, username, password)
+    lics = result2.get("licenses", [])
+    if not lics:
+        console.print("[yellow]No licenses available yet — try 'licenses' later[/yellow]")
+        return
+
+    from medianav_toolbox.installer import install_license
+
+    installed = 0
+    for lic in lics:
+        existing = usb / "NaviSync" / "license" / lic.lyc_file
+        if existing.exists() and existing.stat().st_size == len(lic.lyc_data):
+            continue
+        try:
+            install_license(usb, lic.lyc_file, lic.lyc_data)
+            console.print(f"[green]✓[/green] Installed {lic.lyc_file} ({len(lic.lyc_data):,} B)")
+            installed += 1
+        except OSError as e:
+            console.print(f"[red]✗ Cannot write to USB: {e}[/red]")
+            console.print("[dim]USB may be read-only. Mount with write access to install.[/dim]")
+            break
+
+    if installed:
+        console.print(f"\n[green]Installed {installed} new license(s)[/green]")
+    else:
+        console.print("All licenses already installed.")
