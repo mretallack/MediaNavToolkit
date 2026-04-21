@@ -372,36 +372,34 @@ def web_login(jsessionid: str, username: str, password: str) -> str | None:
     """
     import httpx
 
-    with httpx.Client(
-        follow_redirects=True,
-        timeout=30,
-        cookies={"JSESSIONID": jsessionid},
-    ) as client:
+    for _attempt in range(3):
         try:
-            # 1. Visit device page to establish web session
-            client.get(
-                f"{WEB_BASE}/toolbox/device?workingMode=TOOLBOX",
-                headers={"User-Agent": BROWSER_UA},
-            )
+            with httpx.Client(
+                follow_redirects=True,
+                timeout=30,
+                cookies={"JSESSIONID": jsessionid},
+            ) as client:
+                client.get(
+                    f"{WEB_BASE}/toolbox/device?workingMode=TOOLBOX",
+                    headers={"User-Agent": BROWSER_UA},
+                )
+                client.post(
+                    f"{WEB_BASE}/toolbox/login",
+                    data={
+                        "posted": "true",
+                        "marketSession.userLoginForm.email": username,
+                        "marketSession.userLoginForm.password": password,
+                    },
+                    headers={
+                        "User-Agent": BROWSER_UA,
+                        "Content-Type": "application/x-www-form-urlencoded",
+                    },
+                )
+                for cookie in client.cookies.jar:
+                    if cookie.name == "JSESSIONID":
+                        return cookie.value
+        except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadTimeout):
+            import time
 
-            # 2. Web login with username/password
-            client.post(
-                f"{WEB_BASE}/toolbox/login",
-                data={
-                    "posted": "true",
-                    "marketSession.userLoginForm.email": username,
-                    "marketSession.userLoginForm.password": password,
-                },
-                headers={
-                    "User-Agent": BROWSER_UA,
-                    "Content-Type": "application/x-www-form-urlencoded",
-                },
-            )
-
-            # Extract JSESSIONID from cookies
-            for cookie in client.cookies.jar:
-                if cookie.name == "JSESSIONID":
-                    return cookie.value
-        except (httpx.RemoteProtocolError, httpx.ConnectError):
-            pass
+            time.sleep(1)
     return None

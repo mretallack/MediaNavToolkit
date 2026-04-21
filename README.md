@@ -91,41 +91,36 @@ medianav-toolbox sync
 
 1. **Sync your car** — plug the USB drive into your MediaNav head unit and let it sync
 2. **Plug USB into PC** — the drive must contain `NaviSync/license/device.nng`
-3. **Run the tool** — `medianav-toolbox catalog --usb-path /media/usb` to see available updates
-4. **Download updates** — `medianav-toolbox sync --usb-path /media/usb` to download and install
-5. **Sync back to car** — plug the USB drive back into the head unit to apply updates
+3. **Run the tool** — `medianav-toolbox catalog` to see available content
+4. **Buy content** — `medianav-toolbox buy 61811` to purchase (free items install automatically)
+5. **Install licenses** — `medianav-toolbox licenses --install` to write licenses to USB
+6. **Sync back to car** — plug the USB drive back into the head unit to apply updates
 
 ### Example Output
 
 ```
-$ medianav-toolbox detect --usb-path /media/usb
+$ medianav-toolbox detect
 ✓ MediaNav device detected
-  AppCID:    0x42000B53
-  BrandMD5:  3deaefba446c34753f036d584c053c6c
-  Space:     2.3 GB free / 4.4 GB total
-  OS:        6.0.12.2.1166_r2
+  AppCID:  0x42000B53
+  Space:   2.3 GB free / 4.4 GB total
+  OS:      6.0.12.2.1166_r2
 
-$ medianav-toolbox catalog --usb-path /media/usb
-                    Available Content (Catalog)
-┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━┓
-┃ Content                                       ┃ Release ┃      ID ┃
-┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━┩
-│ Dealership POI                                │ 2012 Q1 │   61811 │
-│ Map of Europe                                 │    14.4 │   62038 │
-│ Map of France                                 │    14.4 │  121256 │
-│ Map of United Kingdom and Ireland             │    14.4 │   62122 │
-│ Map of Western Europe                         │    14.4 │  123788 │
-│ ...                                           │         │         │
-└───────────────────────────────────────────────┴─────────┴─────────┘
-Total: 38 items
+$ medianav-toolbox catalog
+  Dealership POI                       2012 Q1    61811  ✓ purchased
+  Map of Europe                           14.4    62038
+  Map of France                           14.4   121256
+  Map of United Kingdom and Ireland       14.4    62122
+  Map of Western Europe                   14.4   123788
+  ... (38 items total)
 
-$ medianav-toolbox licenses --usb-path /media/usb
-                        Available Licenses
-┏━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━━━┓
-┃ License File            ┃ SWID                        ┃  Size ┃ Status      ┃
-┡━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━━━┩
-│ RenaultDealers_Pack.lyc │ CW-7UIM-QAUY-IIQY-73MI-773E│ 440 B │ ✓ installed │
-└─────────────────────────┴─────────────────────────────┴───────┴─────────────┘
+$ medianav-toolbox buy 61811
+  Package: 61811, price: 0.00 GBP
+  Completing free purchase...
+✓ Purchased!
+  Installed RenaultDealers_Pack.lyc (440 B)
+
+$ medianav-toolbox licenses
+  RenaultDealers_Pack.lyc  CW-7UIM-QAUY-IIQY-73MI-773E  440 B  ✓ installed
 ```
 
 ## Supported Devices

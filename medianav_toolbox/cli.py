@@ -194,71 +194,39 @@ def catalog(ctx):
         console.print("[dim]Check NAVIEXTRAS_USER and NAVIEXTRAS_PASS[/dim]")
         sys.exit(1)
 
-    console.print("Fetching content tree...")
+    console.print("Fetching catalog...")
     with NaviExtrasClient(Config()) as client:
-        nodes = get_content_tree(client._client, jsid)
-        if not nodes:
-            # Content tree requires senddevicestatus (not yet implemented).
-            # Fall back to the catalog list page which shows all available content.
-            from medianav_toolbox.catalog import parse_catalog_html
+        from medianav_toolbox.catalog import parse_catalog_html
 
-            resp = client.get(
-                f"https://dacia-ulc.naviextras.com/toolbox/cataloglist",
-                headers={"User-Agent": BROWSER_UA, "Cookie": f"JSESSIONID={jsid}"},
-            )
-            if resp.status_code == 200:
-                items = parse_catalog_html(resp.text)
-                if items:
-                    table = Table(title="Available Content (Catalog)")
-                    table.add_column("Content", style="cyan", max_width=50)
-                    table.add_column("Release", justify="right")
-                    table.add_column("Provider", style="dim")
-                    table.add_column("ID", style="dim", justify="right")
+        resp = client.get(
+            f"https://dacia-ulc.naviextras.com/toolbox/cataloglist",
+            headers={"User-Agent": BROWSER_UA, "Cookie": f"JSESSIONID={jsid}"},
+        )
+        if resp.status_code != 200:
+            console.print("[red]Failed to fetch catalog[/red]")
+            sys.exit(1)
 
-                    for item in sorted(items, key=lambda i: i.name):
-                        table.add_row(
-                            item.name, item.release, item.provider, str(item.package_code)
-                        )
-
-                    console.print(table)
-                    console.print(f"\nTotal: {len(items)} items")
-                    console.print(
-                        "[dim]Note: sizes unavailable — senddevicestatus not yet implemented[/dim]"
-                    )
-                    return
-
-            console.print("[yellow]No content available from server[/yellow]")
-            console.print(
-                "[dim]The server requires senddevicestatus to show content (task 4.2)[/dim]"
-            )
+        items = parse_catalog_html(resp.text)
+        if not items:
+            console.print("[yellow]No content available[/yellow]")
             return
 
-        console.print("Getting sizes...")
-        all_ids = [n.content_id for n in nodes]
-        sizes, indicator = select_content(client._client, jsid, all_ids)
-        # Deselect to clean up
-        select_content(client._client, jsid, [])
+        # Check which items are already installable (purchased)
+        nodes = get_content_tree(client._client, jsid)
+        purchased_ids = {n.content_id.split("#")[0] for n in nodes}
 
-    size_map = {s.content_id: s.size for s in sizes}
+        table = Table(title=f"Available Content ({len(items)} items)")
+        table.add_column("Content", style="cyan", max_width=50)
+        table.add_column("Release", justify="right")
+        table.add_column("ID", style="dim", justify="right")
+        table.add_column("Status")
 
-    table = Table(title="Available Content Updates")
-    table.add_column("Content", style="cyan", max_width=45)
-    table.add_column("Release", justify="right")
-    table.add_column("Size", justify="right")
-    table.add_column("ID", style="dim")
+        for item in sorted(items, key=lambda i: i.name):
+            status = "[green]✓ purchased[/green]" if str(item.package_code) in purchased_ids else ""
+            table.add_row(item.name, item.release, str(item.package_code), status)
 
-    total = 0
-    for node in sorted(nodes, key=lambda n: n.name):
-        size = size_map.get(node.content_id, 0)
-        total += size
-        size_str = f"{size / 1024 / 1024:.1f} MB" if size else "—"
-        table.add_row(node.name or "(unnamed)", node.release, size_str, node.content_id)
-
-    console.print(table)
-    console.print(f"\nTotal: {len(nodes)} items, {total / 1024 / 1024 / 1024:.2f} GB")
-    if indicator:
-        free = indicator.get("fullSize", 0)
-        console.print(f"Available space: {free / 1024 / 1024 / 1024:.2f} GB")
+        console.print(table)
+        console.print(f"\nUse [bold]medianav-toolbox buy <ID>[/bold] to purchase an item.")
 
 
 @cli.command()
