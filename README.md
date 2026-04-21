@@ -28,13 +28,16 @@ This project reverse-engineers the NaviExtras wire protocol and reimplements it 
 - ✅ Device registration with NaviExtras server
 - ✅ Full authentication flow (boot → login → fingerprint → delegator → senddevicestatus)
 - ✅ Wire protocol encryption fully solved (SnakeOil with tb_secret for all flows)
-- ✅ Content catalog browsing (31 map regions with sizes)
+- ✅ HMAC-MD5 delegation prefix verified against real DLL (Win32 debugger capture)
+- ✅ senddevicestatus body generated from USB file scan (server returns 200)
+- ✅ `licenses` API returns available content packs with embedded .lyc data
 - ✅ Content installation to USB drive (.stm, .lyc, .md5 files)
 - ✅ 204 unit tests passing
 
 **In progress:**
-- 🔧 `sync` command — content selection → download → install pipeline
-- 🔧 0x68 delegation prefix construction (encryption solved, body serialization WIP)
+- 🔧 `sync` command — parse licenses response → install .lyc to USB pipeline
+- 🔧 Build `licenses` request body from scratch (currently replayed from capture)
+- 🔧 0x68 delegation prefix bitstream encoding (for fully independent operation)
 
 ## Requirements
 

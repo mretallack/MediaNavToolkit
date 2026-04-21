@@ -261,31 +261,26 @@ def build_senddevicestatus_body(
     content_version: int = 46475,
     overall_md5: str = "",
     files: list[DeviceFileEntry] | None = None,
+    drive_path: str = "E:\\",
+    session_id: str = "",
 ) -> bytes:
     """Build SendDeviceStatus request body (flags=0x60).
 
-    Structure (from captured traffic flow 735, flags=0x60):
+    Structure (from captured traffic):
       [4B bitmask: D8 02 1F 40]
       [str] brand [str] model [str] swid [str] imei [str] igo_version
       [4B BE] first_use_seconds [4B zero] [4B BE] appcid
       [str] serial [str] uniq_id
       [0x00] separator
-      [0x01] [2B BE content_version] [2B zero]
+      [0x01] [2B LE content_version] [2B zero]
       [0x01] [4B zero]
       [0xE0] [str overall_md5]
       [1B file_count]
       [file_entries...]
-      [trailer: 0x01 0x00 0x07 "primary" 0x00*20]
+      [trailer: 0x01 0x00 0x07 "primary" [8B ts_ms] [8B ts_ms] [12B zero]
+               [2B 0x1000] [str drive_path] [str session_id]]
 
-    File entry (0xA0):
-      [str] md5 [str] filename [str] mount [str] path
-      [8B BE] size [8B BE] modified_ms [8B BE] modified_ms
-
-    Directory entry (0x22):
-      [str] name [str] mount [str] path
-      [8B BE] 0 [8B BE] modified_ms [8B BE] modified_ms
-
-    Ref: toolbox.md §15
+    Ref: toolbox.md §15, reverse_engineer_nnge.md §2026-04-20
     """
     if files is None:
         files = []
@@ -345,7 +340,22 @@ def build_senddevicestatus_body(
                 + encode_int64(ts2)
             )
 
-    # Trailer: mount info
-    trailer = b"\x01\x00" + encode_string("primary") + b"\x00" * 20
+    # Trailer: mount info + drive path + session ID
+    import time as _time
+
+    now_ms = int(_time.time() * 1000)
+    if not session_id:
+        session_id = f"{int(_time.time())}_{2}"
+
+    trailer = (
+        b"\x01\x00"
+        + encode_string("primary")
+        + encode_int64(now_ms)
+        + encode_int64(now_ms)
+        + b"\x00" * 14
+        + b"\x10\x00"
+        + encode_string(drive_path)
+        + encode_string(session_id)
+    )
 
     return header + device_info + meta + file_list + file_data + trailer

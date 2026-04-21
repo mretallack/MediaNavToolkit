@@ -70,25 +70,19 @@ def _serialize_credential_binary(hu_code: int, tb_code: int, timestamp: int) -> 
 def build_delegation_prefix(hu_code: int, tb_code: int, hu_secret: int) -> bytes:
     """Build the 17-byte delegation prefix for 0x68 request bodies.
 
-    WARNING: NOT FULLY WORKING. The HMAC format has not been verified against
-    the live server. Exhaustive search of 5 binary format variants × 2^32
-    timestamps found no match. The DelegationRO descriptor has 6 fields but
-    this implementation only serializes 4. The real credential likely includes
-    additional fields from the device manager's runtime state.
-
-    The 0x68 senddevicestatus is NOT REQUIRED for catalog/download — the 0x60
-    call alone is sufficient. This function is kept for future investigation.
-    See R.11 in tasks.md and reverse_engineer_nnge.md.
-
     prefix = 0x86 || HMAC-MD5(hu_secret_BE, serialized_credential)
 
-    The serialized credential is the igo-binary format from FUN_101a9930:
-    [presence][hu_code 8B BE][tb_code 8B BE][timestamp 4B BE]
+    The serialized credential is the igo-binary format:
+    [0xC4][hu_code 8B BE][tb_code 8B BE][timestamp 4B BE]
+
+    Confirmed by Win32 debugger capture (2026-04-20): the DLL produces
+    exactly this 21-byte format. The HMAC output goes into the prefix,
+    NOT into Name₃ (which is the first 16 bytes XOR-encoded).
 
     Args:
         hu_code: head unit Code from delegator response
-        hu_secret: head unit Secret from delegator response
         tb_code: toolbox Code from registration response
+        hu_secret: head unit Secret from delegator response
 
     Returns:
         17-byte delegation prefix
