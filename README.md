@@ -61,26 +61,27 @@ NAVIEXTRAS_PASS=your_password
 
 ```bash
 # Detect your MediaNav USB drive
-medianav-toolbox detect --usb-path /media/usb
+medianav-toolbox --usb-path /media/usb detect
 
 # Authenticate and show session info
-medianav-toolbox login --usb-path /media/usb
+medianav-toolbox --usb-path /media/usb login
 
 # Browse available content (maps, POIs, safety cameras)
-medianav-toolbox catalog --usb-path /media/usb
+medianav-toolbox --usb-path /media/usb catalog
 
 # Show and install available licenses
-medianav-toolbox licenses --usb-path /media/usb
-medianav-toolbox licenses --usb-path /media/usb --install
+medianav-toolbox --usb-path /media/usb licenses
+medianav-toolbox --usb-path /media/usb licenses --install
 
 # Quick update check
-medianav-toolbox updates --usb-path /media/usb
+medianav-toolbox --usb-path /media/usb updates
 
 # Sync updates to USB drive (select → download → install)
-medianav-toolbox sync --usb-path /media/usb
+medianav-toolbox --usb-path /media/usb sync
+```
 
-# Register a new device (if no cached credentials)
-medianav-toolbox register --usb-path /media/usb
+> **Note:** `--usb-path` is a global option that goes **before** the command name.
+> If the USB is read-only, credentials are cached in `~/.config/medianav-toolbox/`.
 ```
 
 ### Usage Flow

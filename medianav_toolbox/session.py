@@ -297,56 +297,69 @@ def get_licenses(client, creds, session) -> list:
     return parse_licenses_response(body)
 
 
+CONFIG_DIR = Path.home() / ".config" / "medianav-toolbox"
+
+
+def _creds_paths(usb_path: Path) -> list[Path]:
+    """Return candidate paths for credentials, in priority order."""
+    return [usb_path / CREDS_FILE, CONFIG_DIR / CREDS_FILE]
+
+
 def _load_creds(usb_path: Path) -> DeviceCredentials | None:
-    creds_path = usb_path / CREDS_FILE
-    if not creds_path.exists():
-        return None
-    try:
-        data = json.loads(creds_path.read_text())
-        return DeviceCredentials(
-            name=bytes.fromhex(data["name"]),
-            code=data["code"],
-            secret=data["secret"],
-        )
-    except (KeyError, ValueError):
-        return None
+    for creds_path in _creds_paths(usb_path):
+        if not creds_path.exists():
+            continue
+        try:
+            data = json.loads(creds_path.read_text())
+            return DeviceCredentials(
+                name=bytes.fromhex(data["name"]),
+                code=data["code"],
+                secret=data["secret"],
+            )
+        except (KeyError, ValueError):
+            continue
+    return None
 
 
 def _save_creds(usb_path: Path, creds: DeviceCredentials) -> None:
-    creds_path = usb_path / CREDS_FILE
-    creds_path.write_text(
-        json.dumps(
-            {
-                "name": creds.name.hex(),
-                "code": creds.code,
-                "secret": creds.secret,
-            }
-        )
-    )
+    payload = json.dumps({"name": creds.name.hex(), "code": creds.code, "secret": creds.secret})
+    for creds_path in _creds_paths(usb_path):
+        try:
+            creds_path.parent.mkdir(parents=True, exist_ok=True)
+            creds_path.write_text(payload)
+            return
+        except OSError:
+            continue
 
 
 HU_DEV_CREDS_FILE = ".medianav_hu_dev_creds.json"
 
 
 def _load_hu_dev_creds(usb_path: Path) -> DeviceCredentials | None:
-    creds_path = usb_path / HU_DEV_CREDS_FILE
-    if not creds_path.exists():
-        return None
-    try:
-        data = json.loads(creds_path.read_text())
-        return DeviceCredentials(
-            name=bytes.fromhex(data["name"]),
-            code=data["code"],
-            secret=data["secret"],
-        )
-    except (KeyError, ValueError):
-        return None
+    for p in [usb_path / HU_DEV_CREDS_FILE, CONFIG_DIR / HU_DEV_CREDS_FILE]:
+        if not p.exists():
+            continue
+        try:
+            data = json.loads(p.read_text())
+            return DeviceCredentials(
+                name=bytes.fromhex(data["name"]),
+                code=data["code"],
+                secret=data["secret"],
+            )
+        except (KeyError, ValueError):
+            continue
+    return None
 
 
 def _save_hu_dev_creds(usb_path: Path, creds: DeviceCredentials) -> None:
-    (usb_path / HU_DEV_CREDS_FILE).write_text(
-        json.dumps({"name": creds.name.hex(), "code": creds.code, "secret": creds.secret})
-    )
+    payload = json.dumps({"name": creds.name.hex(), "code": creds.code, "secret": creds.secret})
+    for p in [usb_path / HU_DEV_CREDS_FILE, CONFIG_DIR / HU_DEV_CREDS_FILE]:
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(payload)
+            return
+        except OSError:
+            continue
 
 
 def web_login(jsessionid: str, username: str, password: str) -> str | None:
