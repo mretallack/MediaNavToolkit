@@ -27,17 +27,12 @@ This project reverse-engineers the NaviExtras wire protocol and reimplements it 
 - ✅ USB drive detection and device identity reading
 - ✅ Device registration with NaviExtras server
 - ✅ Full authentication flow (boot → login → fingerprint → delegator → senddevicestatus)
-- ✅ Wire protocol encryption fully solved (SnakeOil with tb_secret for all flows)
-- ✅ HMAC-MD5 delegation prefix verified against real DLL (Win32 debugger capture)
-- ✅ senddevicestatus body generated from USB file scan (server returns 200)
-- ✅ `licenses` API returns available content packs with embedded .lyc data
-- ✅ Content installation to USB drive (.stm, .lyc, .md5 files)
-- ✅ 204 unit tests passing
-
-**In progress:**
-- 🔧 `sync` command — parse licenses response → install .lyc to USB pipeline
-- 🔧 Build `licenses` request body from scratch (currently replayed from capture)
-- 🔧 0x68 delegation prefix bitstream encoding (for fully independent operation)
+- ✅ Wire protocol encryption fully solved (SnakeOil xorshift128 cipher)
+- ✅ Catalog browsing — 38 items (maps, POIs, safety cameras) from live server
+- ✅ Free content purchase via web API (e.g., Dealership POI)
+- ✅ License fetching — `.lyc` files downloaded live from server (no replay needed)
+- ✅ License installation to USB drive (`.lyc` + `.lyc.md5`)
+- ✅ 219 unit tests passing
 
 ## Requirements
 
@@ -71,8 +66,12 @@ medianav-toolbox detect --usb-path /media/usb
 # Authenticate and show session info
 medianav-toolbox login --usb-path /media/usb
 
-# Show available content updates with sizes
+# Browse available content (maps, POIs, safety cameras)
 medianav-toolbox catalog --usb-path /media/usb
+
+# Show and install available licenses
+medianav-toolbox licenses --usb-path /media/usb
+medianav-toolbox licenses --usb-path /media/usb --install
 
 # Quick update check
 medianav-toolbox updates --usb-path /media/usb
@@ -103,18 +102,26 @@ $ medianav-toolbox detect --usb-path /media/usb
   OS:        6.0.12.2.1166_r2
 
 $ medianav-toolbox catalog --usb-path /media/usb
-                Available Content Updates
-┏━━━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━┓
-┃ Content          ┃ Release ┃      Size ┃ ID              ┃
-┡━━━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━┩
-│ France           │         │  715.0 MB │ 1182615#1008    │
-│ Germany          │         │  529.7 MB │ 1182615#55083   │
-│ United Kingdom   │         │  487.8 MB │ 1182615#129358  │
-│ Italy            │         │  291.7 MB │ 1182615#1177715 │
-│ ...              │         │           │                 │
-└──────────────────┴─────────┴───────────┴─────────────────┘
-Total: 31 items, 6.07 GB
-Available space: 7.18 GB
+                    Available Content (Catalog)
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━┓
+┃ Content                                       ┃ Release ┃      ID ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━┩
+│ Dealership POI                                │ 2012 Q1 │   61811 │
+│ Map of Europe                                 │    14.4 │   62038 │
+│ Map of France                                 │    14.4 │  121256 │
+│ Map of United Kingdom and Ireland             │    14.4 │   62122 │
+│ Map of Western Europe                         │    14.4 │  123788 │
+│ ...                                           │         │         │
+└───────────────────────────────────────────────┴─────────┴─────────┘
+Total: 38 items
+
+$ medianav-toolbox licenses --usb-path /media/usb
+                        Available Licenses
+┏━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━┳━━━━━━━━━━━━━┓
+┃ License File            ┃ SWID                        ┃  Size ┃ Status      ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━╇━━━━━━━━━━━━━┩
+│ RenaultDealers_Pack.lyc │ CW-7UIM-QAUY-IIQY-73MI-773E│ 440 B │ ✓ installed │
+└─────────────────────────┴─────────────────────────────┴───────┴─────────────┘
 ```
 
 ## Supported Devices
@@ -182,13 +189,14 @@ Each SnakeOil segment uses a fresh PRNG state.
 Full session flow:
 ```
 1. Boot          → service URLs           (RANDOM mode)
-2. Register      → toolbox credentials    (RANDOM mode)
+2. Register      → toolbox credentials    (RANDOM mode, cached)
 3. Login         → JSESSIONID             (DEVICE mode)
 4. Fingerprint   → 200                    (DEVICE mode)
 5. Delegator     → head unit credentials  (DEVICE mode)
-6. DeviceStatus  → 200                    (DEVICE mode)
-7. Web login     → authenticated session  (HTTP form POST)
-8. Catalog       → content tree + sizes   (HTTP GET/POST)
+6. DeviceStatus  → 200 (×2: D802 + D803) (DEVICE mode, 0x60 flags)
+7. Licenses      → .lyc file data         (DEVICE mode, 0x20 flags)
+8. Web login     → authenticated session  (HTTP form POST)
+9. Catalog       → content tree + sizes   (HTTP GET/POST)
 ```
 
 See [toolbox.md](.kiro/specs/medianav-toolbox/toolbox.md) for detailed reverse engineering notes.
