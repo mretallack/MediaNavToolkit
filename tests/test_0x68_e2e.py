@@ -6,25 +6,27 @@ then sends an ADDITIONAL fresh 0x68 request using the established session.
 """
 
 import json
+import re
 import struct
 import sys
-import re
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from dotenv import load_dotenv
+
 load_dotenv(Path(__file__).parent.parent / ".env")
 
 import os
+
 import httpx
 
 from medianav_toolbox.crypto import snakeoil
+from medianav_toolbox.device import parse_device_nng, scan_device_files
 from medianav_toolbox.igo_serializer import build_credential_block
 from medianav_toolbox.protocol import SVC_MARKET, build_request, parse_response
-from medianav_toolbox.wire_codec import build_senddevicestatus_body
-from medianav_toolbox.device import scan_device_files, parse_device_nng
 from medianav_toolbox.session import run_session
+from medianav_toolbox.wire_codec import build_senddevicestatus_body
 
 USB_PATH = Path(os.environ.get("NAVIEXTRAS_USB_PATH", "analysis/usb_drive/disk"))
 USERNAME = os.environ.get("NAVIEXTRAS_USER", "")
@@ -67,8 +69,9 @@ def main():
     print(f"Built 0x60 body: {len(body_0x60)} bytes")
 
     query = bytes([0xC5, 0x60])
-    wire = build_request(query=query, body=body_0x60, service_minor=SVC_MARKET,
-                         code=creds.code, secret=creds.secret)
+    wire = build_request(
+        query=query, body=body_0x60, service_minor=SVC_MARKET, code=creds.code, secret=creds.secret
+    )
 
     with httpx.Client(timeout=30) as client:
         headers = {"User-Agent": UA, "Cookie": f"JSESSIONID={jsid}"}
@@ -85,13 +88,13 @@ def main():
 
         # Build 0x68 body: modify presence bits, remove UniqId
         body_0x68 = bytearray(body_0x60)
-        body_0x68[1] = body_0x68[1] | 0x01   # set delegation bit
-        body_0x68[2] = body_0x68[2] & ~0x01   # clear UniqId bit
+        body_0x68[1] = body_0x68[1] | 0x01  # set delegation bit
+        body_0x68[2] = body_0x68[2] & ~0x01  # clear UniqId bit
 
         # Remove UniqId field (space + 32 hex chars after VIN)
-        match = re.search(rb' [0-9A-F]{32}', bytes(body_0x68))
+        match = re.search(rb" [0-9A-F]{32}", bytes(body_0x68))
         if match:
-            body_0x68 = body_0x68[:match.start()] + body_0x68[match.end():]
+            body_0x68 = body_0x68[: match.start()] + body_0x68[match.end() :]
             print(f"Removed UniqId ({match.end()-match.start()}B) from body")
 
         body_0x68 = bytes(body_0x68)
@@ -120,15 +123,14 @@ def main():
         encrypted_prefix = snakeoil(delegation_prefix, creds.secret)
         encrypted_body = snakeoil(body_0x68, creds.secret)
 
-        header = struct.pack(">BBBB Q B HB",
-                             0x01, 0xC2, 0xC2, 0x30,
-                             creds.code, SVC_MARKET, 0x0000, 0x67)
+        header = struct.pack(
+            ">BBBB Q B HB", 0x01, 0xC2, 0xC2, 0x30, creds.code, SVC_MARKET, 0x0000, 0x67
+        )
 
         wire_0x68 = header + encrypted_query + encrypted_prefix + encrypted_body
         print(f"Wire size: {len(wire_0x68)} bytes")
 
-        resp2 = client.post(f"{MARKET_BASE}/1/senddevicestatus",
-                            content=wire_0x68, headers=headers)
+        resp2 = client.post(f"{MARKET_BASE}/1/senddevicestatus", content=wire_0x68, headers=headers)
         print(f"0x68 split response: {resp2.status_code}")
 
         if resp2.status_code == 200:
@@ -139,31 +141,46 @@ def main():
             print(f"\n--- Alt: single-stream 0x68 ---")
             full_body = delegation_prefix + body_0x68
             wire_alt = build_request(
-                query=query_0x68, body=full_body, service_minor=SVC_MARKET,
-                code=creds.code, secret=creds.secret, session_id=0x67,
+                query=query_0x68,
+                body=full_body,
+                service_minor=SVC_MARKET,
+                code=creds.code,
+                secret=creds.secret,
+                session_id=0x67,
             )
-            resp3 = client.post(f"{MARKET_BASE}/1/senddevicestatus",
-                                content=wire_alt, headers=headers)
+            resp3 = client.post(
+                f"{MARKET_BASE}/1/senddevicestatus", content=wire_alt, headers=headers
+            )
             print(f"Single-stream: {resp3.status_code}")
 
             # Try: just the body without any prefix
             print(f"\n--- Alt: 0x68 body only (no prefix) ---")
             wire_noprefix = build_request(
-                query=query_0x68, body=body_0x68, service_minor=SVC_MARKET,
-                code=creds.code, secret=creds.secret, session_id=0x67,
+                query=query_0x68,
+                body=body_0x68,
+                service_minor=SVC_MARKET,
+                code=creds.code,
+                secret=creds.secret,
+                session_id=0x67,
             )
-            resp4 = client.post(f"{MARKET_BASE}/1/senddevicestatus",
-                                content=wire_noprefix, headers=headers)
+            resp4 = client.post(
+                f"{MARKET_BASE}/1/senddevicestatus", content=wire_noprefix, headers=headers
+            )
             print(f"No-prefix: {resp4.status_code}")
 
             # Try: original 0x60 body (unmodified) with 0x68 query
             print(f"\n--- Alt: 0x60 body with 0x68 query ---")
             wire_60body = build_request(
-                query=query_0x68, body=body_0x60, service_minor=SVC_MARKET,
-                code=creds.code, secret=creds.secret, session_id=0x67,
+                query=query_0x68,
+                body=body_0x60,
+                service_minor=SVC_MARKET,
+                code=creds.code,
+                secret=creds.secret,
+                session_id=0x67,
             )
-            resp5 = client.post(f"{MARKET_BASE}/1/senddevicestatus",
-                                content=wire_60body, headers=headers)
+            resp5 = client.post(
+                f"{MARKET_BASE}/1/senddevicestatus", content=wire_60body, headers=headers
+            )
             print(f"0x60-body+0x68-query: {resp5.status_code}")
             if resp5.status_code == 200:
                 dec = parse_response(resp5.content, creds.secret)

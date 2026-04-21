@@ -19,8 +19,8 @@ across multiple captured sessions.
 Ref: toolbox.md §2, functions.md (FUN_100b3a60)
 """
 
-import hmac
 import hashlib
+import hmac
 import struct
 import time
 
@@ -39,7 +39,7 @@ def build_delegation_name3(hu_code: int, tb_code: int) -> bytes:
     Returns:
         16-byte Name₃
     """
-    return b"\xC4" + struct.pack(">Q", hu_code) + struct.pack(">Q", tb_code)[:7]
+    return b"\xc4" + struct.pack(">Q", hu_code) + struct.pack(">Q", tb_code)[:7]
 
 
 def _serialize_credential_binary(hu_code: int, tb_code: int, timestamp: int) -> bytes:

@@ -285,7 +285,10 @@ def _send_device_status(client, creds, hu_creds, session, usb_path, device):
         sid = os.urandom(1)[0] | 0x01
         header = struct.pack(
             ">BBBB Q B HB",
-            0x01, 0xC2, 0xC2, 0x30,  # auth=DEVICE
+            0x01,
+            0xC2,
+            0xC2,
+            0x30,  # auth=DEVICE
             creds.code,
             SVC_MARKET,
             0x0000,
