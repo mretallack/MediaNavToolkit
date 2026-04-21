@@ -26,6 +26,7 @@ from medianav_toolbox.protocol import SVC_MARKET, SVC_REGISTER, build_request, p
 from medianav_toolbox.swid import compute_swid
 from medianav_toolbox.wire_codec import (
     DeviceFileEntry,
+    build_getprocess_body,
     build_login_body,
     build_senddevicestatus_body,
     build_sendfingerprint_body,
@@ -82,7 +83,7 @@ def run_session(
                     appcid=device.appcid,
                     uniq_id=device.brand_md5.upper(),
                 )
-                _save_creds(usb_path, creds)
+                _save_creds(usb_path, creds, uniq_id=device.brand_md5.upper())
                 result["steps"].append("register")
             except RuntimeError as e:
                 result["errors"].append(f"Registration failed: {e}")
@@ -157,6 +158,15 @@ def run_session(
             licenses = get_licenses(client, creds, session)
             result["licenses"] = licenses
             result["steps"].append("licenses")
+
+            # 9. Second getprocess with license SWIDs (triggers download tasks)
+            swids = list({lic.swid for lic in licenses})
+            if swids:
+                gp2 = _get_process(client, creds, session, swids=swids)
+                result["getprocess2_status"] = gp2.status_code
+                result["getprocess2_body"] = gp2.content
+                result["getprocess2_swids"] = swids
+                result["steps"].append("getprocess2")
         except Exception:
             result["licenses"] = []
 
@@ -209,12 +219,13 @@ def _send_fingerprint(client, creds, session):
     )
 
 
-def _get_process(client, creds, session):
+def _get_process(client, creds, session, swids=None):
     cred_block = build_credential_block(creds.name)
     query = bytes([0xC3, 0x20]) + cred_block
+    body = build_getprocess_body(swids) if swids else b""
     wire = build_request(
         query=query,
-        body=b"",
+        body=body,
         service_minor=SVC_MARKET,
         code=creds.code,
         secret=creds.secret,
@@ -229,26 +240,29 @@ def _get_process(client, creds, session):
 def _send_device_status(client, creds, hu_creds, session, usb_path, device):
     """Send device status to establish device context for the catalog.
 
-    Sends TWO 0x60 requests:
-    1. D8 02 (RECOGNIZED) — initial device state
-    2. D8 03 (REGISTERED) — transitions device so catalog is visible
-
-    Both use simple 0x60 flags with DEVICE mode encryption (tb_code/tb_secret).
-    The D8 03 body is the same as D8 02 but with byte[1]=0x03 and byte[2]=0x1E.
-
-    The bodies are loaded from run16 plaintext captures. A fresh body builder
-    can replace these once the file list encoding is fully understood.
+    Uses captured plaintext bodies from run16 if available (these match the
+    server's expected device state). Falls back to live USB body builder.
     """
+    from medianav_toolbox.device_status import build_live_senddevicestatus
+
     bodies_dir = Path(__file__).parent.parent / "analysis" / "using-win32" / "run16_bodies"
     body_d802 = bodies_dir / "snakeoil_body_255_1679.bin"
     body_d803 = bodies_dir / "snakeoil_body_327_1646.bin"
 
-    if not body_d802.exists() or not body_d803.exists():
-        return type("R", (), {"status_code": 0})()
+    use_captured = body_d802.exists() and body_d803.exists()
 
     resp = type("R", (), {"status_code": 0})()
-    for body_path in [body_d802, body_d803]:
-        body = body_path.read_bytes()
+    for i, variant in enumerate([0x02, 0x03]):
+        if use_captured:
+            body = [body_d802, body_d803][i].read_bytes()
+        else:
+            registered_uniq_id = getattr(creds, "_uniq_id", "")
+            try:
+                body = build_live_senddevicestatus(
+                    usb_path, variant=variant, uniq_id_override=registered_uniq_id,
+                )
+            except Exception:
+                return type("R", (), {"status_code": 0})()
         wire = build_request(
             query=bytes([0xC5, 0x60]),
             body=body,
@@ -311,18 +325,25 @@ def _load_creds(usb_path: Path) -> DeviceCredentials | None:
             continue
         try:
             data = json.loads(creds_path.read_text())
-            return DeviceCredentials(
+            creds = DeviceCredentials(
                 name=bytes.fromhex(data["name"]),
                 code=data["code"],
                 secret=data["secret"],
             )
+            creds._uniq_id = data.get("uniq_id", "")
+            return creds
         except (KeyError, ValueError):
             continue
     return None
 
 
-def _save_creds(usb_path: Path, creds: DeviceCredentials) -> None:
-    payload = json.dumps({"name": creds.name.hex(), "code": creds.code, "secret": creds.secret})
+def _save_creds(usb_path: Path, creds: DeviceCredentials, uniq_id: str = "") -> None:
+    payload = json.dumps({
+        "name": creds.name.hex(),
+        "code": creds.code,
+        "secret": creds.secret,
+        "uniq_id": uniq_id,
+    })
     for creds_path in _creds_paths(usb_path):
         try:
             creds_path.parent.mkdir(parents=True, exist_ok=True)

@@ -21,7 +21,7 @@ from medianav_toolbox.catalog import (
     parse_managecontent_html,
     parse_update_selection,
 )
-from medianav_toolbox.session import MARKET_BASE, TOOLBOX_UA
+from medianav_toolbox.session import BROWSER_UA, MARKET_BASE
 
 
 @dataclass
@@ -34,11 +34,14 @@ class SelectedContent:
     release: str = ""
 
 
-def _web_headers(jsessionid: str) -> dict[str, str]:
-    return {
-        "User-Agent": TOOLBOX_UA,
+def _web_headers(jsessionid: str, referer: str = "") -> dict[str, str]:
+    h = {
+        "User-Agent": BROWSER_UA,
         "Cookie": f"JSESSIONID={jsessionid}",
     }
+    if referer:
+        h["Referer"] = referer
+    return h
 
 
 BASE_URL = MARKET_BASE.replace("/rest", "")
@@ -66,31 +69,54 @@ def select_content(
                      Pass empty list to deselect all.
     """
     import json
+    import time
 
-    resp = client.post(
-        f"{BASE_URL}/rest/managecontent/supermarket/v1/updateselection",
-        content=f"selectedIds={json.dumps(content_ids)}".encode(),
-        headers={
-            **_web_headers(jsessionid),
-            "Content-Type": "application/json",
-            "X-Requested-With": "XMLHttpRequest",
-        },
-    )
-    resp.raise_for_status()
-    return parse_update_selection(resp.json())
+    url = f"{BASE_URL}/rest/managecontent/supermarket/v1/updateselection"
+    body = f"selectedIds={json.dumps(content_ids)}".encode()
+    headers = {
+        **_web_headers(jsessionid, f"{BASE_URL}/toolbox/managecontentinitwithhierarchy/install"),
+        "Content-Type": "application/json",
+        "X-Requested-With": "XMLHttpRequest",
+    }
+
+    last_exc = None
+    for attempt in range(3):
+        try:
+            resp = client.post(url, content=body, headers=headers, timeout=30.0)
+            resp.raise_for_status()
+            return parse_update_selection(resp.json())
+        except (httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError) as e:
+            last_exc = e
+            if attempt < 2:
+                time.sleep(2**attempt)
+    raise last_exc  # type: ignore[misc]
 
 
 def confirm_selection(client: httpx.Client, jsessionid: str) -> str:
     """Confirm content selection and trigger the install process.
 
     Returns the HTML of the confirmation page.
+    The server may take a while to process, so we use a longer timeout and retry.
     """
-    resp = client.get(
-        f"{BASE_URL}/toolbox/managecontentconfirmselection",
-        headers=_web_headers(jsessionid),
+    import time
+
+    url = f"{BASE_URL}/toolbox/managecontentconfirmselection"
+    headers = _web_headers(
+        jsessionid,
+        f"{BASE_URL}/toolbox/managecontentinitwithhierarchy/install",
     )
-    resp.raise_for_status()
-    return resp.text
+
+    last_exc = None
+    for attempt in range(3):
+        try:
+            resp = client.get(url, headers=headers, timeout=60.0)
+            resp.raise_for_status()
+            return resp.text
+        except (httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError) as e:
+            last_exc = e
+            if attempt < 2:
+                time.sleep(2**attempt)
+    raise last_exc  # type: ignore[misc]
 
 
 def get_available_updates(client: httpx.Client, jsessionid: str) -> list[SelectedContent]:

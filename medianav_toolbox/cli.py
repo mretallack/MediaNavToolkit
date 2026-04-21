@@ -377,17 +377,46 @@ def sync(ctx, country, dry_run):
 
         # Confirm
         console.print("\nConfirming selection with server...")
-        confirm_selection(hc, jsid)
+        try:
+            confirm_selection(hc, jsid)
+        except (Exception,) as e:
+            console.print(f"[red]✗ Confirmation failed: {e}[/red]")
+            console.print("[dim]Deselecting content to clean up...[/dim]")
+            try:
+                select_content(hc, jsid, [])
+            except Exception:
+                pass
+            sys.exit(1)
         console.print("[green]✓ Selection confirmed[/green]")
-        console.print(
-            "\n[dim]The server has queued the update. Download URLs are provided"
-            "\nvia the wire protocol getprocess endpoint, which the native engine"
-            "\n(nngine.dll) normally handles. Direct download from this CLI requires"
-            "\ncapturing a post-confirmation getprocess response to understand the"
-            "\ndownload task format."
-            "\n\nTo complete the update now, run the Windows Toolbox to download,"
-            "\nor capture a post-confirmation mitmproxy trace to enable direct download.[/dim]"
-        )
+
+        # Install licenses from the session
+        from medianav_toolbox.installer import install_license
+        from medianav_toolbox.session import run_session as _rs
+
+        lics = result.get("licenses", [])
+        if lics:
+            installed = 0
+            for lic in lics:
+                existing = usb / "NaviSync" / "license" / lic.lyc_file
+                if existing.exists() and existing.stat().st_size == len(lic.lyc_data):
+                    continue
+                try:
+                    install_license(usb, lic.lyc_file, lic.lyc_data)
+                    console.print(f"  [green]✓[/green] {lic.lyc_file}")
+                    installed += 1
+                except OSError as e:
+                    console.print(f"  [red]✗ {lic.lyc_file}: {e}[/red]")
+            if installed:
+                console.print(f"\n[green]Installed {installed} license(s)[/green]")
+
+        if total_size == 0:
+            console.print("\n[green]✓ Update complete (license-only, no files to download)[/green]")
+        else:
+            console.print(
+                f"\n[yellow]Content files ({total_size / 1024 / 1024:.0f} MB) need downloading.[/yellow]"
+                "\n[dim]Download support is not yet implemented. Use the Windows Toolbox"
+                "\nto download content files, or wait for a future release.[/dim]"
+            )
 
 
 @cli.command()
@@ -614,3 +643,129 @@ def buy(ctx, package_code):
         console.print(f"\n[green]Installed {installed} new license(s)[/green]")
     else:
         console.print("All licenses already installed.")
+
+
+@cli.command(name="dump-getprocess")
+@click.option("--output", "-o", default="getprocess_dump", help="Output filename prefix")
+@click.pass_context
+def dump_getprocess(ctx, output):
+    """Call getprocess after login and dump the raw + decrypted response.
+
+    Calls getprocess twice: once empty (during login) and once with license
+    SWIDs (after fetching licenses). The second call should return download tasks.
+    """
+    from medianav_toolbox.protocol import parse_response
+    from medianav_toolbox.session import run_session
+
+    usb = ctx.obj["usb_path"]
+    username = os.environ.get("NAVIEXTRAS_USER", "")
+    password = os.environ.get("NAVIEXTRAS_PASS", "")
+
+    if not username or not password:
+        console.print("[red]Set NAVIEXTRAS_USER and NAVIEXTRAS_PASS environment variables[/red]")
+        sys.exit(1)
+
+    console.print("Connecting...")
+    result = run_session(usb, username, password)
+    if result["errors"]:
+        for e in result["errors"]:
+            console.print(f"[red]✗ {e}[/red]")
+        sys.exit(1)
+
+    creds = result.get("device_creds")
+
+    def _dump_response(label, raw, prefix):
+        console.print(f"\n[bold]{label}[/bold]")
+        if not raw or len(raw) < 5:
+            console.print(f"  Empty/minimal response ({len(raw)} bytes)")
+            return
+        Path(f"{prefix}_raw.bin").write_bytes(raw)
+        console.print(f"  Raw: {prefix}_raw.bin ({len(raw)} bytes)")
+        if not creds:
+            return
+        try:
+            dec = parse_response(raw, creds.secret)
+            Path(f"{prefix}_dec.bin").write_bytes(dec)
+            console.print(f"  Decrypted: {prefix}_dec.bin ({len(dec)} bytes)")
+            for i in range(0, min(512, len(dec)), 16):
+                chunk = dec[i : i + 16]
+                h = " ".join(f"{b:02x}" for b in chunk)
+                a = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
+                console.print(f"    {i:04x}: {h:<48s} {a}")
+            if len(dec) > 512:
+                console.print(f"    ... ({len(dec) - 512} more bytes)")
+            import re
+            strings = re.findall(rb"[\x20-\x7e]{8,}", dec)
+            if strings:
+                console.print(f"  [bold]Strings:[/bold]")
+                for s in strings[:30]:
+                    console.print(f"    {s.decode('ascii', errors='replace')}")
+        except Exception as e:
+            console.print(f"  [yellow]Decrypt failed: {e}[/yellow]")
+
+    _dump_response("getprocess #1 (empty body)", result.get("getprocess_body", b""), f"{output}_1")
+
+    swids = result.get("getprocess2_swids", [])
+    if swids:
+        console.print(f"\n  SWIDs sent: {len(swids)}")
+        for s in swids[:5]:
+            console.print(f"    {s}")
+        if len(swids) > 5:
+            console.print(f"    ... and {len(swids) - 5} more")
+    _dump_response("getprocess #2 (with SWIDs)", result.get("getprocess2_body", b""), f"{output}_2")
+
+    console.print(f"\n[green]✓ Done[/green]")
+
+
+@cli.command(name="dump-mds")
+@click.pass_context
+def dump_mds(ctx):
+    """Call the /mds/ (Map Download Service) endpoint and dump the response.
+
+    This is the REST endpoint that returns download task info after content
+    selection/purchase. Must be called with an authenticated web session.
+    """
+    import httpx
+
+    from medianav_toolbox.session import BROWSER_UA, run_session
+
+    usb = ctx.obj["usb_path"]
+    username = os.environ.get("NAVIEXTRAS_USER", "")
+    password = os.environ.get("NAVIEXTRAS_PASS", "")
+
+    if not username or not password:
+        console.print("[red]Set NAVIEXTRAS_USER and NAVIEXTRAS_PASS environment variables[/red]")
+        sys.exit(1)
+
+    console.print("Connecting...")
+    result = run_session(usb, username, password)
+    if result["errors"]:
+        for e in result["errors"]:
+            console.print(f"[red]✗ {e}[/red]")
+        sys.exit(1)
+
+    jsid = result.get("web_jsessionid")
+    if not jsid:
+        console.print("[red]Web login failed[/red]")
+        sys.exit(1)
+
+    console.print(f"Calling /mds/ ...")
+    with httpx.Client(timeout=30, follow_redirects=True) as hc:
+        resp = hc.get(
+            "https://dacia-ulc.naviextras.com/mds/",
+            headers={
+                "User-Agent": BROWSER_UA,
+                "Cookie": f"JSESSIONID={jsid}",
+                "Accept": "*/*",
+                "Pragma": "no-cache",
+                "Cache-Control": "no-cache",
+            },
+        )
+        console.print(f"  Status: {resp.status_code}")
+        console.print(f"  Content-Type: {resp.headers.get('content-type', '?')}")
+        console.print(f"  Body ({len(resp.content)} bytes):")
+        console.print(f"  {resp.text}")
+
+        # Save raw response
+        Path("mds_response.json").write_text(resp.text)
+        console.print(f"\n  Saved to mds_response.json")
