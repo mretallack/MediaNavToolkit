@@ -4,6 +4,7 @@ Ref: toolbox.md §9 (catalog), captured traffic analysis
 """
 
 import re
+import struct
 from dataclasses import dataclass, field
 
 
@@ -40,10 +41,13 @@ class ContentSize:
 
 @dataclass
 class License:
-    """A license entry from the licenses response."""
+    """A license entry from the licenses wire response."""
 
+    swid: str
     lyc_file: str
-    swid: str = ""
+    lyc_data: bytes
+    timestamp: int = 0
+    expiry: int = 0
 
 
 def parse_catalog_html(html: str) -> list[CatalogItem]:
@@ -142,21 +146,43 @@ def parse_update_selection(data: dict) -> tuple[list[ContentSize], dict]:
 
 
 def parse_licenses_response(data: bytes) -> list[License]:
-    """Parse the licenses wire protocol response.
+    """Parse the licenses wire protocol response (decrypted body).
 
-    Extracts .lyc filenames and associated SWIDs.
+    Wire format:
+        [1B presence=0x40][2B count BE]
+        Entry × count:
+            [1B marker=0xC0][4B timestamp BE][4B expiry BE]
+            [1B swid_len][swid bytes][1B fname_len][fname bytes]
+            [4B lyc_size BE][lyc_data bytes]
     """
+    if len(data) < 3 or data[0] != 0x40:
+        return []
+    count = struct.unpack(">H", data[1:3])[0]
+    off = 3
     licenses = []
-    lyc_files = re.findall(rb"([A-Za-z0-9_]+\.lyc)", data)
-    swids = re.findall(rb"(C[WP]-[A-Z0-9]+-[A-Z0-9]+-[A-Z0-9]+-[A-Z0-9]+-[A-Z0-9]+)", data)
-
-    # Pair them up — each license has a SWID followed by a .lyc file
-    swid_list = [s.decode() for s in swids]
-    lyc_list = [f.decode() for f in lyc_files]
-
-    for i, lyc in enumerate(lyc_list):
-        swid = swid_list[i] if i < len(swid_list) else ""
-        licenses.append(License(lyc_file=lyc, swid=swid))
+    for _ in range(count):
+        if off >= len(data) or data[off] != 0xC0:
+            break
+        off += 1
+        ts = struct.unpack(">I", data[off : off + 4])[0]
+        off += 4
+        expiry = struct.unpack(">I", data[off : off + 4])[0]
+        off += 4
+        swid_len = data[off]
+        off += 1
+        swid = data[off : off + swid_len].decode("ascii")
+        off += swid_len
+        fname_len = data[off]
+        off += 1
+        fname = data[off : off + fname_len].decode("ascii")
+        off += fname_len
+        lyc_size = struct.unpack(">I", data[off : off + 4])[0]
+        off += 4
+        lyc_data = data[off : off + lyc_size]
+        off += lyc_size
+        licenses.append(
+            License(swid=swid, lyc_file=fname, lyc_data=lyc_data, timestamp=ts, expiry=expiry)
+        )
     return licenses
 
 

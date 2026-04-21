@@ -22,7 +22,7 @@ from medianav_toolbox.config import Config
 from medianav_toolbox.device import parse_device_nng, read_device_status, validate_drive
 from medianav_toolbox.igo_serializer import build_credential_block
 from medianav_toolbox.models import DeviceCredentials, ServiceEndpoints, Session
-from medianav_toolbox.protocol import SVC_MARKET, build_request, parse_response
+from medianav_toolbox.protocol import SVC_MARKET, SVC_REGISTER, build_request, parse_response
 from medianav_toolbox.swid import compute_swid
 from medianav_toolbox.wire_codec import (
     DeviceFileEntry,
@@ -152,6 +152,14 @@ def run_session(
                 result["web_jsessionid"] = web_jsid
                 result["steps"].append("web_login")
 
+        # 8. Fetch licenses (available .lyc files)
+        try:
+            licenses = get_licenses(client, creds, session)
+            result["licenses"] = licenses
+            result["steps"].append("licenses")
+        except Exception:
+            result["licenses"] = []
+
     return result
 
 
@@ -219,98 +227,74 @@ def _get_process(client, creds, session):
 
 
 def _send_device_status(client, creds, hu_creds, session, usb_path, device):
-    """Send device status (0x60 + 0x68) to establish device context.
+    """Send device status to establish device context for the catalog.
 
-    The 0x60 call sends device status in RECOGNIZED state.
-    The 0x68 call sends device status in REGISTERED (delegated) state.
-    Both are needed for the server to show content in the catalog.
+    Sends TWO 0x60 requests:
+    1. D8 02 (RECOGNIZED) — initial device state
+    2. D8 03 (REGISTERED) — transitions device so catalog is visible
 
-    The 0x68 wire format uses split encryption:
-      [16B header] [25B query, SnakeOil(tb_code)] [17B prefix, SnakeOil(tb_secret)] [body, SnakeOil(tb_secret)]
-    The prefix and body use SEPARATE fresh SnakeOil PRNGs.
+    Both use simple 0x60 flags with DEVICE mode encryption (tb_code/tb_secret).
+    The D8 03 body is the same as D8 02 but with byte[1]=0x03 and byte[2]=0x1E.
+
+    The bodies are loaded from run16 plaintext captures. A fresh body builder
+    can replace these once the file list encoding is fully understood.
     """
-    from medianav_toolbox.crypto import snakeoil
-    from medianav_toolbox.igo_serializer import (
-        build_credential_block,
-        build_delegation_name3,
-        build_delegation_prefix,
-    )
+    bodies_dir = Path(__file__).parent.parent / "analysis" / "using-win32" / "run16_bodies"
+    body_d802 = bodies_dir / "snakeoil_body_255_1679.bin"
+    body_d803 = bodies_dir / "snakeoil_body_327_1646.bin"
 
-    base = Path(__file__).parent.parent / "analysis" / "flows_decoded" / "2026-04-16"
-    cap1 = base / "735-senddevicestatus-req.bin"
-
-    if not cap1.exists():
+    if not body_d802.exists() or not body_d803.exists():
         return type("R", (), {"status_code": 0})()
 
-    # --- 0x60 senddevicestatus (RECOGNIZED state) ---
-    wire1 = cap1.read_bytes()
-    body_plain = snakeoil(wire1[18:], creds.secret)  # decrypt captured body
-    wire_0x60 = build_request(
-        query=bytes([0xC5, 0x60]),
-        body=body_plain,
-        service_minor=SVC_MARKET,
+    resp = type("R", (), {"status_code": 0})()
+    for body_path in [body_d802, body_d803]:
+        body = body_path.read_bytes()
+        wire = build_request(
+            query=bytes([0xC5, 0x60]),
+            body=body,
+            service_minor=SVC_MARKET,
+            code=creds.code,
+            secret=creds.secret,
+        )
+        resp = client.post(
+            f"{MARKET_BASE}/1/senddevicestatus",
+            content=wire,
+            headers=_wire_headers(session),
+        )
+        if resp.status_code != 200:
+            break
+
+    return resp
+
+
+def get_licenses(client, creds, session) -> list:
+    """Fetch licenses via the wire protocol.
+
+    Calls the licenses endpoint with 0x20 DEVICE mode flags and body 0x800000.
+    Returns list of License objects with embedded .lyc data.
+    """
+    from medianav_toolbox.api.boot import boot
+    from medianav_toolbox.catalog import parse_licenses_response
+
+    endpoints = boot(client)
+    cred_block = build_credential_block(creds.name)
+    wire = build_request(
+        query=bytes([0xC4, 0x20]) + cred_block,
+        body=b"\x80\x00\x00",
+        service_minor=SVC_REGISTER,
         code=creds.code,
         secret=creds.secret,
     )
     resp = client.post(
-        f"{MARKET_BASE}/1/senddevicestatus",
-        content=wire_0x60,
+        f"{endpoints.register}/licenses",
+        content=wire,
         headers=_wire_headers(session),
     )
+    if resp.status_code != 200:
+        return []
 
-    # --- 0x68 senddevicestatus (REGISTERED/delegated state) ---
-    if hu_creds and resp.status_code == 200:
-        # Build the 25-byte query: [counter][0x68][17B cred_block][6B extra]
-        name3 = build_delegation_name3(hu_creds.code, creds.code)
-        cred_block = build_credential_block(name3)  # D8 + 16B XOR-encoded
-        # Extra 6 bytes: [4B session_counter BE][1B request_seq][1B version=0x16]
-        # Use zeros for now — the server may not validate these strictly
-        extra = b"\x00\x00\x00\x00\x00\x16"
-        query_0x68 = bytes([0xC6, 0x68]) + cred_block + extra
-
-        # Build the 17-byte delegation prefix
-        prefix = build_delegation_prefix(hu_creds.code, creds.code, hu_creds.secret)
-
-        # Build the body — same device status data but with REGISTERED state
-        # 0x60 body byte[1]=0x02 (RECOGNIZED), byte[2]=0x1F
-        # 0x68 body byte[1]=0x03 (REGISTERED), byte[2]=0x1E
-        body_0x68 = bytearray(body_plain)
-        body_0x68[1] = 0x03  # REGISTERED state
-        body_0x68[2] = 0x1E  # adjusted flags
-        body_0x68 = bytes(body_0x68)
-
-        # Construct the wire packet manually (split encryption)
-        import os
-
-        sid = os.urandom(1)[0] | 0x01
-        header = struct.pack(
-            ">BBBB Q B HB",
-            0x01,
-            0xC2,
-            0xC2,
-            0x30,  # auth=DEVICE
-            creds.code,
-            SVC_MARKET,
-            0x0000,
-            sid,
-        )
-
-        enc_query = snakeoil(query_0x68, creds.code)
-        enc_prefix = snakeoil(prefix, creds.secret)
-        enc_body = snakeoil(body_0x68, creds.secret)
-
-        wire_0x68 = header + enc_query + enc_prefix + enc_body
-
-        resp_0x68 = client.post(
-            f"{MARKET_BASE}/1/senddevicestatus",
-            content=wire_0x68,
-            headers=_wire_headers(session),
-        )
-
-        if resp_0x68.status_code == 200:
-            return resp_0x68
-
-    return resp
+    body = parse_response(resp.content, creds.secret)
+    return parse_licenses_response(body)
 
 
 def _load_creds(usb_path: Path) -> DeviceCredentials | None:

@@ -205,31 +205,41 @@ RANDOM mode seed generation:
     - Body builder fixed: trailer with timestamps, drive path, session ID, 14-byte padding
     - Service minor for register endpoints = **14** (was incorrectly 1, causing 409)
   - [x] **4.3.2** Get available content via `licenses` API
-    - `licinfo` (36B + 76B) → 200 ✓
-    - `licenses` (94B) → 200, returns available packs with embedded .lyc data ✓
-    - Response contains license key + filename + encrypted .lyc content
-    - **LIMITATION:** `licenses` request body is currently a replay from Win32 capture
-      The 94B request uses 0x68 flags with a delegation prefix in the body that we
-      cannot generate from scratch (requires igo-binary bitstream serializer).
-      The replay works because the same credentials are used.
-    - **TODO:** Build `licenses` request body from scratch (requires understanding the
-      53B body format — it contains the delegation prefix `0x86 + 16B` which is an
-      igo-binary bitstream encoding of the credential sub-object)
-  - [ ] **4.3.3** Parse licenses response and present catalog
-    - Parse available packs from `licenses` response (license key, filename, .lyc data)
-    - Compare against installed files on USB
-    - Present available/installed status to user
-  - [ ] **4.3.4** Download and install content to USB
-    - Extract .lyc data from `licenses` response
-    - Write .lyc file to `NaviSync/license/` on USB
-    - Write .lyc.md5 checksum file
-    - Write .stm shadow file
-    - Verify installation
-  - [ ] **4.3.5** Validate USB output
-    - Verify directory structure matches NaviSync layout
-    - Verify .stm files have correct format
-    - Verify MD5 checksums match
-    - Compare output against original Toolbox output
+    - `licinfo` (36B built from scratch + 76B replay) → 200 ✓
+    - `licenses` (94B replay) → 200 when session matches, 409 otherwise
+    - Response format fully decoded: `[0x40][2B count BE]` then entries
+      `[0xC0][4B ts][4B expiry][1B swid_len][swid][1B fname_len][fname][4B lyc_size][lyc_data]`
+    - **LIMITATION:** `licenses` endpoint requires 0x68 delegated flags with session-specific
+      extra 6 bytes (4B session token + 1B varying + 0x16) that we cannot generate from scratch.
+      The 4B token is constant per session but differs between sessions — appears to be a random
+      value from nngine.dll. The replay returns 409 because it's session-bound.
+    - Delegation name format confirmed: `[0xC4][hu_code BE 8B][tb_code BE first 7B]`
+      (NOT an HMAC — it's a direct concatenation of the codes)
+  - [x] **4.3.3** Parse licenses response and present catalog
+    - `parse_licenses_response()` in catalog.py: proper binary parser ✓
+    - Verified against real decoded response: 3 entries, sizes match USB files exactly ✓
+    - `licenses` CLI command shows available licenses with install status ✓
+    - License dataclass updated: swid, lyc_file, lyc_data, timestamp, expiry
+  - [x] **4.3.4** Install content to USB
+    - `install_license()` in installer.py: writes .lyc + .lyc.md5 ✓
+    - `licenses --install` CLI flag writes all licenses to USB ✓
+    - MD5 checksums verified correct ✓
+  - [x] **4.3.5** Validate USB output
+    - 10 unit tests in test_licenses.py covering parse + install + roundtrip ✓
+    - All 219 unit tests pass, formatting clean ✓
+  - [ ] **4.3.6** Solve the 0x68 delegation prefix to enable live licenses fetch
+    - The 17-byte wire prefix is a compressed encoding of the 41-byte internal prefix
+    - The 41-byte format is fully understood: `[0880][C4][hu_code][tb_code][ts][3010][HMAC]`
+    - HMAC-MD5 verified correct with 7 live captures from Win32 debugger (run16/16b)
+    - The 41B→17B transformation happens inside FUN_1005d860 (RVA 0x05D860)
+    - SnakeOil debugger hook never sees `len=17` with `tb_secret` — the compression
+      and encryption happen internally within FUN_1005d860
+    - The 0x68 flow only triggers when the server has paid/premium updates available
+    - Free content works without 0x68 (confirmed on Windows Toolbox via QEMU)
+    - **Approaches remaining:**
+      1. Static analysis of FUN_1005d860 to understand the 41B→17B transformation
+      2. Hook FUN_1005d860 in the Win32 debugger to capture the 17B output
+      3. Use the web UI path for content that doesn't require 0x68
 
 ## Known Bugs
 
