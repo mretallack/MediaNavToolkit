@@ -78,18 +78,18 @@ NngineFireEvent
 - Device registration with NaviExtras server
 - Full authentication flow (boot → login → fingerprint → delegator → senddevicestatus)
 - Wire protocol encryption fully solved (SnakeOil xorshift128 cipher)
+- **Delegated senddevicestatus** — `build_dynamic_request()` generates from scratch, verified byte-exact against captured data (24 tests)
 - Catalog browsing — 38 items (maps, POIs, safety cameras) from live server
 - Free content purchase via web API
 - License fetching — `.lyc` files downloaded live from server
 - License installation to USB drive (`.lyc` + `.lyc.md5`)
-- 219 unit tests passing
+- 320+ unit tests passing
 
 ### Remaining ❌
 
-- **0x68 delegation prefix** — HMAC **fully verified** ✅; needs implementation in `session.py` (build query + split encryption)
-- **Live `licenses` endpoint** — requires 0x68 delegated flags with session-specific tokens
+- **Live server 409s** — senddevicestatus returns 409 (affects all formats, likely session state issue)
+- **`session.py` integration** — `_send_device_status` still uses captured chain body replay; needs to switch to `build_dynamic_request`
 - **Full sync pipeline** — `medianav-toolbox sync` command not yet wired end-to-end
-- **Paid content** — requires 0x68 flow which only triggers when server has premium updates
 
 ---
 
@@ -904,44 +904,37 @@ Tested the hypothesis that 0x68 needs to come after web login + catalog browse:
 
 ## Remaining Work
 
-### R.11: 0x68 Delegation Prefix — STATUS: HMAC VERIFIED ✅, IMPLEMENTATION NEEDED
+### R.11: Delegated senddevicestatus — STATUS: SOLVED ✅
 
-The HMAC is **fully solved and verified**. Both captured HMAC outputs match our computation exactly. The "mystery device_id" was a misparse — credential codes are 64-bit integers, not 32-bit.
+**Fully implemented and verified.** `build_dynamic_request()` in `protocol.py` generates
+complete wire requests from credentials + plaintext body. Verified byte-exact against
+captured run25 wire data (24 tests in `test_dynamic_wire.py`).
 
-#### HMAC Formula (Verified)
+See `docs/chain-encryption.md` for the complete payload construction recipe.
 
-```python
-key   = struct.pack(">Q", hu_secret)                    # 8 bytes
-data  = b'\xC4' + struct.pack(">Q", hu_code)            # 1 + 8 bytes
-      + struct.pack(">Q", tb_code)                       # + 8 bytes
-      + struct.pack(">I", int(time.time()))              # + 4 bytes = 21 total
-hmac_output = hmac.new(key, data, hashlib.md5).digest()  # 16 bytes
-```
+### R.12: Session Key Derivation — STATUS: SOLVED ✅
 
-#### Implementation Steps
+The session key is `creds.secret` — the toolbox Secret from device registration.
 
-1. **R.11.1** — Implement `build_delegation_prefix()`: `0x86 + hmac_output` = 17 bytes ✅ formula known
-2. **R.11.2** — Build 41-byte query: `[counter][0x80][Name₃][timestamp][0x30][0x10][HMAC]`
-3. **R.11.3** — Build 58-byte envelope: `[counter][0x80][cred_block][0x80][Name₃][timestamp][0x30][0x10][HMAC]`
-4. **R.11.4** — Add split encryption to `build_request()` for 0x68 flag
-5. **R.11.5** — Test against live server
-6. **R.11.6** — Wire up `medianav-toolbox sync` command
+Ghidra analysis of `FUN_100b3a60`: in DEVICE mode (mode 3), the SnakeOil key is
+read from `credential_obj[0x1c:0x24]` (the Secret field). For delegated requests,
+this is the toolbox credential's Secret. Verified: `creds.secret = 0x000ACAB6C9FB66F8`
+matches all captured SnakeOil calls.
 
----
+No hardcoding needed — every device gets its own `creds.secret` at registration.
 
-### Approaches Tried and Failed
+### R.13: session.py Integration — STATUS: OPEN
 
-#### 1. Brute-Force HMAC Search ❌
+`_send_device_status()` in `session.py` still uses the old replay approach with
+captured chain bodies. Needs to be updated to use `build_dynamic_request()`.
 
-**What:** Exhaustive search across 5 HMAC input formats × 2³² timestamps, using 4 parallel threads in C.
+### R.14: Live Server 409s — STATUS: INVESTIGATING
 
-**Tools:** `brute_fast.c`, `brute_multi.c`, `brute_parallel.c`, `brute_ts.c`, `brute_d8.c`, `brute_0x44.c`
-
-**Why it failed:** The search assumed hu_code and tb_code were packed as 8-byte big-endian values (matching the `struct.pack(">Q")` in the Python code). The actual format uses **4-byte** packing. Also, the device_id (8 bytes) was not included in any of the search formats. The search space was correct in timestamp range but wrong in input structure.
-
-**Result:** `brute_parallel.log`: "No match found" after full 2³² sweep. `brute_0x44.log`: "No match found".
-
-**Worth retrying?** **YES** — now that the exact 21-byte format is known, a simple verification (not brute force) should confirm the HMAC output matches. No brute force needed anymore.
+All senddevicestatus requests return 409 (including the previously-working 0x60 format).
+This is a server-side issue, not a format problem. Possible causes:
+- Rate limiting
+- Session state requirements (specific request ordering)
+- Stale device data
 
 #### 2. Unicorn CPU Emulation ❌ (Partial success)
 

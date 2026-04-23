@@ -1,22 +1,22 @@
 """Wire protocol envelope for the NaviExtras binary API.
 
-Request:  16-byte header + SnakeOil-encrypted query + SnakeOil-encrypted body
-Response:  4-byte header + SnakeOil-encrypted igo-binary payload
+Delegated wire format (verified run25+run32, see docs/chain-encryption.md):
+  [16B header][1B prefix][snakeoil(query, session_key)][snakeoil(body, session_key)]
 
-Query and body are encrypted as SEPARATE SnakeOil streams:
-  RANDOM mode: both use the random seed (fresh PRNG state each)
-  DEVICE mode: query uses Code, body uses Secret
+Each snakeoil() call resets the PRNG from session_key independently.
+The body is standard plaintext format (NOT bitstream-encoded).
 
-For delegated requests (flags=0x68), the body is split-encrypted:
-  [SnakeOil(17B delegation prefix, Secret)] [SnakeOil(body, Secret)]
-  Each segment uses a fresh PRNG state (Secret = tb_secret for all flows).
+Standard wire format (login, fingerprint, etc.):
+  [16B header][snakeoil(query, q_key)][snakeoil(body, b_key)]
 
-Ref: toolbox.md §2 (wire protocol), credential_encoding_notes.md
+Header (16 bytes, unencrypted):
+  [01] [C2 C2] [mode] [key 8B BE] [svc_minor] [00 00] [nonce]
 
-Wire layout (DEVICE mode, sub-type 0x30):
-  flags=0x20: [16B header] [SnakeOil(19B query, Code)] [SnakeOil(body, Secret)]
-  flags=0x60: [16B header] [SnakeOil(2B query, Code)]  [SnakeOil(body, Secret)]
-  flags=0x68: [16B header] [SnakeOil(25B query, Code)] [SnakeOil(17B prefix, Secret)] [SnakeOil(body, Secret)]
+Key functions:
+  build_request()          — standard requests (login, fingerprint, register)
+  build_dynamic_request()  — delegated senddevicestatus (no captured data needed)
+  build_0x68_request()     — LEGACY: replay with captured chain body
+  build_delegated_request() — LEGACY: uses wrong encryption model
 """
 
 import os
@@ -151,8 +151,14 @@ def build_0x68_request(
 
     header = struct.pack(
         ">BBBB Q B HB",
-        0x01, 0xC2, 0xC2, AUTH_DEVICE,
-        code, service_minor, 0x0000, sid,
+        0x01,
+        0xC2,
+        0xC2,
+        AUTH_DEVICE,
+        code,
+        service_minor,
+        0x0000,
+        sid,
     )
 
     # Build Name₃ credential block for 0x68
@@ -165,6 +171,156 @@ def build_0x68_request(
     encrypted_payload = snakeoil(payload, code)
 
     return header + encrypted_payload
+
+
+def build_delegated_request(
+    counter: int,
+    body: bytes,
+    name3: bytes,
+    hu_code: int,
+    tb_code: int,
+    hu_secret: int,
+    secret: int,
+    service_minor: int = SVC_MARKET,
+    session_id: int | None = None,
+    timestamp: int | None = None,
+) -> bytes:
+    """Build a delegated wire request using the 0x80 query format.
+
+    Wire format:
+      [16B header, key=tb_code]
+      [SnakeOil(query + body, tb_code)]  ← ONE continuous stream, no separator
+
+    Query (41B) = [counter][0x80][Name₃(17B)][ts(4B)][0x30][0x10][HMAC(16B)]
+    Separator (1B) = session nonce (same as header byte 15)
+    Body (var) = standard plaintext body
+
+    The entire encrypted payload is ONE continuous SnakeOil stream using
+    the key from the header (tb_code). NOT separate streams.
+    """
+    import hashlib
+    import hmac as hmac_mod
+    import time
+
+    ts = timestamp if timestamp is not None else int(time.time()) & 0xFFFFFFFF
+    hmac_data = (
+        b"\xc4" + struct.pack(">Q", hu_code) + struct.pack(">Q", tb_code) + struct.pack(">I", ts)
+    )
+    hmac_key = struct.pack(">Q", hu_secret)
+    hmac_result = hmac_mod.new(hmac_key, hmac_data, hashlib.md5).digest()
+
+    query = bytes([counter, 0x80]) + name3 + struct.pack(">I", ts) + b"\x30\x10" + hmac_result
+
+    sid = session_id if session_id is not None else (os.urandom(1)[0] | 0x01)
+    header = struct.pack(
+        ">BBBB Q B HB",
+        0x01,
+        0xC2,
+        0xC2,
+        AUTH_DEVICE,
+        tb_code,
+        service_minor,
+        0x0000,
+        sid,
+    )
+
+    # One continuous stream: query + body
+    payload = query + body
+    return header + snakeoil(payload, tb_code)
+
+
+def build_dynamic_request(
+    counter: int,
+    body: bytes,
+    hu_code: int,
+    tb_code: int,
+    hu_secret: int,
+    session_key: int,
+    tb_name: bytes | None = None,
+    service_minor: int = SVC_MARKET,
+    session_id: int | None = None,
+    timestamp: int | None = None,
+) -> bytes:
+    """Build a dynamic delegated wire request (no captured data needed).
+
+    Correct wire format (verified against run25+run32 SnakeOil logs):
+      [16B header]
+      [1B prefix = snakeoil(0xE9, session_key)]
+      [snakeoil(query, session_key)]
+      [snakeoil(body, session_key)]
+
+    Each snakeoil() call resets the PRNG from session_key.
+
+    Query (41B without name, 58B with name):
+      [flags(1B)][0x80]
+      [optional: tb_name(16B) + 0x80]
+      [C4 + hu_code(8B) + tb_code(8B) + timestamp(4B)]
+      [0x30][0x10]
+      [HMAC-MD5(hu_secret_BE, credential_data)(16B)]
+
+    Args:
+        counter: request sequence counter (0-based, used in flags byte)
+        body: plaintext body (standard format, e.g. from build_senddevicestatus_body)
+        hu_code: head unit Code from delegator response
+        tb_code: toolbox Code from registration
+        hu_secret: head unit Secret from delegator response
+        session_key: SnakeOil key = creds.secret (toolbox Secret from registration)
+        tb_name: 16-byte toolbox credential name (included if not None)
+        service_minor: service version byte
+        session_id: header nonce byte (auto-generated if None)
+        timestamp: Unix timestamp (auto-generated if None)
+    """
+    import hashlib
+    import hmac as hmac_mod
+    import time
+
+    ts = timestamp if timestamp is not None else int(time.time()) & 0xFFFFFFFF
+
+    # Credential encoding (21B)
+    cred_data = (
+        b"\xc4" + struct.pack(">Q", hu_code) + struct.pack(">Q", tb_code) + struct.pack(">I", ts)
+    )
+
+    # HMAC-MD5(hu_secret_BE, credential_data)
+    hmac_key = struct.pack(">Q", hu_secret)
+    hmac_result = hmac_mod.new(hmac_key, cred_data, hashlib.md5).digest()
+
+    # Flags byte: bit 3 always set, bit 6 = name present
+    flags = 0x08
+    if tb_name is not None:
+        flags |= 0x40
+
+    # Build query
+    parts = [bytes([flags, 0x80])]
+    if tb_name is not None:
+        parts.append(tb_name[:16])
+        parts.append(b"\x80")
+    parts.append(cred_data)
+    parts.append(b"\x30\x10")
+    parts.append(hmac_result)
+    query = b"".join(parts)
+
+    # Header
+    sid = session_id if session_id is not None else (os.urandom(1)[0] | 0x01)
+    header = struct.pack(
+        ">BBBB Q B HB",
+        0x01,
+        0xC2,
+        0xC2,
+        AUTH_DEVICE,
+        tb_code,
+        service_minor,
+        0x0000,
+        sid,
+    )
+
+    # Wire: header + prefix + snakeoil(query) + snakeoil(body)
+    # Each snakeoil call resets the PRNG independently
+    prefix = snakeoil(b"\xe9", session_key)
+    encrypted_query = snakeoil(query, session_key)
+    encrypted_body = snakeoil(body, session_key)
+
+    return header + prefix + encrypted_query + encrypted_body
 
 
 def parse_response(data: bytes, seed: int) -> bytes:

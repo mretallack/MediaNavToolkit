@@ -240,93 +240,51 @@ def _get_process(client, creds, session, swids=None):
 
 
 def _send_device_status(client, creds, hu_creds, session, usb_path, device):
-    """Send device status to establish device context.
+    """Send delegated device status to establish device context.
 
-    Sends two requests using the correct wire format (from SSL capture run25):
-    1. 0x68 senddevicestatus — State=RECOGNIZED, Name₃ credential
-    2. 0x28 senddevicestatus — State=REGISTERED, tb_name credential (after delegator)
-
-    Both use ONE continuous SnakeOil(tb_code) stream for the entire payload.
-    The body uses chain encryption (captured from the Toolbox).
+    Uses build_dynamic_request() with session_key=creds.secret.
+    Wire format: [header][prefix][snakeoil(query, secret)][snakeoil(body, secret)]
+    See docs/chain-encryption.md for details.
     """
-    from medianav_toolbox.protocol import build_0x68_request
+    from medianav_toolbox.device_status import build_live_senddevicestatus
+    from medianav_toolbox.protocol import build_dynamic_request
 
-    data_dir = Path(__file__).parent / "data"
-
-    # Load captured chain data
-    chain_0x68 = (data_dir / "chain_body_0x68.bin").read_bytes()
-    extra_0x68 = (data_dir / "chain_extra_0x68.bin").read_bytes()
-
-    # Send 0x68 (State=RECOGNIZED, Name₃ credential)
-    wire_0x68 = build_0x68_request(
-        counter=0xC5,
-        tb_name=creds.name,
+    body = build_live_senddevicestatus(usb_path, variant=0x03)
+    wire = build_dynamic_request(
+        counter=0,
+        body=body,
         hu_code=hu_creds.code,
         tb_code=creds.code,
         hu_secret=hu_creds.secret,
-        chain_body=chain_0x68,
-        extra_6=extra_0x68,
-        code=creds.code,
+        session_key=creds.secret,
     )
-    resp = client.post(
+    return client.post(
         f"{MARKET_BASE}/1/senddevicestatus",
-        content=wire_0x68,
+        content=wire,
         headers=_wire_headers(session),
     )
-    if resp.status_code != 200:
-        return resp
-
-    # Send 0x28 (State=REGISTERED, tb_name credential)
-    chain_0x28 = (data_dir / "chain_body_0x28.bin").read_bytes()
-    extra_0x28 = (data_dir / "chain_extra_0x28.bin").read_bytes()
-
-    cred_block_tb = build_credential_block(creds.name)
-    query_0x28 = bytes([0xC6, 0x28]) + cred_block_tb + extra_0x28
-    payload_0x28 = query_0x28 + chain_0x28
-
-    header = struct.pack(
-        ">BBBB Q B HB", 0x01, 0xC2, 0xC2, 0x30,
-        creds.code, SVC_MARKET, 0x0000, 0x67,
-    )
-    from medianav_toolbox.crypto import snakeoil
-    wire_0x28 = header + snakeoil(payload_0x28, creds.code)
-
-    resp = client.post(
-        f"{MARKET_BASE}/1/senddevicestatus",
-        content=wire_0x28,
-        headers=_wire_headers(session),
-    )
-    return resp
 
 
 def _send_device_status_0x68(client, creds, hu_creds, session, usb_path):
-    """Send 0x68 delegated device status after web login + catalog browse.
+    """Send delegated device status (variant 0x03).
 
-    The 0x68 uses the delegation HMAC and split encryption.
-    Must be called AFTER the web UI has established a content context.
+    Same as _send_device_status but callable separately for the 0x68 flow.
     """
-    from medianav_toolbox.protocol import build_0x68_request
+    from medianav_toolbox.device_status import build_live_senddevicestatus
+    from medianav_toolbox.protocol import build_dynamic_request
 
-    bodies_dir = Path(__file__).parent.parent / "analysis" / "using-win32" / "run16_bodies"
-    body_file = bodies_dir / "snakeoil_body_327_1646.bin"
-    if body_file.exists():
-        body = body_file.read_bytes()
-    else:
-        from medianav_toolbox.device_status import build_live_senddevicestatus
-        try:
-            body = build_live_senddevicestatus(usb_path, variant=0x03)
-        except Exception:
-            return type("R", (), {"status_code": 0})()
+    try:
+        body = build_live_senddevicestatus(usb_path, variant=0x03)
+    except Exception:
+        return type("R", (), {"status_code": 0})()
 
-    wire = build_0x68_request(
-        counter=0x08,
-        tb_name=creds.name,
+    wire = build_dynamic_request(
+        counter=0,
+        body=body,
         hu_code=hu_creds.code,
         tb_code=creds.code,
         hu_secret=hu_creds.secret,
-        body=body,
-        secret=creds.secret,
-        code=creds.code,
+        session_key=creds.secret,
     )
     return client.post(
         f"{MARKET_BASE}/1/senddevicestatus",
@@ -429,12 +387,14 @@ def _load_creds(usb_path: Path) -> DeviceCredentials | None:
 
 
 def _save_creds(usb_path: Path, creds: DeviceCredentials, uniq_id: str = "") -> None:
-    payload = json.dumps({
-        "name": creds.name.hex(),
-        "code": creds.code,
-        "secret": creds.secret,
-        "uniq_id": uniq_id,
-    })
+    payload = json.dumps(
+        {
+            "name": creds.name.hex(),
+            "code": creds.code,
+            "secret": creds.secret,
+            "uniq_id": uniq_id,
+        }
+    )
     for creds_path in _creds_paths(usb_path):
         try:
             creds_path.parent.mkdir(parents=True, exist_ok=True)
