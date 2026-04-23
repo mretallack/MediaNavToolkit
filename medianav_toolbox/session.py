@@ -129,6 +129,7 @@ def run_session(
                 hu_dev_creds = register_hu_device(
                     client,
                     endpoints,
+                    tb_creds=creds,
                     appcid=device.appcid,
                 )
                 if hu_dev_creds:
@@ -139,11 +140,12 @@ def run_session(
             else:
                 result["steps"].append("register_hu_device (cached)")
 
-            # 6. Send device status with head unit credentials
+            # 6. Send device status (0x60 only — 0x68 comes after web login)
             ds_resp = _send_device_status(client, creds, hu_creds, session, usb_path, device)
             result["devicestatus_status"] = ds_resp.status_code
             result["steps"].append("senddevicestatus")
         except RuntimeError:
+            hu_creds = None
             pass  # delegator/senddevicestatus are optional for basic flow
 
         # 7. Web login (for /toolbox/ pages like catalog, managecontent)
@@ -238,47 +240,136 @@ def _get_process(client, creds, session, swids=None):
 
 
 def _send_device_status(client, creds, hu_creds, session, usb_path, device):
-    """Send device status to establish device context for the catalog.
+    """Send device status to establish device context.
 
-    Uses captured plaintext bodies from run16 if available (these match the
-    server's expected device state). Falls back to live USB body builder.
+    Sends two requests using the correct wire format (from SSL capture run25):
+    1. 0x68 senddevicestatus — State=RECOGNIZED, Name₃ credential
+    2. 0x28 senddevicestatus — State=REGISTERED, tb_name credential (after delegator)
+
+    Both use ONE continuous SnakeOil(tb_code) stream for the entire payload.
+    The body uses chain encryption (captured from the Toolbox).
     """
-    from medianav_toolbox.device_status import build_live_senddevicestatus
+    from medianav_toolbox.protocol import build_0x68_request
+
+    data_dir = Path(__file__).parent / "data"
+
+    # Load captured chain data
+    chain_0x68 = (data_dir / "chain_body_0x68.bin").read_bytes()
+    extra_0x68 = (data_dir / "chain_extra_0x68.bin").read_bytes()
+
+    # Send 0x68 (State=RECOGNIZED, Name₃ credential)
+    wire_0x68 = build_0x68_request(
+        counter=0xC5,
+        tb_name=creds.name,
+        hu_code=hu_creds.code,
+        tb_code=creds.code,
+        hu_secret=hu_creds.secret,
+        chain_body=chain_0x68,
+        extra_6=extra_0x68,
+        code=creds.code,
+    )
+    resp = client.post(
+        f"{MARKET_BASE}/1/senddevicestatus",
+        content=wire_0x68,
+        headers=_wire_headers(session),
+    )
+    if resp.status_code != 200:
+        return resp
+
+    # Send 0x28 (State=REGISTERED, tb_name credential)
+    chain_0x28 = (data_dir / "chain_body_0x28.bin").read_bytes()
+    extra_0x28 = (data_dir / "chain_extra_0x28.bin").read_bytes()
+
+    cred_block_tb = build_credential_block(creds.name)
+    query_0x28 = bytes([0xC6, 0x28]) + cred_block_tb + extra_0x28
+    payload_0x28 = query_0x28 + chain_0x28
+
+    header = struct.pack(
+        ">BBBB Q B HB", 0x01, 0xC2, 0xC2, 0x30,
+        creds.code, SVC_MARKET, 0x0000, 0x67,
+    )
+    from medianav_toolbox.crypto import snakeoil
+    wire_0x28 = header + snakeoil(payload_0x28, creds.code)
+
+    resp = client.post(
+        f"{MARKET_BASE}/1/senddevicestatus",
+        content=wire_0x28,
+        headers=_wire_headers(session),
+    )
+    return resp
+
+
+def _send_device_status_0x68(client, creds, hu_creds, session, usb_path):
+    """Send 0x68 delegated device status after web login + catalog browse.
+
+    The 0x68 uses the delegation HMAC and split encryption.
+    Must be called AFTER the web UI has established a content context.
+    """
+    from medianav_toolbox.protocol import build_0x68_request
 
     bodies_dir = Path(__file__).parent.parent / "analysis" / "using-win32" / "run16_bodies"
-    body_d802 = bodies_dir / "snakeoil_body_255_1679.bin"
-    body_d803 = bodies_dir / "snakeoil_body_327_1646.bin"
+    body_file = bodies_dir / "snakeoil_body_327_1646.bin"
+    if body_file.exists():
+        body = body_file.read_bytes()
+    else:
+        from medianav_toolbox.device_status import build_live_senddevicestatus
+        try:
+            body = build_live_senddevicestatus(usb_path, variant=0x03)
+        except Exception:
+            return type("R", (), {"status_code": 0})()
 
-    use_captured = body_d802.exists() and body_d803.exists()
+    wire = build_0x68_request(
+        counter=0x08,
+        tb_name=creds.name,
+        hu_code=hu_creds.code,
+        tb_code=creds.code,
+        hu_secret=hu_creds.secret,
+        body=body,
+        secret=creds.secret,
+        code=creds.code,
+    )
+    return client.post(
+        f"{MARKET_BASE}/1/senddevicestatus",
+        content=wire,
+        headers=_wire_headers(session),
+    )
 
-    resp = type("R", (), {"status_code": 0})()
-    for i, variant in enumerate([0x02, 0x03]):
-        if use_captured:
-            body = [body_d802, body_d803][i].read_bytes()
-        else:
-            registered_uniq_id = getattr(creds, "_uniq_id", "")
-            try:
-                body = build_live_senddevicestatus(
-                    usb_path, variant=variant, uniq_id_override=registered_uniq_id,
-                )
-            except Exception:
-                return type("R", (), {"status_code": 0})()
-        wire = build_request(
-            query=bytes([0xC5, 0x60]),
-            body=body,
-            service_minor=SVC_MARKET,
-            code=creds.code,
-            secret=creds.secret,
-        )
-        resp = client.post(
-            f"{MARKET_BASE}/1/senddevicestatus",
-            content=wire,
-            headers=_wire_headers(session),
-        )
-        if resp.status_code != 200:
-            break
 
-    return resp
+def _browse_catalog(jsessionid: str) -> str | None:
+    """Browse the catalog/managecontent page to establish content context.
+
+    The Toolbox web UI navigates to /toolbox/device then /toolbox/managecontent
+    before any content download. This may set server-side state that enables
+    the 0x68 delegation flow.
+
+    Returns the JSESSIONID or None on failure.
+    """
+    import httpx
+
+    try:
+        with httpx.Client(
+            follow_redirects=True,
+            timeout=30,
+            cookies={"JSESSIONID": jsessionid},
+        ) as client:
+            # Visit device page (sets working mode)
+            client.get(
+                f"{WEB_BASE}/toolbox/device?workingMode=TOOLBOX",
+                headers={"User-Agent": BROWSER_UA},
+            )
+            # Visit managecontent page (triggers content tree population)
+            resp = client.get(
+                f"{WEB_BASE}/toolbox/managecontent",
+                headers={"User-Agent": BROWSER_UA},
+            )
+            if resp.status_code == 200:
+                for cookie in client.cookies.jar:
+                    if cookie.name == "JSESSIONID":
+                        return cookie.value
+                return jsessionid
+    except (Exception,):
+        pass
+    return None
 
 
 def get_licenses(client, creds, session) -> list:

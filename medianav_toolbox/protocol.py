@@ -101,6 +101,72 @@ def build_request(
     return header + encrypted_query + encrypted_body
 
 
+def build_0x68_request(
+    counter: int,
+    tb_name: bytes,
+    hu_code: int,
+    tb_code: int,
+    hu_secret: int,
+    chain_body: bytes,
+    extra_6: bytes,
+    code: int,
+    service_minor: int = SVC_MARKET,
+    session_id: int | None = None,
+) -> bytes:
+    """Build a complete 0x68 wire request.
+
+    The ENTIRE payload (query + chain_body) is encrypted as ONE continuous
+    SnakeOil stream with tb_code. NOT split into separate segments.
+
+    Wire format (from SSL_write capture run25):
+      [16B header, key=tb_code]
+      [SnakeOil(payload, tb_code)]
+        payload = [counter][0x68][D8+Name₃_XOR(17B)][extra_6(6B)][chain_body]
+
+    The chain_body is the igo-binary serialized body with field-level chain
+    encryption applied. The extra_6 bytes must be consistent with the chain_body
+    (server validates this).
+
+    Args:
+        counter: request sequence counter byte
+        tb_name: 16-byte toolbox credential Name (for 0x28 variant)
+        hu_code: head unit Code (uint64)
+        tb_code: toolbox Code (uint64)
+        hu_secret: head unit Secret (uint64)
+        chain_body: pre-encrypted body (from chain encryption or captured data)
+        extra_6: the 6 extra bytes that match the chain_body
+        code: tb_code for encryption (uint64)
+        service_minor: service version byte
+        session_id: header nonce byte (auto-generated if None)
+
+    Returns:
+        Complete wire bytes ready to send
+    """
+    from medianav_toolbox.igo_serializer import (
+        build_credential_block,
+        build_delegation_name3,
+    )
+
+    sid = session_id if session_id is not None else (os.urandom(1)[0] | 0x01)
+
+    header = struct.pack(
+        ">BBBB Q B HB",
+        0x01, 0xC2, 0xC2, AUTH_DEVICE,
+        code, service_minor, 0x0000, sid,
+    )
+
+    # Build Name₃ credential block for 0x68
+    name3 = build_delegation_name3(hu_code, tb_code)
+    cred_block = build_credential_block(name3[:16])
+
+    # Build payload: query + chain_body, encrypted as ONE stream with tb_code
+    query = bytes([counter, 0x68]) + cred_block + extra_6
+    payload = query + chain_body
+    encrypted_payload = snakeoil(payload, code)
+
+    return header + encrypted_payload
+
+
 def parse_response(data: bytes, seed: int) -> bytes:
     """Parse and decrypt a wire response.
 

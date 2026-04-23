@@ -88,6 +88,7 @@ def register_device_wire(
 def register_hu_device(
     client: NaviExtrasClient,
     endpoints: ServiceEndpoints,
+    tb_creds: "DeviceCredentials | None" = None,
     brand_name: str = "DaciaAutomotive",
     model_name: str = "DaciaAutomotiveDeviceCY20_ULC4dot5",
     swid: str = "CK-A80R-YEC3-MYXL-18LN",
@@ -96,14 +97,23 @@ def register_hu_device(
     appcid: int = 0x42000B53,
     uniq_id: str = "",
 ) -> DeviceCredentials | None:
-    """Register the head unit device separately (RANDOM mode).
+    """Register the head unit device with the server.
 
-    The DLL registers the HU device with its own SWID, producing a third
-    credential set (Name₃/Code₃/Secret₃) used for 0x68 flag requests.
+    Uses DEVICE mode with toolbox credentials (tb_code/tb_secret) when
+    tb_creds is provided. Falls back to RANDOM mode if no credentials.
+
+    The Toolbox calls RegisterDevice twice:
+    1. First call (RANDOM mode) — registers the PC toolbox itself
+    2. Second call (DEVICE mode) — registers the head unit device
+
+    The second call must use DEVICE mode with the toolbox credentials
+    obtained from the first registration. Without this, the server
+    returns 409 and the 0x68 delegation flow won't work.
+
     Returns None if already registered (409).
-
-    Ref: toolbox.md §10 Q7
     """
+    from medianav_toolbox.igo_serializer import build_credential_block
+
     body = build_register_device_body(
         brand_name=brand_name,
         model_name=model_name,
@@ -114,14 +124,27 @@ def register_hu_device(
         appcid=appcid,
         uniq_id=uniq_id,
     )
-    seed = _random_seed()
-    wire = build_request(
-        query=b"",
-        body=body,
-        service_minor=SVC_REGISTER,
-        code=seed,
-        secret=seed,
-    )
+
+    if tb_creds is not None:
+        # DEVICE mode: query has raw tb_name, body encrypted with tb_secret
+        query = bytes([0x40, 0x80]) + tb_creds.name
+        wire = build_request(
+            query=query,
+            body=body,
+            service_minor=SVC_REGISTER,
+            code=tb_creds.code,
+            secret=tb_creds.secret,
+        )
+    else:
+        # RANDOM mode fallback
+        seed = _random_seed()
+        wire = build_request(
+            query=b"",
+            body=body,
+            service_minor=SVC_REGISTER,
+            code=seed,
+            secret=seed,
+        )
     resp = client.post(
         f"{endpoints.register}/device",
         content=wire,
@@ -132,7 +155,8 @@ def register_hu_device(
     if resp.status_code != 200:
         raise RuntimeError(f"HU device registration failed: HTTP {resp.status_code}")
 
-    decrypted = parse_response(resp.content, seed)
+    decrypt_key = tb_creds.secret if tb_creds is not None else seed
+    decrypted = parse_response(resp.content, decrypt_key)
     parsed = parse_register_response(decrypted)
     return DeviceCredentials(
         name=bytes.fromhex(parsed["name"]),
@@ -169,14 +193,21 @@ def get_delegator_credentials(
     igo_version: str = "9.12.179.821558",
     appcid: int = 0x42000B53,
     serial: str = "",
+    vin: str = "UU1DJF00869579646",
+    first_use: int = 0x63AAF600,
 ) -> DeviceCredentials:
     """Get head unit credentials via the delegator endpoint (DEVICE mode).
 
     Uses the toolbox credentials to authenticate, returns a separate set of
     credentials for the head unit device. These are needed for senddevicestatus.
 
+    From XML dump (session 69BACB73, step 8):
+      POST /services/register/rest/1/delegator
+      Body type: RegisterDeviceArg with Vin field (not UniqId)
+
     Ref: toolbox.md §14
     """
+    # Vin is sent as raw ASCII (not hex-encoded)
     body = (
         b"\x1e\x00"
         + encode_string(brand_name)
@@ -184,9 +215,10 @@ def get_delegator_credentials(
         + encode_string(swid)
         + encode_string(imei)
         + encode_string(igo_version)
-        + encode_int64(0)
+        + encode_int64(first_use << 32)  # timestamp in upper 32 bits
         + encode_int32(appcid)
-        + encode_string(serial)
+        + encode_string(vin)
+        + b"\x00\x01\x8b\xb5"  # trailing bytes (device SKU/serial)
     )
     cred_block = build_credential_block(creds.name)
     query = bytes([0xC4, 0x20]) + cred_block

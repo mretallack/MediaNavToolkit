@@ -219,34 +219,45 @@ No `Content-Type` header is sent for the binary protocol. **The server returns H
 9. POST /register/rest/1/get_device_model_list
 ```
 
-### Full Session Lifecycle (from 2026-04-16 capture, 892 flows)
+### Full Session Lifecycle (from XML dump session 69BACB73 — complete download flow)
 
 ```
- 1. POST /index/rest/3/boot             → service URLs (RANDOM mode)
- 2. POST /register/rest/1/device        → Credentials: Name, Code, Secret (RANDOM mode)
- 3. POST /rest/1/login                  → JSESSIONID cookie (DEVICE mode, Code/Secret)
- 4. POST /rest/1/sendfingerprint        → 200 (DEVICE mode, ~46KB body)
- 5. POST /rest/1/getprocess             → empty (no updates pending)
- 6. POST /rest/1/senddevicestatus       → 200 (DEVICE mode, ~1.5KB, lists USB files)
- 7. POST /rest/1/delegator              → second Credentials for head unit device
- 8. POST /rest/1/senddevicestatus       → 200 (repeated with head unit creds)
- 9. POST /rest/1/sendfilecontent        → 200 (sends device_status.ini to server)
-10. POST /rest/1/senddevicestatus       → 200 (with updated file list)
-11. GET  /toolbox/browser-entry         → 302 (links wire JSESSIONID to web session)
-12. GET  /toolbox/device?workingMode=TOOLBOX → 302
-13. GET  /toolbox/startlogin            → 200 (login form)
-14. POST /toolbox/login                 → 302 (web login with email/password)
-15. GET  /toolbox/selector              → 200 (main menu)
-16. POST /rest/1/licenses               → 200 (3 .lyc files with SWIDs)
-17. POST /rest/1/sendfingerprint        → 200 (second fingerprint, ~46KB)
-18. GET  /toolbox/managecontentinitwithhierarchy/install → 200 (content tree HTML)
-19. POST /rest/managecontent/supermarket/v1/updateselection → JSON (content sizes)
+ 0. POST /register/rest/1/licinfo                → license info check (DEVICE mode)
+ 1. POST /rest/1/login                           → JSESSIONID cookie (DEVICE mode)
+ 2. POST /rest/1/sendfingerprint                 → 200 (DEVICE mode, ~46KB)
+ 3. POST /register/rest/1/get_device_descriptor_list → device descriptors (DEVICE mode)
+ 4. POST /register/rest/1/hasActivatableService   → service check (DEVICE mode)
+ 5. POST /rest/1/getprocess                       → pending tasks (DEVICE mode)
+ 6. POST /register/rest/1/get_device_model_list   → 103KB model list (RANDOM mode!)
+ 7. POST /rest/1/senddevicestatus                 → State=RECOGNIZED (DEVICE, 0x60 flags)
+ 8. POST /register/rest/1/delegator               → HU credentials (DEVICE mode, RegisterDeviceArg body)
+ 9. POST /rest/1/senddevicestatus                 → State=REGISTERED (DEVICE, 0x68 flags + Delegation envelope)
+10. POST /register/rest/1/licinfo                 → license info (DEVICE mode)
+11. POST /register/rest/1/license                 → UploadLicenses (DEVICE mode) ← NEW
+12. POST /register/rest/1/licenses                → download .lyc files (DEVICE mode)
+13. POST /rest/1/senddevicestatus                 → final status update (DEVICE mode)
+14. POST /rest/1/sendfingerprint                  → second fingerprint (DEVICE mode)
+15. POST /rest/1/sendfilecontent                  → device_status.ini upload (DEVICE mode)
+16+. POST /rest/1/getprocess + sendprocessstatus  → download progress (100+ calls)
 ```
+
+**Key observations from XML dumps:**
+- Step 6 (GetDeviceModelList) uses **RANDOM mode** — the only non-DEVICE call after login
+- Step 7 (first SendDeviceStatus) has `<RequestEnvelopeRO/>` (empty — no delegation)
+- Step 9 (second SendDeviceStatus) has `<RequestEnvelopeRO><Delegation>...</Delegation></RequestEnvelopeRO>` with:
+  - `Type: TEMPORARY`
+  - `Delegator: hu_code` (from step 8 response)
+  - `Agent: tb_code`
+  - `Timestamp`
+  - `Mac: HMAC_MD5 digest` (Base64)
+- Step 7 body has `State=RECOGNIZED`, step 9 has `State=REGISTERED`
+- Step 11 (UploadLicenses) is a call we don't implement — uploads license data to server
+- Both step 7 and 9 use `Key: tb_code` in the SnakeOil envelope (same encryption key)
 
 **Three credential sets are in play:**
-1. **Toolbox credentials** — from `/register/rest/1/device`, used for login/fingerprint/getprocess
-2. **Head unit credentials** — from `/rest/1/delegator`, used for senddevicestatus body credential block
-3. **Unknown third set** — decoded from senddevicestatus body, origin unclear
+1. **Toolbox credentials** — from `/register/rest/1/device` (RANDOM mode), used for all DEVICE mode calls
+2. **Head unit credentials** — from `/register/rest/1/delegator` (DEVICE mode), used in Delegation envelope
+3. **Delegation Name₃** — `C4 + hu_code(8B) + tb_code(8B)`, used in 0x68 query credential block
 
 ### Selfie Update (plaintext JSON)
 
@@ -598,18 +609,46 @@ primary/NaviSync
 
 ### Query Flags
 
-- `0x60` — body encrypted with Secret (standard). Only flow 735 uses this.
-- `0x68` — body encrypted with unknown key (possibly delegator Secret). Flows 737/741/754/792 use this. The `0x08` bit may indicate delegator credentials for body encryption.
+- `0x20` — standard DEVICE mode query: `[counter][0x20][17B credential_block]` (19 bytes)
+- `0x28` — DEVICE mode with extra bytes: `[counter][0x28][17B credential_block][6B extra]` (25 bytes)
+- `0x60` — short DEVICE mode query: `[counter][0x60]` (2 bytes). Empty RequestEnvelopeRO.
+- `0x68` — delegation query: `[counter][0x68][17B credential_block][6B extra]` (25 bytes). RequestEnvelopeRO contains Delegation block with HMAC.
+
+The `0x68` wire format (from XML dump):
+```
+[16B header, key=tb_code]
+[25B query, SnakeOil(tb_code)]: [counter][0x68][D8 + Name₃[:16] XOR IGO_KEY][6B extra]
+[17B prefix, SnakeOil(tb_secret)]: [0x86][16B HMAC-MD5 output]
+[body, SnakeOil(tb_secret)]: senddevicestatus body with State=REGISTERED
+```
+
+The Delegation envelope (from XML dump step 9):
+```xml
+<Delegation>
+  <Type>TEMPORARY</Type>
+  <Delegator>{hu_code}</Delegator>
+  <Agent>{tb_code}</Agent>
+  <Timestamp>{ISO timestamp}</Timestamp>
+</Delegation>
+<Mac>
+  <Type>HMAC_MD5</Type>
+  <Digest>{Base64 HMAC}</Digest>
+</Mac>
+```
+
+HMAC formula (verified byte-for-byte against 2 captured values):
+```
+key  = hu_secret (8 bytes big-endian)
+data = 0xC4 + hu_code(8B BE) + tb_code(8B BE) + timestamp(4B BE)
+```
 
 ### Status
 
-- Body format decoded: device info matches captured byte-for-byte ✓
-- Encoder built: `build_senddevicestatus_body()` in `wire_codec.py` ✓
-- **Captured body replay returns 200** — server accepts the full captured body
-- **Generated body returns 409** — file entries differ from expected (R.10)
-- **Two calls required**: flow 735 (flags=0x60) + flow 737 (flags=0x68) needed for web content
-- The `0xD8` header byte is a **presence bitmask**, NOT a credential block marker
-- Workaround: replay captured wire bytes for both calls
+- HMAC formula: ✅ verified against Win32 debugger captures (run17)
+- Wire format: ✅ matches captured traffic byte-for-byte
+- Body content: ✅ accepted by server via 0x60 flags
+- 0x68 flag: ❌ server rejects from Python session (409) — works from Windows Toolbox
+- Root cause: unknown server-side session state difference
 
 ### Presence Bitmask Headers
 

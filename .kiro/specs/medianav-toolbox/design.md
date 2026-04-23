@@ -125,85 +125,93 @@ Header: `01 C2 C2 {auth_mode} 00 {code:8B} {service_minor} 00 00 {nonce} 3F`
 
 ### Query Flags
 
-| Flag | Meaning |
-|------|---------|
-| 0x20 | Has credential block (17 bytes) |
-| 0x40 | Has body |
-| 0x08 | Delegated device (uses Name₃ in credential block) |
+| Flag | Query Size | Meaning |
+|------|-----------|---------|
+| 0x20 | 19B | Standard DEVICE mode: `[counter][0x20][17B cred_block]` |
+| 0x28 | 25B | Delegation mode: `[counter][0x28][17B cred_block][6B extra]` — cred block uses **tb_name** |
+| 0x60 | 2B | Short query: `[counter][0x60]` — no credential block |
+| 0x68 | 2B | Short delegation: `[counter][0x68]` — delegation data in body, not query |
 
-- `0x60` = `0x20 | 0x40` — standard authenticated request
-- `0x68` = `0x20 | 0x40 | 0x08` — delegated device request
-- **Both use tb_secret for body encryption** (no key difference)
+**Bit meanings (from SSL wire capture run25):**
+- `0x20` = DEVICE mode base
+- `0x08` = has delegation/chain encryption in body
+- `0x40` = short query (2 bytes, no credential block in query)
+
+**Wire format (confirmed from SSL_write captures):**
+- `0x60`: `[16B header][2B query enc(tb_code)][body enc(tb_secret)]` — simple body encryption
+- `0x68`: `[16B header][2B query enc(tb_code)][body chain-encrypted]` — body uses field-level chain encryption
+- `0x20`: `[16B header][19B query enc(tb_code)][body enc(tb_secret)]` — standard with cred block
+- `0x28`: `[16B header][25B query enc(tb_code)][body chain-encrypted]` — delegation with cred block + chain body
+
+**Critical finding (run25 SSL capture):**
+The Toolbox sends `flags=0x68` (2B query) for the FIRST senddevicestatus and `flags=0x28` (25B query with tb_name) for the SECOND (delegation) senddevicestatus. The 0x28 credential block contains **tb_name** (NOT Name₃). The 0x08 bit indicates the body uses chain encryption (rotating SnakeOil keys per field), not simple tb_secret encryption.
 
 ### Name₃ Construction — FULLY CRACKED
 
-**Name₃ = `0xC4 || hu_code(8 bytes BE) || tb_code(7 bytes BE)`**
+**Name₃ = `0xC4 || hu_code(8 bytes BE) || tb_code(8 bytes BE)`** (17 bytes)
 
-This is a direct concatenation (16 bytes total), NOT an HMAC:
-- `0xC4` = type tag (constant)
-- `hu_code` = 8 bytes, big-endian (from delegator response)
-- `tb_code` = first 7 bytes, big-endian (from registration response)
+For the credential block (16 bytes): Name₃[:16] = `0xC4 || hu_code(8B) || tb_code(7B)`
 
-The credential block in the query is: `0xD8 || (Name₃ XOR IGO_CREDENTIAL_KEY)`
+The credential block in the 0x28 query uses **tb_name** (NOT Name₃).
+Name₃ is used in the HMAC computation and the internal 41-byte delegation format.
 
-Verified against all captured 0x68 flows (737, 754, 792). ✓
+### Delegation HMAC — FULLY CRACKED
 
-### Delegation Prefix (0x68 body prefix)
-
-The 0x68 wire format splits the body into a prefix and content, each encrypted with
-a fresh SnakeOil PRNG seeded with `tb_secret`:
 ```
-[16B header][25B query, SnakeOil(tb_code)][17B prefix, SnakeOil(tb_secret)][body, SnakeOil(tb_secret)]
+key  = hu_secret (8 bytes big-endian)
+data = 0xC4 + hu_code(8B BE) + tb_code(8B BE) + timestamp(4B BE) = 21 bytes
+hmac = HMAC-MD5(key, data) = 16 bytes
 ```
 
-The 17-byte prefix: `0x86 || prefix_data(16 bytes)`
+Verified byte-for-byte against 2 captured values from Win32 debugger (run17). ✅
 
-**Status: NOT fully reversed.** The 17-byte wire prefix is a compressed encoding of the
-41-byte internal delegation prefix. The transformation happens inside `FUN_1005d860`
-(RVA 0x05D860). The SnakeOil debugger hook never sees a `len=17` call with `tb_secret` —
-the encryption of the 17-byte segment happens internally within FUN_1005d860.
+### Chain Encryption (0x08 bit)
 
-**41-byte internal prefix (fully understood):**
-```
-[0880][C4][hu_code 8B BE][tb_code 8B BE][timestamp 4B BE][3010][HMAC-MD5 16B]
-```
-Where HMAC = HMAC-MD5(hu_secret_BE, [C4][hu_code][tb_code][timestamp]).
-Verified with 7 live HMAC captures from Win32 debugger (run16/16b).
+When the 0x08 bit is set in the flags, the body uses **field-level chain encryption**:
+- Each field is encrypted with a different SnakeOil key
+- Keys rotate: each field's key is derived from the previous field's encryption
+- The first key in the chain is tb_secret
+- The SnakeOil debugger captures show 100+ individual SnakeOil calls per body
 
-**The 41B→17B transformation is the remaining unsolved piece.** The 17-byte encoding
-is NOT a truncation of the 41-byte format (first 17 bytes differ completely).
-It appears to be an igo-binary bitstream encoding of the credential sub-fields.
+The chain-encrypted body starts with `FF B7 43 92...` when decrypted with tb_secret
+(this is the first field's ciphertext, not the plaintext).
 
-**Practical impact:** The `licenses` endpoint requires 0x68 flags. The `licinfo` endpoint
-accepts 0x28 flags (which includes the full 41-byte prefix inline in the query).
-Free content can be browsed and downloaded via the web UI without 0x68.
-
+**Status: Chain encryption NOT yet implemented.** The captured plaintext bodies from
+the SnakeOil debugger (BEFORE data) are fully decrypted. To send them on the wire,
+they need to go through the chain encryption process, which we haven't reversed.
 ---
 
 ## 5. API Flow
 
-### Complete Session (12 steps)
+### Complete Session (from SSL wire capture run25 + XML dump session 69BACB73)
 
 ```
-1. boot (RANDOM)              → service URL map
-2. register (RANDOM)          → tb credentials (Name₁/Code₁/Secret₁) — cached permanently
-3. login (DEVICE)             → session token
-4. hasActivatableService      → boolean (service_minor=14)
-5. senddevicestatus (0x60)    → device state accepted (generated from USB)
-6. sendfingerprint            → accepted
-7. licinfo (36B, DEVICE)      → license status (service_minor=14)
-8. licinfo (76B, 0x28 flags)  → extended license info (replayed — 0x28 extra bytes are static)
-9. licenses (94B, 0x68 flags) → available content packs with embedded .lyc data
-10. senddevicestatus (0x60)   → second status update
-11. sendfingerprint           → second fingerprint
-12. web_login (form POST)     → browser session cookie (optional, for web UI)
+ 0. licinfo (36B, 0x20)           → license check (register endpoint, svc_minor=14)
+ 1. login (105B, 0x20)            → JSESSIONID (market endpoint, svc_minor=25)
+ 2. sendfingerprint (0x20)        → 200 (market, ~53KB)
+ 3. get_device_descriptor_list    → device descriptors (register, svc_minor=14)
+ 4. hasActivatableService         → boolean (register, svc_minor=14)
+ 5. getprocess (18B, 0x60)        → pending tasks (market, 2B query)
+ 6. get_device_model_list         → 103KB model list (register, RANDOM mode)
+ 7. senddevicestatus (0x68, 2B q) → State=RECOGNIZED, chain-encrypted body (market)
+ 8. delegator (0x20)              → hu_name/hu_code/hu_secret (register, svc_minor=14)
+ 9. senddevicestatus (0x28, 25B q)→ State=REGISTERED, chain-encrypted body, tb_name cred (market)
+10. licinfo (76B, 0x28)           → extended license info (register, tb_name cred)
+11. UploadLicenses (0x60)         → upload license data (register)
+12. licenses (351B, 0x60)         → .lyc files with SWIDs (register)
+13. senddevicestatus              → final status (market)
+14. sendfingerprint               → second fingerprint (market)
+15. sendfilecontent               → device_status.ini upload (market)
+16+. getprocess + sendprocessstatus → download progress
 ```
 
-**Content is obtained from step 9 (`licenses`).** The response contains available
-.lyc files with embedded license data. Response format:
-`[0x40][2B count BE]` then entries `[0xC0][4B ts][4B expiry][1B swid_len][swid][1B fname_len][fname][4B lyc_size][lyc_data]`
+**Wire format confirmed from SSL_write captures (run25):**
+- Step 7: flags=0x68, 2B query, Content-Length=2218, body chain-encrypted
+- Step 9: flags=0x28, 25B query with tb_name cred block, Content-Length=2235, body chain-encrypted
+- Step 10: flags=0x28, 25B query with tb_name cred block, Content-Length=76
+- Step 12: flags=0x60, 2B query, Content-Length=351
 
-**The `licenses` request (step 9) requires 0x68 flags** with a 17-byte delegation prefix
+**Key: the 0x08 bit means chain encryption, NOT a separate 17B prefix segment.**
 in the body. This prefix is a compressed encoding of the 41-byte internal format that
 we cannot generate from scratch (see §4 Delegation Prefix).
 
@@ -332,12 +340,27 @@ The USB output must be byte-compatible with the original Toolbox:
 ## 9. Remaining Work
 
 ### Must Fix
-- **R.11 Delegation prefix (0x68)** — without 0x68, managecontent returns `norightsfordevice` and catalog is empty. The delegation prefix HMAC format is partially reversed but the exact binary serialization has not been matched. See R.11 in tasks.md for investigation plan.
+- **Chain encryption (0x08 bit)** — the body encryption for 0x68/0x28 flags uses field-level chain encryption with rotating SnakeOil keys, NOT simple tb_secret encryption. Without this, senddevicestatus with delegation returns 409. The chain encryption is visible in the SnakeOil debugger captures (100+ calls per body with rotating keys). Need to reverse the key derivation chain.
+- **Wire format flags** — our code sends 0x68 with 25B query, but the Toolbox sends 0x68 with 2B query and 0x28 with 25B query. The flag meanings are:
+  - 0x40 bit = short query (2B)
+  - 0x08 bit = chain-encrypted body
+  - 0x28 = 25B query + chain body (for delegation senddevicestatus)
+  - 0x68 = 2B query + chain body (for initial senddevicestatus)
 
 ### Must Implement
-- **4.3 `sync` command** — select content → confirm → download → write to USB (blocked on R.11)
+- **Chain encryption encoder** — encode plaintext bodies using the field-level chain encryption that the SnakeOil debugger shows
+- **0x28 query format** — 25B query with tb_name (not Name₃) in credential block + 6B extra
+- **Missing API calls** — get_device_descriptor_list, hasActivatableService, get_device_model_list, UploadLicenses
+- **`sync` command** — select content → confirm → download → write to USB
+
+### Solved
+- **HMAC-MD5 formula** ✅ — verified byte-for-byte against captured data
+- **Name₃ construction** ✅ — `C4 + hu_code(8B) + tb_code(8B)` = 17 bytes
+- **Wire format structure** ✅ — confirmed from SSL_write captures (run25)
+- **Catalog browsing** ✅ — 38 items via web API
+- **License fetching** ✅ — 10 entries, installable to USB
+- **Free content purchase** ✅ — via web API
 
 ### Nice to Have
 - **R.4 IMEI encoding** — understand the `x51x4Dx30x30x30x30x31` format
 - **R.7 XOR key universality** — test IGO_CREDENTIAL_KEY with a second device
-- **.lyc file generation** — we can decrypt .lyc files (RSA public key known) but generating new ones requires the private key (server-side only)
