@@ -212,7 +212,28 @@ Followed by build info in XML-like format:
 ```
 
 The actual map geometry data follows after the metadata. The coordinate encoding
-and road network structure are not yet parsed — this is the next investigation step.
+is **signed int32 with scale 2^23 (8,388,608) units per degree, WGS84 lat/lon**.
+
+### Coordinate Encoding (Confirmed)
+
+```
+longitude = int32_value / 8388608.0   (degrees, WGS84)
+latitude  = int32_value / 8388608.0   (degrees, WGS84)
+```
+
+Verified against all three test countries:
+- Vatican: lon=[12.4466, 12.4577] lat=[41.9004, 41.9073] ✅
+- Andorra: lon=[1.4079, 1.7379] lat=[42.4323, 42.6346] ✅
+- Monaco:  lon=[7.4094, 7.6310] lat=[43.5362, 43.7518] ✅
+
+### Country Block (offset 0x0476)
+
+```
+[3B country code][1B type][4B flags]
+[4B min_lon][4B max_lat][4B max_lon][4B min_lat]  ← bounding box (int32 / 2^23)
+```
+
+Country codes: `VAT`, `AND`, `MON`. Type byte varies (`@`=0x40, `H`=0x48).
 
 ## Shadow Metadata (.stm)
 
