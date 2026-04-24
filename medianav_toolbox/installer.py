@@ -106,7 +106,7 @@ def install_content(usb_path: Path, items: list[InstallItem]) -> list[str]:
 
 
 def install_license(usb_path: Path, lyc_name: str, lyc_data: bytes) -> None:
-    """Install a license file and its MD5 checksum."""
+    """Install a license file, its MD5 checksum, and its STM shadow."""
     license_dir = usb_path / "NaviSync" / "license"
     license_dir.mkdir(parents=True, exist_ok=True)
 
@@ -115,6 +115,9 @@ def install_license(usb_path: Path, lyc_name: str, lyc_data: bytes) -> None:
 
     md5 = hashlib.md5(lyc_data).hexdigest().upper()
     (license_dir / f"{lyc_name}.md5").write_text(md5)
+
+    # Write .lyc.stm shadow — tells synctool to copy this license
+    (license_dir / f"{lyc_name}.stm").write_text('purpose="copy"\n')
 
 
 def write_update_checksum(usb_path: Path) -> Path:
@@ -130,6 +133,46 @@ def write_update_checksum(usb_path: Path) -> Path:
     checksum_path = usb_path / "update_checksum.md5"
     checksum_path.write_text(h.hexdigest().upper())
     return checksum_path
+
+
+def write_device_checksum(usb_path: Path) -> None:
+    """Update NaviSync/device_checksum.md5 from all .stm files in content/."""
+    content_dir = usb_path / "NaviSync" / "content"
+    h = hashlib.md5()
+    for stm in sorted(content_dir.rglob("*.stm")):
+        h.update(stm.read_bytes())
+    checksum_path = usb_path / "NaviSync" / "device_checksum.md5"
+    try:
+        checksum_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    checksum_path.write_text(h.hexdigest().upper())
+
+
+def write_content_stms(usb_path: Path) -> list[str]:
+    """Write directory-level .stm files for content subdirectories.
+
+    The Win32 Toolbox writes map.stm, poi.stm, speedcam.stm in the
+    content/ directory with purpose="delete" to tell synctool to
+    replace the content on the head unit.
+
+    Returns list of written STM paths.
+    """
+    content_dir = usb_path / "NaviSync" / "content"
+    written = []
+    for subdir in ["map", "poi", "speedcam"]:
+        sub_path = content_dir / subdir
+        if not sub_path.exists():
+            continue
+        file_stms = list(sub_path.glob("*.stm"))
+        if not file_stms:
+            continue
+        stm_path = content_dir / f"{subdir}.stm"
+        if stm_path.exists():
+            continue
+        stm_path.write_text('purpose="delete"\n')
+        written.append(str(stm_path))
+    return written
 
 
 def check_space(usb_path: Path, required_bytes: int) -> tuple[bool, int]:

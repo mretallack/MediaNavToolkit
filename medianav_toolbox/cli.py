@@ -194,71 +194,39 @@ def catalog(ctx):
         console.print("[dim]Check NAVIEXTRAS_USER and NAVIEXTRAS_PASS[/dim]")
         sys.exit(1)
 
-    console.print("Fetching content tree...")
+    console.print("Fetching catalog...")
     with NaviExtrasClient(Config()) as client:
-        nodes = get_content_tree(client._client, jsid)
-        if not nodes:
-            # Content tree requires senddevicestatus (not yet implemented).
-            # Fall back to the catalog list page which shows all available content.
-            from medianav_toolbox.catalog import parse_catalog_html
+        from medianav_toolbox.catalog import parse_catalog_html
 
-            resp = client.get(
-                f"https://dacia-ulc.naviextras.com/toolbox/cataloglist",
-                headers={"User-Agent": BROWSER_UA, "Cookie": f"JSESSIONID={jsid}"},
-            )
-            if resp.status_code == 200:
-                items = parse_catalog_html(resp.text)
-                if items:
-                    table = Table(title="Available Content (Catalog)")
-                    table.add_column("Content", style="cyan", max_width=50)
-                    table.add_column("Release", justify="right")
-                    table.add_column("Provider", style="dim")
-                    table.add_column("ID", style="dim", justify="right")
+        resp = client.get(
+            f"https://dacia-ulc.naviextras.com/toolbox/cataloglist",
+            headers={"User-Agent": BROWSER_UA, "Cookie": f"JSESSIONID={jsid}"},
+        )
+        if resp.status_code != 200:
+            console.print("[red]Failed to fetch catalog[/red]")
+            sys.exit(1)
 
-                    for item in sorted(items, key=lambda i: i.name):
-                        table.add_row(
-                            item.name, item.release, item.provider, str(item.package_code)
-                        )
-
-                    console.print(table)
-                    console.print(f"\nTotal: {len(items)} items")
-                    console.print(
-                        "[dim]Note: sizes unavailable — senddevicestatus not yet implemented[/dim]"
-                    )
-                    return
-
-            console.print("[yellow]No content available from server[/yellow]")
-            console.print(
-                "[dim]The server requires senddevicestatus to show content (task 4.2)[/dim]"
-            )
+        items = parse_catalog_html(resp.text)
+        if not items:
+            console.print("[yellow]No content available[/yellow]")
             return
 
-        console.print("Getting sizes...")
-        all_ids = [n.content_id for n in nodes]
-        sizes, indicator = select_content(client._client, jsid, all_ids)
-        # Deselect to clean up
-        select_content(client._client, jsid, [])
+        # Check which items are already installable (purchased)
+        nodes = get_content_tree(client._client, jsid)
+        purchased_ids = {n.content_id.split("#")[0] for n in nodes}
 
-    size_map = {s.content_id: s.size for s in sizes}
+        table = Table(title=f"Available Content ({len(items)} items)")
+        table.add_column("Content", style="cyan", max_width=50)
+        table.add_column("Release", justify="right")
+        table.add_column("ID", style="dim", justify="right")
+        table.add_column("Status")
 
-    table = Table(title="Available Content Updates")
-    table.add_column("Content", style="cyan", max_width=45)
-    table.add_column("Release", justify="right")
-    table.add_column("Size", justify="right")
-    table.add_column("ID", style="dim")
+        for item in sorted(items, key=lambda i: i.name):
+            status = "[green]✓ purchased[/green]" if str(item.package_code) in purchased_ids else ""
+            table.add_row(item.name, item.release, str(item.package_code), status)
 
-    total = 0
-    for node in sorted(nodes, key=lambda n: n.name):
-        size = size_map.get(node.content_id, 0)
-        total += size
-        size_str = f"{size / 1024 / 1024:.1f} MB" if size else "—"
-        table.add_row(node.name or "(unnamed)", node.release, size_str, node.content_id)
-
-    console.print(table)
-    console.print(f"\nTotal: {len(nodes)} items, {total / 1024 / 1024 / 1024:.2f} GB")
-    if indicator:
-        free = indicator.get("fullSize", 0)
-        console.print(f"Available space: {free / 1024 / 1024 / 1024:.2f} GB")
+        console.print(table)
+        console.print(f"\nUse [bold]medianav-toolbox buy <ID>[/bold] to purchase an item.")
 
 
 @cli.command()
@@ -409,17 +377,52 @@ def sync(ctx, country, dry_run):
 
         # Confirm
         console.print("\nConfirming selection with server...")
-        confirm_selection(hc, jsid)
+        try:
+            confirm_selection(hc, jsid)
+        except (Exception,) as e:
+            console.print(f"[red]✗ Confirmation failed: {e}[/red]")
+            console.print("[dim]Deselecting content to clean up...[/dim]")
+            try:
+                select_content(hc, jsid, [])
+            except Exception:
+                pass
+            sys.exit(1)
         console.print("[green]✓ Selection confirmed[/green]")
-        console.print(
-            "\n[dim]The server has queued the update. Download URLs are provided"
-            "\nvia the wire protocol getprocess endpoint, which the native engine"
-            "\n(nngine.dll) normally handles. Direct download from this CLI requires"
-            "\ncapturing a post-confirmation getprocess response to understand the"
-            "\ndownload task format."
-            "\n\nTo complete the update now, run the Windows Toolbox to download,"
-            "\nor capture a post-confirmation mitmproxy trace to enable direct download.[/dim]"
+
+        # Install licenses from the session
+        from medianav_toolbox.installer import (
+            install_license,
+            write_content_stms,
+            write_device_checksum,
         )
+
+        lics = result.get("licenses", [])
+        if lics:
+            installed = 0
+            for lic in lics:
+                existing = usb / "NaviSync" / "license" / lic.lyc_file
+                if existing.exists() and existing.stat().st_size == len(lic.lyc_data):
+                    continue
+                try:
+                    install_license(usb, lic.lyc_file, lic.lyc_data)
+                    console.print(f"  [green]✓[/green] {lic.lyc_file}")
+                    installed += 1
+                except OSError as e:
+                    console.print(f"  [red]✗ {lic.lyc_file}: {e}[/red]")
+            if installed:
+                console.print(f"[green]Installed {installed} license(s)[/green]")
+
+        # Write directory-level STMs
+        stms = write_content_stms(usb)
+        if stms:
+            for s in stms:
+                console.print(f"  [green]✓[/green] {Path(s).name}")
+
+        # Update device_checksum.md5
+        write_device_checksum(usb)
+        console.print("  [green]✓[/green] device_checksum.md5 updated")
+
+        console.print("\n[green]✓ Sync complete — insert USB into head unit to apply[/green]")
 
 
 @cli.command()
@@ -504,3 +507,272 @@ def licenses(ctx, install):
             console.print(f"[red]✗ {lic.lyc_file}: {e}[/red]")
 
     console.print(f"\n[green]Installed {installed}/{len(lics)} licenses[/green]")
+
+
+@cli.command()
+@click.argument("package_code", type=int)
+@click.pass_context
+def buy(ctx, package_code):
+    """Purchase a catalog item (free or paid) and install its license.
+
+    Browse available items with 'catalog', then buy by package code:
+
+        medianav-toolbox buy 61811
+    """
+    import re
+
+    import httpx
+
+    from medianav_toolbox.session import BROWSER_UA, run_session
+
+    usb = ctx.obj["usb_path"]
+    username = os.environ.get("NAVIEXTRAS_USER", "")
+    password = os.environ.get("NAVIEXTRAS_PASS", "")
+
+    if not username or not password:
+        console.print("[red]Set NAVIEXTRAS_USER and NAVIEXTRAS_PASS environment variables[/red]")
+        sys.exit(1)
+
+    console.print("Connecting...")
+    result = run_session(usb, username, password)
+    if result["errors"]:
+        for e in result["errors"]:
+            console.print(f"[red]✗ {e}[/red]")
+        sys.exit(1)
+
+    jsid = result.get("web_jsessionid")
+    if not jsid:
+        console.print("[red]Web login failed[/red]")
+        sys.exit(1)
+
+    with httpx.Client(timeout=30, follow_redirects=True) as hc:
+        h = {"User-Agent": BROWSER_UA, "Cookie": f"JSESSIONID={jsid}"}
+
+        # 1. View catalog item
+        console.print(f"Loading package {package_code}...")
+        resp = hc.get(
+            f"https://dacia-ulc.naviextras.com/toolbox/catalogitem?packageCode={package_code}",
+            headers=h,
+        )
+        if resp.status_code != 200:
+            console.print(f"[red]Package {package_code} not found[/red]")
+            sys.exit(1)
+
+        # Extract sales options
+        form = re.search(r"<form[^>]*catalogbuyableitem[^>]*>(.*?)</form>", resp.text, re.DOTALL)
+        if not form:
+            console.print("[red]No purchase options available for this package[/red]")
+            sys.exit(1)
+
+        radios = re.findall(r'<input[^>]*name="salesPackageCode"[^>]*value="(\d+)"', form.group(1))
+        prices = re.findall(r'<span class="price">([^<]+)</span>', form.group(1))
+
+        if not radios:
+            console.print("[red]No sales packages found[/red]")
+            sys.exit(1)
+
+        sales_code = radios[0]
+        price = prices[0] if prices else "unknown"
+        console.print(f"  Package: {package_code}, price: {price}")
+
+        # 2. Submit purchase form
+        resp = hc.post(
+            "https://dacia-ulc.naviextras.com/toolbox/catalogbuyableitem",
+            data=f"salesPackageCode={sales_code}",
+            headers={**h, "Content-Type": "application/x-www-form-urlencoded"},
+        )
+
+        # 3. Check what the next step is
+        btn = re.search(r'id="btn-next"[^>]*onClick="([^"]+)"', resp.text)
+        if not btn:
+            console.print("[red]Purchase flow failed — no next action[/red]")
+            sys.exit(1)
+
+        action = btn.group(1)
+        free_match = re.search(r"getfreecontent/(\d+)", action)
+        cart_match = re.search(r"addtocartonlyoneitem/(\d+)", action)
+
+        if free_match:
+            # Free item — complete purchase
+            console.print("  Completing free purchase...")
+            resp = hc.get(
+                f"https://dacia-ulc.naviextras.com/toolbox/getfreecontent/{free_match.group(1)}",
+                headers=h,
+            )
+            if resp.status_code == 200:
+                console.print("[green]✓ Purchased![/green]")
+            else:
+                console.print(f"[red]Purchase failed: {resp.status_code}[/red]")
+                sys.exit(1)
+        elif cart_match:
+            console.print(f"  This is a paid item ({price}).")
+            console.print(
+                "  Adding to cart — complete payment at [link]https://dacia-ulc.naviextras.com[/link]"
+            )
+            hc.get(
+                f"https://dacia-ulc.naviextras.com/toolbox/addtocartonlyoneitem/{cart_match.group(1)}",
+                headers=h,
+            )
+            console.print(
+                "[yellow]Item added to cart. Pay via the NaviExtras website to complete.[/yellow]"
+            )
+            return
+        else:
+            console.print(f"[red]Unknown purchase action: {action[:80]}[/red]")
+            sys.exit(1)
+
+    # 4. Fetch and install the license
+    console.print("Fetching license...")
+    result2 = run_session(usb, username, password)
+    lics = result2.get("licenses", [])
+    if not lics:
+        console.print("[yellow]No licenses available yet — try 'licenses' later[/yellow]")
+        return
+
+    from medianav_toolbox.installer import install_license
+
+    installed = 0
+    for lic in lics:
+        existing = usb / "NaviSync" / "license" / lic.lyc_file
+        if existing.exists() and existing.stat().st_size == len(lic.lyc_data):
+            continue
+        try:
+            install_license(usb, lic.lyc_file, lic.lyc_data)
+            console.print(f"[green]✓[/green] Installed {lic.lyc_file} ({len(lic.lyc_data):,} B)")
+            installed += 1
+        except OSError as e:
+            console.print(f"[red]✗ Cannot write to USB: {e}[/red]")
+            console.print("[dim]USB may be read-only. Mount with write access to install.[/dim]")
+            break
+
+    if installed:
+        console.print(f"\n[green]Installed {installed} new license(s)[/green]")
+    else:
+        console.print("All licenses already installed.")
+
+
+@cli.command(name="dump-getprocess")
+@click.option("--output", "-o", default="getprocess_dump", help="Output filename prefix")
+@click.pass_context
+def dump_getprocess(ctx, output):
+    """Call getprocess after login and dump the raw + decrypted response.
+
+    Calls getprocess twice: once empty (during login) and once with license
+    SWIDs (after fetching licenses). The second call should return download tasks.
+    """
+    from medianav_toolbox.protocol import parse_response
+    from medianav_toolbox.session import run_session
+
+    usb = ctx.obj["usb_path"]
+    username = os.environ.get("NAVIEXTRAS_USER", "")
+    password = os.environ.get("NAVIEXTRAS_PASS", "")
+
+    if not username or not password:
+        console.print("[red]Set NAVIEXTRAS_USER and NAVIEXTRAS_PASS environment variables[/red]")
+        sys.exit(1)
+
+    console.print("Connecting...")
+    result = run_session(usb, username, password)
+    if result["errors"]:
+        for e in result["errors"]:
+            console.print(f"[red]✗ {e}[/red]")
+        sys.exit(1)
+
+    creds = result.get("device_creds")
+
+    def _dump_response(label, raw, prefix):
+        console.print(f"\n[bold]{label}[/bold]")
+        if not raw or len(raw) < 5:
+            console.print(f"  Empty/minimal response ({len(raw)} bytes)")
+            return
+        Path(f"{prefix}_raw.bin").write_bytes(raw)
+        console.print(f"  Raw: {prefix}_raw.bin ({len(raw)} bytes)")
+        if not creds:
+            return
+        try:
+            dec = parse_response(raw, creds.secret)
+            Path(f"{prefix}_dec.bin").write_bytes(dec)
+            console.print(f"  Decrypted: {prefix}_dec.bin ({len(dec)} bytes)")
+            for i in range(0, min(512, len(dec)), 16):
+                chunk = dec[i : i + 16]
+                h = " ".join(f"{b:02x}" for b in chunk)
+                a = "".join(chr(b) if 32 <= b < 127 else "." for b in chunk)
+                console.print(f"    {i:04x}: {h:<48s} {a}")
+            if len(dec) > 512:
+                console.print(f"    ... ({len(dec) - 512} more bytes)")
+            import re
+
+            strings = re.findall(rb"[\x20-\x7e]{8,}", dec)
+            if strings:
+                console.print(f"  [bold]Strings:[/bold]")
+                for s in strings[:30]:
+                    console.print(f"    {s.decode('ascii', errors='replace')}")
+        except Exception as e:
+            console.print(f"  [yellow]Decrypt failed: {e}[/yellow]")
+
+    _dump_response("getprocess #1 (empty body)", result.get("getprocess_body", b""), f"{output}_1")
+
+    swids = result.get("getprocess2_swids", [])
+    if swids:
+        console.print(f"\n  SWIDs sent: {len(swids)}")
+        for s in swids[:5]:
+            console.print(f"    {s}")
+        if len(swids) > 5:
+            console.print(f"    ... and {len(swids) - 5} more")
+    _dump_response("getprocess #2 (with SWIDs)", result.get("getprocess2_body", b""), f"{output}_2")
+
+    console.print(f"\n[green]✓ Done[/green]")
+
+
+@cli.command(name="dump-mds")
+@click.pass_context
+def dump_mds(ctx):
+    """Call the /mds/ (Map Download Service) endpoint and dump the response.
+
+    This is the REST endpoint that returns download task info after content
+    selection/purchase. Must be called with an authenticated web session.
+    """
+    import httpx
+
+    from medianav_toolbox.session import BROWSER_UA, run_session
+
+    usb = ctx.obj["usb_path"]
+    username = os.environ.get("NAVIEXTRAS_USER", "")
+    password = os.environ.get("NAVIEXTRAS_PASS", "")
+
+    if not username or not password:
+        console.print("[red]Set NAVIEXTRAS_USER and NAVIEXTRAS_PASS environment variables[/red]")
+        sys.exit(1)
+
+    console.print("Connecting...")
+    result = run_session(usb, username, password)
+    if result["errors"]:
+        for e in result["errors"]:
+            console.print(f"[red]✗ {e}[/red]")
+        sys.exit(1)
+
+    jsid = result.get("web_jsessionid")
+    if not jsid:
+        console.print("[red]Web login failed[/red]")
+        sys.exit(1)
+
+    console.print(f"Calling /mds/ ...")
+    with httpx.Client(timeout=30, follow_redirects=True) as hc:
+        resp = hc.get(
+            "https://dacia-ulc.naviextras.com/mds/",
+            headers={
+                "User-Agent": BROWSER_UA,
+                "Cookie": f"JSESSIONID={jsid}",
+                "Accept": "*/*",
+                "Pragma": "no-cache",
+                "Cache-Control": "no-cache",
+            },
+        )
+        console.print(f"  Status: {resp.status_code}")
+        console.print(f"  Content-Type: {resp.headers.get('content-type', '?')}")
+        console.print(f"  Body ({len(resp.content)} bytes):")
+        console.print(f"  {resp.text}")
+
+        # Save raw response
+        Path("mds_response.json").write_text(resp.text)
+        console.print(f"\n  Saved to mds_response.json")

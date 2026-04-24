@@ -26,6 +26,7 @@ from medianav_toolbox.protocol import SVC_MARKET, SVC_REGISTER, build_request, p
 from medianav_toolbox.swid import compute_swid
 from medianav_toolbox.wire_codec import (
     DeviceFileEntry,
+    build_getprocess_body,
     build_login_body,
     build_senddevicestatus_body,
     build_sendfingerprint_body,
@@ -82,7 +83,7 @@ def run_session(
                     appcid=device.appcid,
                     uniq_id=device.brand_md5.upper(),
                 )
-                _save_creds(usb_path, creds)
+                _save_creds(usb_path, creds, uniq_id=device.brand_md5.upper())
                 result["steps"].append("register")
             except RuntimeError as e:
                 result["errors"].append(f"Registration failed: {e}")
@@ -92,6 +93,8 @@ def run_session(
 
         result["device_creds"] = creds
 
+        # --- Correct sequence (from run26 fresh session capture) ---
+        # 1. Login
         session = _login_wire(client, creds)
         result["session"] = session
         result["market_url"] = MARKET_BASE
@@ -101,16 +104,49 @@ def run_session(
             result["errors"].append("Login failed")
             return result
 
+        # 2. Licenses (early check)
+        try:
+            licenses = get_licenses(client, creds, session)
+            result["licenses"] = licenses
+            result["steps"].append("licenses")
+        except Exception:
+            result["licenses"] = []
+
+        # 3. GetProcess
+        gp_resp = _get_process(client, creds, session)
+        result["getprocess_status"] = gp_resp.status_code
+        result["steps"].append("getprocess")
+
+        # 4. SendFingerprint
         fp_resp = _send_fingerprint(client, creds, session)
         result["fingerprint_status"] = fp_resp.status_code
         result["steps"].append("sendfingerprint")
 
-        gp_resp = _get_process(client, creds, session)
-        result["getprocess_status"] = gp_resp.status_code
-        result["getprocess_body"] = gp_resp.content
-        result["steps"].append("getprocess")
+        # 5. Device descriptor list + hasActivatableService + model list
+        try:
+            from medianav_toolbox.api.register import (
+                get_device_descriptor_list,
+                get_device_model_list,
+            )
 
-        # 5. Get head unit credentials via delegator
+            get_device_descriptor_list(client, endpoints, creds)
+            result["steps"].append("get_device_descriptor_list")
+
+            _has_activatable_service(client, endpoints, creds, session)
+            result["steps"].append("hasActivatableService")
+
+            get_device_model_list(client, endpoints)
+            result["steps"].append("get_device_model_list")
+        except Exception:
+            pass  # non-fatal — these provide context but may not be required
+
+        # 6. SendDeviceStatus (0x60 — standard, with tb credentials)
+        ds_resp = _send_device_status_0x60(client, creds, session, usb_path, device)
+        result["devicestatus_0x60"] = ds_resp.status_code
+        result["steps"].append(f"senddevicestatus_0x60={ds_resp.status_code}")
+
+        # 7. Delegator → head unit credentials
+        hu_creds = None
         try:
             hu_creds = get_delegator_credentials(
                 client,
@@ -120,45 +156,19 @@ def run_session(
             )
             result["steps"].append("delegator")
 
-            # 5b. Register HU device separately (for 0x68 flag requests)
-            from medianav_toolbox.api.register import register_hu_device
-
-            hu_dev_creds = _load_hu_dev_creds(usb_path)
-            if hu_dev_creds is None:
-                hu_dev_creds = register_hu_device(
-                    client,
-                    endpoints,
-                    appcid=device.appcid,
-                )
-                if hu_dev_creds:
-                    _save_hu_dev_creds(usb_path, hu_dev_creds)
-                    result["steps"].append("register_hu_device")
-                else:
-                    result["steps"].append("register_hu_device (cached/409)")
-            else:
-                result["steps"].append("register_hu_device (cached)")
-
-            # 6. Send device status with head unit credentials
-            ds_resp = _send_device_status(client, creds, hu_creds, session, usb_path, device)
-            result["devicestatus_status"] = ds_resp.status_code
-            result["steps"].append("senddevicestatus")
+            # 8. SendDeviceStatus (delegated — with hu credentials)
+            ds_resp2 = _send_device_status(client, creds, hu_creds, session, usb_path, device)
+            result["devicestatus_delegated"] = ds_resp2.status_code
+            result["steps"].append(f"senddevicestatus_delegated={ds_resp2.status_code}")
         except RuntimeError:
-            pass  # delegator/senddevicestatus are optional for basic flow
+            pass  # delegator optional for basic flow
 
-        # 7. Web login (for /toolbox/ pages like catalog, managecontent)
+        # 9. Web login (for /toolbox/ pages like catalog, managecontent)
         if username and session.jsessionid:
             web_jsid = web_login(session.jsessionid, username, password)
             if web_jsid:
                 result["web_jsessionid"] = web_jsid
                 result["steps"].append("web_login")
-
-        # 8. Fetch licenses (available .lyc files)
-        try:
-            licenses = get_licenses(client, creds, session)
-            result["licenses"] = licenses
-            result["steps"].append("licenses")
-        except Exception:
-            result["licenses"] = []
 
     return result
 
@@ -209,12 +219,13 @@ def _send_fingerprint(client, creds, session):
     )
 
 
-def _get_process(client, creds, session):
+def _get_process(client, creds, session, swids=None):
     cred_block = build_credential_block(creds.name)
     query = bytes([0xC3, 0x20]) + cred_block
+    body = build_getprocess_body(swids) if swids else b""
     wire = build_request(
         query=query,
-        body=b"",
+        body=body,
         service_minor=SVC_MARKET,
         code=creds.code,
         secret=creds.secret,
@@ -226,45 +237,134 @@ def _get_process(client, creds, session):
     )
 
 
+def _send_device_status_0x60(client, creds, session, usb_path, device):
+    """Send standard 0x60 device status (tb credentials, variant=0x02)."""
+    from medianav_toolbox.device_status import build_live_senddevicestatus
+
+    body = build_live_senddevicestatus(usb_path, variant=0x02)
+    cred_block = build_credential_block(creds.name)
+    query = bytes([0x40, 0x20]) + cred_block
+    wire = build_request(
+        query=query,
+        body=body,
+        service_minor=SVC_MARKET,
+        code=creds.code,
+        secret=creds.secret,
+    )
+    return client.post(
+        f"{MARKET_BASE}/1/senddevicestatus",
+        content=wire,
+        headers=_wire_headers(session),
+    )
+
+
+def _has_activatable_service(client, endpoints, creds, session):
+    """Call hasActivatableService — empty body, service minor 0x0E."""
+    cred_block = build_credential_block(creds.name)
+    query = bytes([0xC4, 0x20]) + cred_block
+    wire = build_request(
+        query=query,
+        body=b"",
+        service_minor=SVC_REGISTER,
+        code=creds.code,
+        secret=creds.secret,
+    )
+    return client.post(
+        f"{endpoints.register}/hasActivatableService",
+        content=wire,
+        headers=_wire_headers(session),
+    )
+
+
 def _send_device_status(client, creds, hu_creds, session, usb_path, device):
-    """Send device status to establish device context for the catalog.
+    """Send delegated device status to establish device context.
 
-    Sends TWO 0x60 requests:
-    1. D8 02 (RECOGNIZED) — initial device state
-    2. D8 03 (REGISTERED) — transitions device so catalog is visible
-
-    Both use simple 0x60 flags with DEVICE mode encryption (tb_code/tb_secret).
-    The D8 03 body is the same as D8 02 but with byte[1]=0x03 and byte[2]=0x1E.
-
-    The bodies are loaded from run16 plaintext captures. A fresh body builder
-    can replace these once the file list encoding is fully understood.
+    Uses build_dynamic_request() with session_key=creds.secret.
+    Wire format: [header][prefix][snakeoil(query, secret)][snakeoil(body, secret)]
+    See docs/chain-encryption.md for details.
     """
-    bodies_dir = Path(__file__).parent.parent / "analysis" / "using-win32" / "run16_bodies"
-    body_d802 = bodies_dir / "snakeoil_body_255_1679.bin"
-    body_d803 = bodies_dir / "snakeoil_body_327_1646.bin"
+    from medianav_toolbox.device_status import build_live_senddevicestatus
+    from medianav_toolbox.protocol import build_dynamic_request
 
-    if not body_d802.exists() or not body_d803.exists():
+    body = build_live_senddevicestatus(usb_path, variant=0x03)
+    wire = build_dynamic_request(
+        counter=0,
+        body=body,
+        hu_code=hu_creds.code,
+        tb_code=creds.code,
+        hu_secret=hu_creds.secret,
+        session_key=creds.secret,
+    )
+    return client.post(
+        f"{MARKET_BASE}/1/senddevicestatus",
+        content=wire,
+        headers=_wire_headers(session),
+    )
+
+
+def _send_device_status_0x68(client, creds, hu_creds, session, usb_path):
+    """Send delegated device status (variant 0x03).
+
+    Same as _send_device_status but callable separately for the 0x68 flow.
+    """
+    from medianav_toolbox.device_status import build_live_senddevicestatus
+    from medianav_toolbox.protocol import build_dynamic_request
+
+    try:
+        body = build_live_senddevicestatus(usb_path, variant=0x03)
+    except Exception:
         return type("R", (), {"status_code": 0})()
 
-    resp = type("R", (), {"status_code": 0})()
-    for body_path in [body_d802, body_d803]:
-        body = body_path.read_bytes()
-        wire = build_request(
-            query=bytes([0xC5, 0x60]),
-            body=body,
-            service_minor=SVC_MARKET,
-            code=creds.code,
-            secret=creds.secret,
-        )
-        resp = client.post(
-            f"{MARKET_BASE}/1/senddevicestatus",
-            content=wire,
-            headers=_wire_headers(session),
-        )
-        if resp.status_code != 200:
-            break
+    wire = build_dynamic_request(
+        counter=0,
+        body=body,
+        hu_code=hu_creds.code,
+        tb_code=creds.code,
+        hu_secret=hu_creds.secret,
+        session_key=creds.secret,
+    )
+    return client.post(
+        f"{MARKET_BASE}/1/senddevicestatus",
+        content=wire,
+        headers=_wire_headers(session),
+    )
 
-    return resp
+
+def _browse_catalog(jsessionid: str) -> str | None:
+    """Browse the catalog/managecontent page to establish content context.
+
+    The Toolbox web UI navigates to /toolbox/device then /toolbox/managecontent
+    before any content download. This may set server-side state that enables
+    the 0x68 delegation flow.
+
+    Returns the JSESSIONID or None on failure.
+    """
+    import httpx
+
+    try:
+        with httpx.Client(
+            follow_redirects=True,
+            timeout=30,
+            cookies={"JSESSIONID": jsessionid},
+        ) as client:
+            # Visit device page (sets working mode)
+            client.get(
+                f"{WEB_BASE}/toolbox/device?workingMode=TOOLBOX",
+                headers={"User-Agent": BROWSER_UA},
+            )
+            # Visit managecontent page (triggers content tree population)
+            resp = client.get(
+                f"{WEB_BASE}/toolbox/managecontent",
+                headers={"User-Agent": BROWSER_UA},
+            )
+            if resp.status_code == 200:
+                for cookie in client.cookies.jar:
+                    if cookie.name == "JSESSIONID":
+                        return cookie.value
+                return jsessionid
+    except (Exception,):
+        pass
+    return None
 
 
 def get_licenses(client, creds, session) -> list:
@@ -297,56 +397,78 @@ def get_licenses(client, creds, session) -> list:
     return parse_licenses_response(body)
 
 
+CONFIG_DIR = Path.home() / ".config" / "medianav-toolbox"
+
+
+def _creds_paths(usb_path: Path) -> list[Path]:
+    """Return candidate paths for credentials, in priority order."""
+    return [usb_path / CREDS_FILE, CONFIG_DIR / CREDS_FILE]
+
+
 def _load_creds(usb_path: Path) -> DeviceCredentials | None:
-    creds_path = usb_path / CREDS_FILE
-    if not creds_path.exists():
-        return None
-    try:
-        data = json.loads(creds_path.read_text())
-        return DeviceCredentials(
-            name=bytes.fromhex(data["name"]),
-            code=data["code"],
-            secret=data["secret"],
-        )
-    except (KeyError, ValueError):
-        return None
+    for creds_path in _creds_paths(usb_path):
+        if not creds_path.exists():
+            continue
+        try:
+            data = json.loads(creds_path.read_text())
+            creds = DeviceCredentials(
+                name=bytes.fromhex(data["name"]),
+                code=data["code"],
+                secret=data["secret"],
+            )
+            creds._uniq_id = data.get("uniq_id", "")
+            return creds
+        except (KeyError, ValueError):
+            continue
+    return None
 
 
-def _save_creds(usb_path: Path, creds: DeviceCredentials) -> None:
-    creds_path = usb_path / CREDS_FILE
-    creds_path.write_text(
-        json.dumps(
-            {
-                "name": creds.name.hex(),
-                "code": creds.code,
-                "secret": creds.secret,
-            }
-        )
+def _save_creds(usb_path: Path, creds: DeviceCredentials, uniq_id: str = "") -> None:
+    payload = json.dumps(
+        {
+            "name": creds.name.hex(),
+            "code": creds.code,
+            "secret": creds.secret,
+            "uniq_id": uniq_id,
+        }
     )
+    for creds_path in _creds_paths(usb_path):
+        try:
+            creds_path.parent.mkdir(parents=True, exist_ok=True)
+            creds_path.write_text(payload)
+            return
+        except OSError:
+            continue
 
 
 HU_DEV_CREDS_FILE = ".medianav_hu_dev_creds.json"
 
 
 def _load_hu_dev_creds(usb_path: Path) -> DeviceCredentials | None:
-    creds_path = usb_path / HU_DEV_CREDS_FILE
-    if not creds_path.exists():
-        return None
-    try:
-        data = json.loads(creds_path.read_text())
-        return DeviceCredentials(
-            name=bytes.fromhex(data["name"]),
-            code=data["code"],
-            secret=data["secret"],
-        )
-    except (KeyError, ValueError):
-        return None
+    for p in [usb_path / HU_DEV_CREDS_FILE, CONFIG_DIR / HU_DEV_CREDS_FILE]:
+        if not p.exists():
+            continue
+        try:
+            data = json.loads(p.read_text())
+            return DeviceCredentials(
+                name=bytes.fromhex(data["name"]),
+                code=data["code"],
+                secret=data["secret"],
+            )
+        except (KeyError, ValueError):
+            continue
+    return None
 
 
 def _save_hu_dev_creds(usb_path: Path, creds: DeviceCredentials) -> None:
-    (usb_path / HU_DEV_CREDS_FILE).write_text(
-        json.dumps({"name": creds.name.hex(), "code": creds.code, "secret": creds.secret})
-    )
+    payload = json.dumps({"name": creds.name.hex(), "code": creds.code, "secret": creds.secret})
+    for p in [usb_path / HU_DEV_CREDS_FILE, CONFIG_DIR / HU_DEV_CREDS_FILE]:
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(payload)
+            return
+        except OSError:
+            continue
 
 
 def web_login(jsessionid: str, username: str, password: str) -> str | None:
@@ -359,36 +481,34 @@ def web_login(jsessionid: str, username: str, password: str) -> str | None:
     """
     import httpx
 
-    with httpx.Client(
-        follow_redirects=True,
-        timeout=30,
-        cookies={"JSESSIONID": jsessionid},
-    ) as client:
+    for _attempt in range(3):
         try:
-            # 1. Visit device page to establish web session
-            client.get(
-                f"{WEB_BASE}/toolbox/device?workingMode=TOOLBOX",
-                headers={"User-Agent": BROWSER_UA},
-            )
+            with httpx.Client(
+                follow_redirects=True,
+                timeout=30,
+                cookies={"JSESSIONID": jsessionid},
+            ) as client:
+                client.get(
+                    f"{WEB_BASE}/toolbox/device?workingMode=TOOLBOX",
+                    headers={"User-Agent": BROWSER_UA},
+                )
+                client.post(
+                    f"{WEB_BASE}/toolbox/login",
+                    data={
+                        "posted": "true",
+                        "marketSession.userLoginForm.email": username,
+                        "marketSession.userLoginForm.password": password,
+                    },
+                    headers={
+                        "User-Agent": BROWSER_UA,
+                        "Content-Type": "application/x-www-form-urlencoded",
+                    },
+                )
+                for cookie in client.cookies.jar:
+                    if cookie.name == "JSESSIONID":
+                        return cookie.value
+        except (httpx.RemoteProtocolError, httpx.ConnectError, httpx.ReadTimeout):
+            import time
 
-            # 2. Web login with username/password
-            client.post(
-                f"{WEB_BASE}/toolbox/login",
-                data={
-                    "posted": "true",
-                    "marketSession.userLoginForm.email": username,
-                    "marketSession.userLoginForm.password": password,
-                },
-                headers={
-                    "User-Agent": BROWSER_UA,
-                    "Content-Type": "application/x-www-form-urlencoded",
-                },
-            )
-
-            # Extract JSESSIONID from cookies
-            for cookie in client.cookies.jar:
-                if cookie.name == "JSESSIONID":
-                    return cookie.value
-        except (httpx.RemoteProtocolError, httpx.ConnectError):
-            pass
+            time.sleep(1)
     return None

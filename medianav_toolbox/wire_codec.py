@@ -359,3 +359,23 @@ def build_senddevicestatus_body(
     )
 
     return header + device_info + meta + file_list + file_data + trailer
+
+
+def build_getprocess_body(swids: list[str]) -> bytes:
+    """Build GetProcess request body with license SWIDs.
+
+    From captured traffic (run16b, SnakeOil call #559):
+      [0x80] [0x00] [count:1]
+      [per SWID]:
+        [0x80] [0x00 0x00 0x00 0x00] — item wrapper (5 bytes)
+        [len:1] [swid_string]        — length-prefixed SWID
+
+    Args:
+        swids: list of license activation codes like "CW-3MMA-77YM-IMM3-EMMQ-AU7Y"
+    """
+    if not swids:
+        return b""
+    items = b""
+    for swid in swids:
+        items += b"\x80\x00\x00\x00\x00" + encode_string(swid)
+    return b"\x80\x00" + bytes([len(swids)]) + items
