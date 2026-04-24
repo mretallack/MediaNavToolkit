@@ -117,6 +117,30 @@ Routing optimization data — pre-computed route weights based on historical tra
 The magic bytes are consistent across all files of the same type. Bytes 9–16 vary
 per file (likely encoding region ID or file size).
 
+**Key finding:** The magic bytes are NOT in `nngine.dll`. They are not a hardcoded
+signature — they are the **ciphertext** of a known plaintext header. This confirms
+a stream cipher where the same keystream encrypts every file.
+
+### Header Structure (from Phase 1 analysis)
+
+Comparing headers across 6 FBL/FPA files reveals:
+
+| Offset | Bytes | Constant? | Meaning |
+|--------|-------|-----------|---------|
+| 0x00-0x07 | 8 | ✓ All files | Encrypted format signature |
+| 0x08-0x0F | 8 | ✓ All files | Encrypted header (version?) |
+| 0x10-0x13 | 4 | ✗ Varies | File type + per-file field (FPA always has 0x11=BC, 0x13=DF) |
+| 0x14-0x1C | 9 | ✓ All files | Encrypted header continuation |
+| 0x1D | 1 | ✗ Varies | Per-file field |
+| 0x1E-0x1F | 2 | ✓ All files | Encrypted header |
+| 0x20-0x3F | 32 | ✓ All files | Encrypted header (constant plaintext) |
+
+27 of the first 32 bytes are identical between FBL and FPA files for the same country.
+This confirms a **stream cipher with a fixed keystream** — the constant ciphertext bytes
+correspond to constant plaintext bytes in the file header.
+
+FBL and FPA files are **512-byte aligned**. SPC files are not aligned.
+
 ### Encryption Scheme (Unknown)
 
 The encryption is likely tied to the device licensing system (`.lyc` files contain
