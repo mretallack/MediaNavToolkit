@@ -701,6 +701,7 @@ def dump_getprocess(ctx, output):
             if len(dec) > 512:
                 console.print(f"    ... ({len(dec) - 512} more bytes)")
             import re
+
             strings = re.findall(rb"[\x20-\x7e]{8,}", dec)
             if strings:
                 console.print(f"  [bold]Strings:[/bold]")

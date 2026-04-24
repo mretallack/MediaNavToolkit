@@ -26,7 +26,7 @@ from medianav_toolbox.crypto import snakeoil
 @dataclass
 class Header:
     version: int = 0x01
-    magic: bytes = b"\xC2\xC2"
+    magic: bytes = b"\xc2\xc2"
     auth_mode: int = 0x30
     tb_code: int = 0
     svc_minor: int = 0x19
@@ -36,8 +36,14 @@ class Header:
     def encode(self) -> bytes:
         return struct.pack(
             ">BBBB Q B HB",
-            self.version, self.magic[0], self.magic[1], self.auth_mode,
-            self.tb_code, self.svc_minor, self.reserved, self.session_id,
+            self.version,
+            self.magic[0],
+            self.magic[1],
+            self.auth_mode,
+            self.tb_code,
+            self.svc_minor,
+            self.reserved,
+            self.session_id,
         )
 
     @classmethod
@@ -80,14 +86,16 @@ class Query:
             return False
         expected = hmac_mod.new(
             struct.pack(">Q", self.hu_secret),
-            self.credential_data, hashlib.md5,
+            self.credential_data,
+            hashlib.md5,
         ).digest()
         return self.hmac == expected
 
     def recompute_hmac(self):
         self.hmac = hmac_mod.new(
             struct.pack(">Q", self.hu_secret),
-            self.credential_data, hashlib.md5,
+            self.credential_data,
+            hashlib.md5,
         ).digest()
 
     def encode(self) -> bytes:
@@ -107,20 +115,21 @@ class Query:
         q.format = data[1]
         pos = 2
         if q.flags & 0x40:
-            q.tb_name = data[pos:pos + 16]
+            q.tb_name = data[pos : pos + 16]
             pos += 17  # 16B name + 0x80 separator
         q.cred_type = data[pos]
-        q.hu_code = struct.unpack(">Q", data[pos + 1:pos + 9])[0]
-        q.tb_code = struct.unpack(">Q", data[pos + 9:pos + 17])[0]
-        q.timestamp = struct.unpack(">I", data[pos + 17:pos + 21])[0]
-        q.separator = data[pos + 21:pos + 23]
-        q.hmac = data[pos + 23:pos + 39]
+        q.hu_code = struct.unpack(">Q", data[pos + 1 : pos + 9])[0]
+        q.tb_code = struct.unpack(">Q", data[pos + 9 : pos + 17])[0]
+        q.timestamp = struct.unpack(">I", data[pos + 17 : pos + 21])[0]
+        q.separator = data[pos + 21 : pos + 23]
+        q.hmac = data[pos + 23 : pos + 39]
         return q
 
 
 @dataclass
 class BodyField:
     """A single field from the body."""
+
     name: str
     value: object
     raw: bytes  # original bytes for this field
@@ -130,7 +139,7 @@ class BodyField:
 class Body:
     marker: int = 0xD8
     variant: int = 0x03
-    bitmask: bytes = b"\x1E\x40"
+    bitmask: bytes = b"\x1e\x40"
     brand_name: str = ""
     model_name: str = ""
     swid: str = ""
@@ -153,18 +162,18 @@ class Body:
 
         def read_str(p):
             length = data[p]
-            return data[p + 1:p + 1 + length].decode("ascii", errors="replace"), p + 1 + length
+            return data[p + 1 : p + 1 + length].decode("ascii", errors="replace"), p + 1 + length
 
         b.brand_name, pos = read_str(pos)
         b.model_name, pos = read_str(pos)
         b.swid, pos = read_str(pos)
         b.imei, pos = read_str(pos)
         b.igo_version, pos = read_str(pos)
-        b.first_use = struct.unpack(">I", data[pos:pos + 4])[0]
+        b.first_use = struct.unpack(">I", data[pos : pos + 4])[0]
         pos += 4
-        b.padding_4b = data[pos:pos + 4]
+        b.padding_4b = data[pos : pos + 4]
         pos += 4
-        b.appcid = struct.unpack(">I", data[pos:pos + 4])[0]
+        b.appcid = struct.unpack(">I", data[pos : pos + 4])[0]
         pos += 4
         b.serial, pos = read_str(pos)
         return b
@@ -200,10 +209,10 @@ class WireMessage:
 
         # Determine query size from prefix
         query_size = 41
-        query_plain = snakeoil(wire[17:17 + query_size], session_key)
+        query_plain = snakeoil(wire[17 : 17 + query_size], session_key)
         if query_plain[0] & 0x40:  # name present
             query_size = 58
-            query_plain = snakeoil(wire[17:17 + query_size], session_key)
+            query_plain = snakeoil(wire[17 : 17 + query_size], session_key)
 
         msg.query = Query.decode(query_plain)
         msg.query.hu_secret = hu_secret

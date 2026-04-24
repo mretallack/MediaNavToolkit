@@ -5,6 +5,7 @@ If we can decode it, verify all fields, and re-encode it byte-for-byte,
 then we can generate new messages with fresh timestamps and be confident
 they're correct.
 """
+
 import json
 import time
 from pathlib import Path
@@ -57,7 +58,7 @@ class TestGoldenDecode:
         assert msg.header.version == 0x01
 
     def test_header_magic(self, msg):
-        assert msg.header.magic == b"\xC2\xC2"
+        assert msg.header.magic == b"\xc2\xc2"
 
     def test_header_auth_mode(self, msg):
         assert msg.header.auth_mode == 0x30
@@ -108,7 +109,7 @@ class TestGoldenDecode:
         assert msg.body.variant == 0x03
 
     def test_body_bitmask(self, msg):
-        assert msg.body.bitmask == b"\x1E\x40"
+        assert msg.body.bitmask == b"\x1e\x40"
 
     def test_body_brand(self, msg):
         assert msg.body.brand_name == "DaciaAutomotive"

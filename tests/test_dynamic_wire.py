@@ -2,6 +2,7 @@
 
 Ground truth: run25 SSL_write captures + SnakeOil/HMAC logs.
 """
+
 import hashlib
 import hmac as hmac_mod
 import struct
@@ -38,7 +39,7 @@ class TestWireFormat:
     def test_header_structure(self, wire):
         """Header: [01][C2 C2][0x30][tb_code(8B)][svc_minor][00 00][session_id]"""
         assert wire[0] == 0x01
-        assert wire[1:3] == b"\xC2\xC2"
+        assert wire[1:3] == b"\xc2\xc2"
         assert wire[3] == 0x30  # AUTH_DEVICE
         assert struct.unpack(">Q", wire[4:12])[0] == TB_CODE
         assert wire[12] == 0x19  # SVC_MARKET
@@ -48,7 +49,7 @@ class TestWireFormat:
     def test_prefix_byte(self, wire):
         """Prefix = snakeoil(0xE9, session_key) = 0x55"""
         assert wire[16] == 0x55
-        assert snakeoil(b"\xE9", SESSION_KEY) == bytes([0x55])
+        assert snakeoil(b"\xe9", SESSION_KEY) == bytes([0x55])
 
     def test_query_decryption(self, wire):
         """Query (41B) decrypts to known plaintext with session_key."""
@@ -113,7 +114,7 @@ class TestQueryStructure:
         """HMAC-MD5(hu_secret_BE, C4 + hu_code_BE + tb_code_BE + ts_BE)"""
         key = struct.pack(">Q", HU_SECRET)
         data = (
-            b"\xC4"
+            b"\xc4"
             + struct.pack(">Q", HU_CODE)
             + struct.pack(">Q", TB_CODE)
             + struct.pack(">I", RUN25_TIMESTAMP)
@@ -143,7 +144,12 @@ class TestHMAC:
         """The HMAC key is hu_secret, NOT hu_code."""
         key_correct = struct.pack(">Q", HU_SECRET)
         key_wrong = struct.pack(">Q", HU_CODE)
-        data = b"\xC4" + struct.pack(">Q", HU_CODE) + struct.pack(">Q", TB_CODE) + struct.pack(">I", RUN25_TIMESTAMP)
+        data = (
+            b"\xc4"
+            + struct.pack(">Q", HU_CODE)
+            + struct.pack(">Q", TB_CODE)
+            + struct.pack(">I", RUN25_TIMESTAMP)
+        )
 
         correct = hmac_mod.new(key_correct, data, hashlib.md5).digest()
         wrong = hmac_mod.new(key_wrong, data, hashlib.md5).digest()
@@ -180,9 +186,13 @@ class TestBuildDynamicRequest:
         """Changing the timestamp produces different query bytes."""
         body = snakeoil(wire[58:], SESSION_KEY)
         result = build_dynamic_request(
-            counter=0, body=body,
-            hu_code=HU_CODE, tb_code=TB_CODE, hu_secret=HU_SECRET,
-            session_key=SESSION_KEY, timestamp=RUN25_TIMESTAMP + 1,
+            counter=0,
+            body=body,
+            hu_code=HU_CODE,
+            tb_code=TB_CODE,
+            hu_secret=HU_SECRET,
+            session_key=SESSION_KEY,
+            timestamp=RUN25_TIMESTAMP + 1,
             session_id=RUN25_SESSION_ID,
         )
         # Header same, prefix same, query different, body same
@@ -194,10 +204,15 @@ class TestBuildDynamicRequest:
         """Including tb_name produces a 58B query (flags=0x48)."""
         tb_name = b"\x01" * 16
         result = build_dynamic_request(
-            counter=0, body=b"\xD8\x00",
-            hu_code=HU_CODE, tb_code=TB_CODE, hu_secret=HU_SECRET,
-            session_key=SESSION_KEY, tb_name=tb_name,
-            timestamp=RUN25_TIMESTAMP, session_id=0x01,
+            counter=0,
+            body=b"\xd8\x00",
+            hu_code=HU_CODE,
+            tb_code=TB_CODE,
+            hu_secret=HU_SECRET,
+            session_key=SESSION_KEY,
+            tb_name=tb_name,
+            timestamp=RUN25_TIMESTAMP,
+            session_id=0x01,
         )
         # 16 header + 1 prefix + 58 query + 2 body = 77
         assert len(result) == 77
@@ -217,6 +232,7 @@ class TestSessionKey:
     def test_session_key_is_creds_secret(self):
         """The session key used for SnakeOil encryption IS creds.secret."""
         import json
+
         for p in self.CREDS_PATHS:
             if p.exists():
                 raw = json.loads(p.read_text())
@@ -226,7 +242,7 @@ class TestSessionKey:
 
     def test_session_key_encrypts_run25_prefix(self):
         """snakeoil(0xE9, session_key) = 0x55"""
-        assert snakeoil(b"\xE9", SESSION_KEY) == b"\x55"
+        assert snakeoil(b"\xe9", SESSION_KEY) == b"\x55"
 
     def test_session_key_decrypts_run25_query(self):
         """Decrypting run25 query with session_key produces valid structure."""

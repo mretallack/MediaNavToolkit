@@ -68,7 +68,10 @@ def _serialize_credential_binary(hu_code: int, tb_code: int, timestamp: int) -> 
 
 
 def build_delegation_prefix(
-    hu_code: int, tb_code: int, hu_secret: int, timestamp: int | None = None,
+    hu_code: int,
+    tb_code: int,
+    hu_secret: int,
+    timestamp: int | None = None,
 ) -> tuple[bytes, int]:
     """Build the 17-byte delegation prefix for 0x68 request bodies.
 

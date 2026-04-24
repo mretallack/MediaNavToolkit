@@ -32,8 +32,7 @@ def _file_ts_ms(path: Path) -> int:
     return int(path.stat().st_mtime * 1000)
 
 
-def _encode_file_entry(md5: str, fname: str, mount: str, path: str,
-                       size: int, ts_ms: int) -> bytes:
+def _encode_file_entry(md5: str, fname: str, mount: str, path: str, size: int, ts_ms: int) -> bytes:
     """Encode an 0xA0 file entry."""
     return (
         b"\xa0"
@@ -60,8 +59,9 @@ def _encode_dir_entry(name: str, mount: str, path: str, ts_ms: int) -> bytes:
     )
 
 
-def _encode_e0_entry(md5_content: str, md5_file: str, fname: str,
-                     mount: str, path: str, size: int, ts_ms: int) -> bytes:
+def _encode_e0_entry(
+    md5_content: str, md5_file: str, fname: str, mount: str, path: str, size: int, ts_ms: int
+) -> bytes:
     """Encode an 0xE0 file entry (content MD5 + file MD5)."""
     return (
         b"\xe0"
@@ -77,9 +77,9 @@ def _encode_e0_entry(md5_content: str, md5_file: str, fname: str,
     )
 
 
-def build_live_senddevicestatus(usb_path: Path, variant: int = 0x02,
-                                uniq_id_override: str = "",
-                                drive_path: str = "E:\\") -> bytes:
+def build_live_senddevicestatus(
+    usb_path: Path, variant: int = 0x02, uniq_id_override: str = "", drive_path: str = "E:\\"
+) -> bytes:
     """Build senddevicestatus body from live USB contents.
 
     Args:
@@ -93,7 +93,7 @@ def build_live_senddevicestatus(usb_path: Path, variant: int = 0x02,
 
     # Header
     bitmask = b"\x1f\x40" if variant == 0x02 else b"\x1e\x40"
-    header = bytes([0xd8, variant]) + bitmask
+    header = bytes([0xD8, variant]) + bitmask
 
     # Device info — values from device.nng and captured traffic
     # SWID, IMEI, serial come from the head unit (constant for this device)
@@ -123,10 +123,7 @@ def build_live_senddevicestatus(usb_path: Path, variant: int = 0x02,
     content_ver = 46475  # from captured traffic
     separator = b"\x00"
     content_block = (
-        b"\x01"
-        + struct.pack("<H", content_ver)
-        + b"\x00\x00"
-        + b"\x00\x01\x00\x00\x00\x00"
+        b"\x01" + struct.pack("<H", content_ver) + b"\x00\x00" + b"\x00\x01\x00\x00\x00\x00"
     )
 
     # Scan files
@@ -145,30 +142,40 @@ def build_live_senddevicestatus(usb_path: Path, variant: int = 0x02,
             md5_content = _md5_file(brand_file)
         md5_file = _md5_file(brand_file)
         entries += _encode_e0_entry(
-            md5_content, md5_file, "brand.txt", "primary",
-            "NaviSync/CONTENT", brand_file.stat().st_size,
+            md5_content,
+            md5_file,
+            "brand.txt",
+            "primary",
+            "NaviSync/CONTENT",
+            brand_file.stat().st_size,
             _file_ts_ms(brand_file),
         )
 
     # license directory entry
     if license_dir.exists():
-        entries += _encode_dir_entry(
-            "license", "primary", "NaviSync", _file_ts_ms(license_dir)
-        )
+        entries += _encode_dir_entry("license", "primary", "NaviSync", _file_ts_ms(license_dir))
 
     # All files in NaviSync/license/ — device.nng first, then others sorted
     if license_dir.exists():
         device_nng = license_dir / "device.nng"
         if device_nng.exists():
             entries += _encode_file_entry(
-                _md5_file(device_nng), "device.nng", "primary", "NaviSync/license",
-                device_nng.stat().st_size, _file_ts_ms(device_nng),
+                _md5_file(device_nng),
+                "device.nng",
+                "primary",
+                "NaviSync/license",
+                device_nng.stat().st_size,
+                _file_ts_ms(device_nng),
             )
         for f in sorted(license_dir.iterdir()):
             if f.is_file() and f.name != "device.nng":
                 entries += _encode_file_entry(
-                    _md5_file(f), f.name, "primary", "NaviSync/license",
-                    f.stat().st_size, _file_ts_ms(f),
+                    _md5_file(f),
+                    f.name,
+                    "primary",
+                    "NaviSync/license",
+                    f.stat().st_size,
+                    _file_ts_ms(f),
                 )
 
     # Trailer

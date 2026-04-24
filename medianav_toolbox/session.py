@@ -245,8 +245,11 @@ def _send_device_status_0x60(client, creds, session, usb_path, device):
     cred_block = build_credential_block(creds.name)
     query = bytes([0x40, 0x20]) + cred_block
     wire = build_request(
-        query=query, body=body,
-        service_minor=SVC_MARKET, code=creds.code, secret=creds.secret,
+        query=query,
+        body=body,
+        service_minor=SVC_MARKET,
+        code=creds.code,
+        secret=creds.secret,
     )
     return client.post(
         f"{MARKET_BASE}/1/senddevicestatus",
@@ -260,8 +263,11 @@ def _has_activatable_service(client, endpoints, creds, session):
     cred_block = build_credential_block(creds.name)
     query = bytes([0xC4, 0x20]) + cred_block
     wire = build_request(
-        query=query, body=b"",
-        service_minor=SVC_REGISTER, code=creds.code, secret=creds.secret,
+        query=query,
+        body=b"",
+        service_minor=SVC_REGISTER,
+        code=creds.code,
+        secret=creds.secret,
     )
     return client.post(
         f"{endpoints.register}/hasActivatableService",
