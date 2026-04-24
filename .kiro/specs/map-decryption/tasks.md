@@ -45,10 +45,9 @@ naturally look random.
 
 ## Can Do Now 🔧
 
-- [ ] **6.1** Extract ALL speed cameras from the full disk backup
-  - Extract all `.spc` files from `disk-backup-with-map-Apr2026.zip`
-  - Run `spc_to_csv.py` to produce a complete speed camera database
-  - Expected: ~20 countries × 10-100 cameras each
+- [x] **6.1** Extract ALL speed cameras from the full disk backup
+  - 1,405 cameras from 20 countries (21 .spc files) → `tools/maps/all_speed_cameras.csv`
+  - France/Italy/Spain have fewer cameras — larger SPC files use additional record formats beyond flags=0x0400
 - [x] **7.1** `tools/maps/fbl_to_geojson.py` — extract all coordinates from all sections as GeoJSON
   - Tested: Vatican=2,425 pts, Monaco=8,686 pts, Andorra=42,261 pts
 - [x] **7.2** Cross-reference decoded coordinates with OpenStreetMap data
