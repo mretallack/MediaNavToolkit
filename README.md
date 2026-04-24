@@ -254,6 +254,39 @@ Full session flow:
 
 See [docs/reverse-engineering.md](docs/reverse-engineering.md) for full protocol documentation.
 
+## Interesting Things to Look At
+
+### Voice Files — Lua TTS Scripts, No DRM
+
+The 67 voice files on the head unit are **not audio recordings** — they're Lua script
+bundles (`Voice_Eng-uk-f3-lua.zip`) that drive the iGO TTS engine. They're stored as
+plain `.zip` files with no encryption or license requirement. In theory, custom voices
+could be created by writing Lua scripts following the same API. See `tools/voice/` for
+exploration tools.
+
+### Dealership POI — Free Custom POI Data
+
+The dealership POI files (`userdata/POI/*.zip`) are plain zipped KML/CSV data with no
+encryption. The `.lyc` license is only needed for the update mechanism. Custom POI
+datasets could potentially be packaged in the same format.
+
+### Content Protection Model
+
+Only **map updates** require purchased licenses (£49–£129 per region). Everything else
+is either pre-installed with the factory license or free:
+
+| Content | Protection | Format |
+|---------|-----------|--------|
+| Maps (1.3 GB) | RSA-signed `.lyc` license per region | `.fbl` binary |
+| POI, speed cameras, TMC | Factory `.lyc` (pre-installed) | `.poi`, `.spc`, `.tmc` |
+| Voice (191 MB) | **None** — no license needed | Lua scripts in `.zip` |
+| Language packs (4 MB) | Separate free `.lyc` | `.zip` |
+| Global config | Separate free `.lyc` | `.zip` |
+| Dealership POI (7 MB) | Free `.lyc` per SWID | KML/CSV in `.zip` |
+
+See [docs/license-system.md](docs/license-system.md) for RSA key details and the full
+license format specification.
+
 ## License
 
 MIT
