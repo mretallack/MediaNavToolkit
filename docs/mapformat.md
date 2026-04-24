@@ -745,3 +745,18 @@ that is NOT broken by the XOR table. The data has near-uniform byte distribution
 Unicorn emulation of `FUN_10063e20` (constructor) to trace exactly which
 file bytes become the Blowfish key, and `FUN_10064bc0` to see the decrypted
 content key. This requires setting up the file stream and map object in Unicorn.
+
+### Exhaustive Key Search Result
+
+Tried every 16-byte window in the decrypted Vatican_osm.fbl as a Blowfish key
+on section 16. Best entropy achieved: **6.29** (at offset 0x0728). No key from
+the file itself produces clearly decrypted output (would need entropy < 4.0).
+
+**Conclusion:** The Blowfish master key is NOT stored in the map file. It must
+come from an external source:
+- The head unit's firmware or hardware key
+- Derived from the `.lyc` license content in a non-obvious way
+- A combination of device-specific and content-specific values
+
+The shape point data remains the only undecrypted part of the map format.
+All other data (metadata, coordinates, speed cameras, road topology) is accessible.
