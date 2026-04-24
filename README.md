@@ -33,13 +33,25 @@ This project reverse-engineers the NaviExtras wire protocol and reimplements it 
 | HMAC-MD5 delegation auth | ✅ Verified against captured logs |
 | USB detection + device identity | ✅ Working |
 | Device registration | ✅ Working |
-| Authentication (login → fingerprint → delegator) | ✅ Working |
-| Catalog browsing (38 items) | ✅ Working |
-| License fetch + install | ✅ Working |
-| **senddevicestatus → server** | **✅ Returns HTTP 200** |
-| Full sync pipeline | ❌ Not yet wired end-to-end |
+| Full authentication flow | ✅ Working (login → fingerprint → delegator → senddevicestatus) |
+| senddevicestatus → server | ✅ Returns HTTP 200 |
+| Catalog browsing (30 packages, 31 content items) | ✅ Working |
+| Content selection + size estimation | ✅ Working |
+| License fetch + install (.lyc + .lyc.md5) | ✅ Working |
+| Sync command (select → confirm → install) | ✅ Working |
 
-**326 tests passing** (57 wire format tests including golden round-trip verification).
+**340 tests passing** (57 wire format tests, 32 golden round-trip, 18 USB layout verification).
+
+### How Map Updates Work
+
+The NaviExtras catalog shows all map packages compatible with your head unit. Maps are
+region-based (e.g., "UK + Ireland", "Western Europe") and cost £49–£129 each. The only
+free content is the Dealership POI pack.
+
+Map data can be downloaded by any registered device, but the head unit requires a valid
+`.lyc` license file (RSA-signed) to accept the update. Purchasing a map through the
+NaviExtras store generates the license. The `sync` command handles the full flow:
+select content → confirm with server → download licenses → write to USB.
 
 ## Requirements
 
@@ -120,14 +132,29 @@ $ medianav-toolbox catalog
   Map of Western Europe                   14.4   123788
   ... (38 items total)
 
-$ medianav-toolbox buy 61811
-  Package: 61811, price: 0.00 GBP
-  Completing free purchase...
-✓ Purchased!
-  Installed RenaultDealers_Pack.lyc (440 B)
+$ medianav-toolbox sync --dry-run
+Connecting...
+Fetching content tree...
+Selecting 31 items...
+            Selected Content
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━┓
+┃ Content                   ┃      Size ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━┩
+│ France                    │  715.0 MB │
+│ Germany                   │  529.7 MB │
+│ United Kingdom            │  487.8 MB │
+│ ...                       │       ... │
+└───────────────────────────┴───────────┘
+Total download: 6.10 GB
 
-$ medianav-toolbox licenses
-  RenaultDealers_Pack.lyc  CW-7UIM-QAUY-IIQY-73MI-773E  440 B  ✓ installed
+$ medianav-toolbox sync -c "United Kingdom"
+Connecting...
+Selecting 1 items...
+Total download: 487.8 MB
+✓ Selection confirmed
+
+$ medianav-toolbox licenses --install
+  RenaultDealers_Pack.lyc  440 B  ✓ installed
 ```
 
 ## Supported Devices
