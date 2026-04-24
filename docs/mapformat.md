@@ -592,8 +592,8 @@ metadata record**:
 | 5 | 1B | `0x00` | Zero |
 | 6 | 1B | `0x05` | Flags (constant) |
 | 7 | 1B | `0x00` | Zero |
-| 8-9 | 2B | `45614`, `45613`, `18834` | Shape data offset/index |
-| 10-11 | 2B | `43`, `43`, `40` | Shape point count |
+| 8-11 | 4B | `(count<<16)\|offset` | Packed: high 16 bits = point count, low 16 bits = shape offset |
+
 
 The **shape point count** (uint16 at offset 10) indicates how many intermediate
 points define the road curve between the two junction endpoints. Values of 40-43
