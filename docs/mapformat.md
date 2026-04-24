@@ -235,6 +235,26 @@ Verified against all three test countries:
 
 Country codes: `VAT`, `AND`, `MON`. Type byte varies (`@`=0x40, `H`=0x48).
 
+### Road Geometry Data (Partially Parsed)
+
+After the section offset table, the FBL file contains multiple data sections.
+Road node coordinates are stored as **full int32 pairs** (same encoding as bounding box)
+interspersed with road metadata.
+
+**Confirmed:** 7 unique road junction coordinates extracted from Vatican_osm.fbl,
+corresponding to real roads (Via della Conciliazione area near St. Peter's Square).
+
+The data sections include:
+- **Section 1** (0x06D2): Compact geometry data (delta-encoded road shapes?)
+- **Section 4** (0x0807): Road classification codes + full coordinate pairs
+- **Section 5** (0x0FD6): Additional road data
+- **Section 16** (0x16B9): Largest section — bulk map data
+
+The road segment structure between coordinate pairs contains metadata bytes
+(road type, speed class, one-way flags, etc.) but the exact encoding is not
+yet fully mapped. The section offset table at 0x048E provides uint32 offsets
+to each data section.
+
 ## Shadow Metadata (.stm)
 
 The USB drive contains `.stm` files — NOT the actual map data. These are plain-text
