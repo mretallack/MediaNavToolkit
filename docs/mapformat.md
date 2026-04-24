@@ -141,17 +141,27 @@ correspond to constant plaintext bytes in the file header.
 
 FBL and FPA files are **512-byte aligned**. SPC files are not aligned.
 
-### Encryption Scheme (Unknown)
+### Encryption Scheme — SOLVED ✅
 
-The encryption is likely tied to the device licensing system (`.lyc` files contain
-RSA-encrypted keys). Possible schemes:
-- AES with a key derived from the `.lyc` license
-- XOR-CBC with a key from the RSA-decrypted license header (similar to `.lyc` decryption)
-- Device-specific key derived from hardware ID
+The map files are encrypted with the **same XOR table** used for `device.nng` decryption.
+The table is 4096 bytes (1024 uint32 values) stored in `nngine.dll` and extracted as
+`analysis/xor_table_normal.bin`.
 
-**The map data cannot currently be decrypted.** The encryption key is inside the
-`.lyc` license file, which is itself RSA-encrypted. We have the RSA public key
-(see `docs/license-system.md`) but RSA public keys can only encrypt, not decrypt.
+**Decryption:** `plaintext[i] = ciphertext[i] XOR xor_table[i % 4096]`
+
+This is a simple repeating XOR with a 4096-byte key. The key is the same for all files
+and all devices — it's hardcoded in the DLL.
+
+**Decrypted header:** All FBL/FPA files start with `SET\x00\x04\x06\x07\x20` — the
+`SET` format signature. This confirms successful decryption.
+
+**Verification:**
+- Vatican_osm.fpa: entropy drops from 7.88 to **4.89** (clearly structured data)
+- Latin padding text found: "Nihil est incertius vulgo..." (Cicero quote used as filler)
+- Header `SET` is consistent across all FBL/FPA files
+
+**Note:** SPC files may use a different XOR offset or format — the decrypted header
+is different (`a1 dc 33 5d` instead of `SET`).
 
 ### Data Source
 
