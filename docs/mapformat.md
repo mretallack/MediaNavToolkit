@@ -338,6 +338,98 @@ pre-made POI files (speed cameras, fuel stations, restaurants, etc.) in various
 formats including KML. Their [iGO 8 HOWTO](http://www.poi-factory.com/node/34380)
 documents the import process.
 
+
+## Task List — Reading Map Files
+
+### Phase 1: Understand the Encryption
+
+- [ ] **T1.** Extract a small `.fbl` file from the disk backup for analysis
+  - Use `Vatican_osm.fbl` (11 KB) — smallest file, fast to work with
+  - Also extract `Vatican_osm.fpa` (1.5 KB) for comparison
+- [ ] **T2.** Compare the first 64 bytes of multiple `.fbl` files
+  - Extract 5-6 country files of different sizes
+  - Document which bytes are constant vs variable
+  - The magic `f9 6d 4a 16 6f c5 78 ee` is bytes 0-7 — what are bytes 8-63?
+- [ ] **T3.** Compare `.fbl` vs `.fpa` for the same country
+  - Report says they share "nearly identical first 64 bytes, differing only at
+    offsets 0x10–0x13 and 0x1E" — verify this and document the exact differences
+  - These differing bytes likely encode file type or size
+- [ ] **T4.** Check if the magic bytes are a key or just a signature
+  - XOR the magic bytes with known plaintext guesses (e.g., file size, "NNG", version)
+  - If the magic is constant across all files, it's a signature not a key
+
+### Phase 2: Find the Decryption Key
+
+- [ ] **T5.** Analyse the `.lyc` license file structure
+  - We already know the RSA layer (see `docs/license-system.md`)
+  - After RSA decryption: 40-byte header with magic `0x36C8B267`
+  - The XOR-CBC key is at header bytes 8-24
+  - **Question:** Is this XOR-CBC key also the map decryption key?
+- [ ] **T6.** Check if the map encryption uses the same XOR-CBC as `.lyc` files
+  - Take the XOR-CBC key from a decrypted `.lyc` header
+  - Try XOR-CBC decrypting `Vatican_osm.fbl` starting after the 8-byte magic
+  - If the result has lower entropy or recognisable structure → we found the key
+- [ ] **T7.** If T6 fails, look for the decryption in `nngine.dll`
+  - The DLL must decrypt maps at runtime to render them
+  - Search Ghidra for references to the magic bytes `f9 6d 4a 16`
+  - Find the function that reads `.fbl` files — it must call a decryption routine
+  - Trace the key source (from `.lyc`? from `device.nng`? hardcoded?)
+- [ ] **T8.** Check if the `content.nng` file inside downloaded zips contains a key
+  - The language pack zips have `content.nng` — extract and examine
+  - May use the same NNGE format as `device.nng` (XOR-encoded)
+
+### Phase 3: Decrypt a Map File
+
+- [ ] **T9.** Implement the decryption in Python
+  - Once the algorithm and key source are known
+  - Start with `Vatican_osm.fbl` (smallest file)
+  - Verify: decrypted output should have lower entropy and recognisable structure
+- [ ] **T10.** Verify decryption against multiple files
+  - Decrypt 3-4 different country `.fbl` files
+  - Check that all produce valid output
+  - Compare file sizes — decrypted size should match `.stm` `size` field
+
+### Phase 4: Understand the Decrypted Format
+
+- [ ] **T11.** Identify the internal structure of decrypted `.fbl`
+  - Look for a header with version, bounding box, layer count
+  - Search for recognisable patterns: coordinate pairs, string tables, road names
+- [ ] **T12.** Cross-reference with OpenStreetMap data
+  - Download the same country from Geofabrik (e.g., Vatican PBF)
+  - Look for matching road names, coordinate values, node counts
+  - This confirms we decrypted correctly and helps map the binary structure
+- [ ] **T13.** Document the `.fbl` internal format
+  - Header structure
+  - How coordinates are encoded (fixed-point? delta-encoded?)
+  - How road segments, names, and attributes are stored
+  - Layer/zoom level organisation
+- [ ] **T14.** Parse `.fpa` (address search) format
+  - Likely a different internal structure optimised for text search
+  - May contain street name → coordinate index
+- [ ] **T15.** Parse `.poi` format
+  - POI name, category, coordinates
+  - May be simpler than `.fbl` since it's just point data
+- [ ] **T16.** Parse `.spc` (speed camera) format
+  - GPS coordinates + speed limit + camera type
+  - Smallest and simplest format — good starting point after decryption
+
+### Phase 5: Build Tools
+
+- [ ] **T17.** `tools/maps/decrypt_fbl.py` — decrypt a `.fbl` file given the key
+- [ ] **T18.** `tools/maps/fbl_info.py` — show header info, bounding box, stats
+- [ ] **T19.** `tools/maps/fbl_to_geojson.py` — convert road network to GeoJSON for viewing
+- [ ] **T20.** `tools/maps/spc_to_csv.py` — convert speed cameras to CSV (lat, lon, speed, type)
+
+### Key Question
+
+The entire effort hinges on **T5-T7**: finding the decryption key. If the key is
+derived from the `.lyc` license (which we can already RSA-decrypt), then we can
+read the maps. If it's a device-specific hardware key, we'd need to extract it
+from the head unit.
+
+The most promising path is T6 — trying the `.lyc` XOR-CBC key on the map data.
+If that works, everything else follows.
+
 ## References
 
 - [iGO (software) — Wikipedia](https://en.wikipedia.org/wiki/IGO_(software))
