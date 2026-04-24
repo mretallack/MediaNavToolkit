@@ -9,6 +9,7 @@ Usage:
     python tools/maps/decrypt_fbl.py tools/maps/testdata/Vatican_osm.fbl -o vatican.dec
     python tools/maps/decrypt_fbl.py tools/maps/testdata/ -o decrypted/
 """
+
 import math
 import struct
 import sys
