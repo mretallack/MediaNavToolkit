@@ -575,3 +575,34 @@ as raw bytes in the section.
 
 This is the deepest layer of the format and would require significant reverse
 engineering effort to fully decode.
+
+### Road Segment Structure (Partially Decoded)
+
+Between each pair of junction coordinates (full int32), there's a **12-byte segment
+metadata record**:
+
+```
+[4B zero][1B road_type][1B zero][1B flags(0x05)][1B zero][2B shape_offset][2B shape_count]
+```
+
+| Offset | Size | Example | Meaning |
+|--------|------|---------|---------|
+| 0-3 | 4B | `00 00 00 00` | Reserved/padding |
+| 4 | 1B | `0x95`, `0x9A`, `0xA5` | Road type/speed class |
+| 5 | 1B | `0x00` | Zero |
+| 6 | 1B | `0x05` | Flags (constant) |
+| 7 | 1B | `0x00` | Zero |
+| 8-9 | 2B | `45614`, `45613`, `18834` | Shape data offset/index |
+| 10-11 | 2B | `43`, `43`, `40` | Shape point count |
+
+The **shape point count** (uint16 at offset 10) indicates how many intermediate
+points define the road curve between the two junction endpoints. Values of 40-43
+suggest detailed road shapes with ~40 points per segment.
+
+The **shape data offset** (uint16 at offset 8) likely references into the bulk
+data section (section 16, 5959 bytes) where the actual intermediate coordinates
+are stored in compressed form.
+
+This means the geometry is stored in two layers:
+1. **Junction nodes** — full int32 coordinate pairs (already extracted)
+2. **Shape points** — compressed intermediate points referenced by offset+count
