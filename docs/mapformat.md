@@ -722,3 +722,26 @@ After XOR-CBC decryption (NNG variant: `output = input XOR running_key; running_
 ```
 
 Verified on all three license files. Product names and SWIDs clearly readable.
+
+### Shape Data Decryption — Current Status
+
+The shape point data (section 16, bulk geometry) has a second encryption layer
+that is NOT broken by the XOR table. The data has near-uniform byte distribution
+(entropy 7.97) confirming encryption, not just compression.
+
+**What we've tried:**
+- All `.lyc` RSA payload fields as Blowfish keys — entropy ~5.7 (partial)
+- SET header bytes as Blowfish keys — no improvement
+- Section start bytes as keys — no improvement
+- Every 16-byte window in the file — best entropy 5.36
+
+**What we know:**
+- `FUN_10064bc0` uses Blowfish to decrypt a 16-byte content key
+- The Blowfish master key is at `param_1+4` in the map object (16 bytes)
+- The constructor `FUN_10063e20` reads 130 bytes from the file into this area
+- The function returns a single uint32, not bulk-decrypted data
+
+**Remaining approach:**
+Unicorn emulation of `FUN_10063e20` (constructor) to trace exactly which
+file bytes become the Blowfish key, and `FUN_10064bc0` to see the decrypted
+content key. This requires setting up the file stream and map object in Unicorn.
