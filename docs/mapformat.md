@@ -629,3 +629,34 @@ but doesn't produce valid coordinates. The shape data key is likely:
 
 **Next step:** Trace `FUN_10118080` with Unicorn to capture the actual key bytes
 passed during map file loading.
+
+### Key Hierarchy (from DLL analysis)
+
+The shape data encryption uses a **three-level key hierarchy**:
+
+```
+.lyc license → RSA decrypt → master_key (16 bytes)
+                                ↓
+SET file → encrypted_content_key (16 bytes at offset ~0xa0 in map object)
+                                ↓
+master_key + Blowfish → decrypted_content_key
+                                ↓
+content_key + ??? → decrypted shape points
+```
+
+**DLL function `FUN_10064bc0`:**
+1. Reads encrypted content key from the SET file (16 bytes)
+2. Initializes Blowfish with the master key (16 bytes from `param_1+4`)
+3. Decrypts the content key
+4. Returns the decrypted key for use in geometry decompression
+
+**Blocker:** The master key comes from the `.lyc` license file, which is
+RSA-encrypted with a 2048-bit key. We have the public key but NOT the private
+key. Without the private key, we cannot:
+- Decrypt the `.lyc` to get the master key
+- Decrypt the content key
+- Decrypt the shape point data
+
+This is a proper DRM system. The shape geometry is protected by RSA + Blowfish.
+The junction coordinates and metadata are only protected by the XOR table
+(which we've already broken), but the detailed road shapes require the license.
