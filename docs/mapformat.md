@@ -78,14 +78,14 @@ Routing optimization data — pre-computed route weights based on historical tra
 
 ### SPC — Speed Cameras (Confirmed)
 
-**What we know:**
+**Fully parsed ✅:**
 - Country-level files with `_osm` suffix
-- Very small (450 bytes for Andorra, 61 KB for France, 44 KB for UK)
-- Different magic bytes: **`0b f4 2d 4b 0f c3 7f ce`**
-- Also encrypted (high entropy)
-- The [SCDB.info](https://www.scdb.info/en/installation-igo/) project provides
-  compatible speed camera databases — but these may use a different (unencrypted) format
-  for older iGO versions
+- Different header magic: `a1 dc 33 5d` (after XOR decryption)
+- Same XOR table decryption, same UTF-16LE metadata section
+- **12-byte camera records:** `[lon:int32][lat:int32][flags:u16][speed:u8][type:u8]`
+- Coordinates: int32 / 2^23 = WGS84 degrees (same as FBL)
+- Speed in km/h (90, 70, 60, 0=unknown)
+- Verified: 14 cameras in Andorra with correct GPS coordinates
 
 ### TMC — Traffic Message Channel (Confirmed)
 
