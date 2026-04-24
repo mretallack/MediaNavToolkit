@@ -211,14 +211,31 @@ as `device.nng`.
 ## What Would Be Needed to Reverse-Engineer
 
 To fully understand the `.fbl` format, you would need:
-1. Access to actual `.fbl` files (on the head unit's internal storage)
-2. Hex analysis of the file header to identify magic bytes and structure
-3. Comparison of multiple country files to identify common patterns
-4. Cross-reference with known road network data (OSM) to identify encoding
-5. Analysis of `nngine.dll` map loading functions (Ghidra)
+1. ~~Access to actual `.fbl` files~~ — **DONE** (`disk-backup-with-map-Apr2026.zip` has 119 files)
+2. Hex analysis of the file header to identify magic bytes and structure — **DONE** (magic bytes identified)
+3. The decryption key or algorithm — **BLOCKER** (key is inside RSA-encrypted `.lyc`)
+4. Comparison of decrypted data with known road network data (OSM) to identify encoding
+5. Analysis of `nngine.dll` map loading/decryption functions (Ghidra)
 
 The map rendering and routing code in `nngine.dll` would be the definitive reference
 for the format, but it's a massive undertaking (the DLL is 3.3 MB of compiled code).
+
+## Prior Art — Has Anyone Reversed This?
+
+**No.** As of 2026, nobody has publicly reversed the NNG FBL map encryption.
+
+- **No public decryption tools** — despite extensive searching, no working FBL decryptor
+  exists on GitHub, GPSPower, XDA, or any GPS forum
+- **"Fbl2kml"** — referenced on one site as a tool by "a Russian programmer named Alexey",
+  but no download link, source code, or confirmation it exists
+- **"NNG TOOL"** — a GPSPower thread discusses a tool for `device.nng` decryption
+  (which we've already solved), not map data
+- **Older iGO 8** used **unencrypted** `.fbl` files that could be freely copied between
+  devices. NNG added encryption in Primo/NextGen specifically to prevent piracy
+- **The GPS community works around it** — sharing pre-built packages for older unencrypted
+  versions, or using NaviExtras Toolbox for newer encrypted versions
+- **Maps are device-locked** — encrypted `.fbl` files can't be copied to another device
+  without the matching `.lyc` license
 
 
 ## Custom POI Format (Dealership POI / Userdata POI)
