@@ -23,16 +23,23 @@ This project reverse-engineers the NaviExtras wire protocol and reimplements it 
 
 ## Current Status
 
-**Working end-to-end:**
-- ✅ USB drive detection and device identity reading
-- ✅ Device registration with NaviExtras server
-- ✅ Full authentication flow (boot → login → fingerprint → delegator → senddevicestatus)
-- ✅ Wire protocol encryption fully solved (SnakeOil xorshift128 cipher)
-- ✅ Catalog browsing — 38 items (maps, POIs, safety cameras) from live server
-- ✅ Free content purchase via web API (e.g., Dealership POI)
-- ✅ License fetching — `.lyc` files downloaded live from server (no replay needed)
-- ✅ License installation to USB drive (`.lyc` + `.lyc.md5`)
-- ✅ 219 unit tests passing
+**Protocol fully reverse-engineered.** All cryptographic parameters derived from credentials — no captured data or hardcoded values needed.
+
+| Component | Status |
+|-----------|--------|
+| Wire protocol encryption (SnakeOil xorshift128) | ✅ Solved |
+| Delegated request generation (`build_dynamic_request`) | ✅ Byte-exact match with captured data |
+| Session key derivation | ✅ Solved: `creds.secret` (toolbox Secret) |
+| HMAC-MD5 delegation auth | ✅ Verified against captured logs |
+| USB detection + device identity | ✅ Working |
+| Device registration | ✅ Working |
+| Authentication (login → fingerprint → delegator) | ✅ Working |
+| Catalog browsing (38 items) | ✅ Working |
+| License fetch + install | ✅ Working |
+| **senddevicestatus → server** | **✅ Returns HTTP 200** |
+| Full sync pipeline | ❌ Not yet wired end-to-end |
+
+**326 tests passing** (57 wire format tests including golden round-trip verification).
 
 ## Requirements
 
@@ -164,26 +171,28 @@ medianav_toolbox/
 ├── protocol.py          # Wire protocol envelope (header + SnakeOil)
 ├── session.py           # Full session flow orchestration
 ├── swid.py              # SWID generation (MD5 + Crockford base32)
-└── wire_codec.py        # Request body encoder
+├── wire_codec.py        # Request body encoder
+└── wire_message.py      # Structured wire message decode/encode
 ```
 
 ### Protocol Overview
 
-The NaviExtras API uses a custom binary wire protocol:
+The NaviExtras API uses a custom binary wire protocol over HTTPS:
 
+**Standard requests** (login, fingerprint, register):
 ```
-[16B header] [SnakeOil-encrypted query] [SnakeOil-encrypted body]
-
-Header: [0x01] [0xC2 0xC2] [mode] [8B key] [svc_minor] [0x00 0x00] [nonce]
-Mode:   0x20 = RANDOM (unauthenticated), 0x30 = DEVICE (authenticated)
-Key:    Code (for query encryption), Secret (for body encryption)
+[16B header] [SnakeOil(query, Code)] [SnakeOil(body, Secret)]
 ```
 
-For delegated requests (flags=0x68), the body is split-encrypted:
+**Delegated requests** (senddevicestatus):
 ```
-[16B header] [SnakeOil(25B query, Code)] [SnakeOil(17B prefix, Secret)] [SnakeOil(body, Secret)]
+[16B header] [1B prefix] [SnakeOil(query, Secret)] [SnakeOil(body, Secret)]
 ```
-Each SnakeOil segment uses a fresh PRNG state.
+Each SnakeOil call resets the PRNG independently. The session key is `creds.secret`
+(toolbox Secret from registration). The body is standard plaintext format.
+
+See [docs/chain-encryption.md](docs/chain-encryption.md) for the complete payload
+construction recipe with test vectors.
 
 Full session flow:
 ```
@@ -192,13 +201,12 @@ Full session flow:
 3. Login         → JSESSIONID             (DEVICE mode)
 4. Fingerprint   → 200                    (DEVICE mode)
 5. Delegator     → head unit credentials  (DEVICE mode)
-6. DeviceStatus  → 200 (×2: D802 + D803) (DEVICE mode, 0x60 flags)
-7. Licenses      → .lyc file data         (DEVICE mode, 0x20 flags)
-8. Web login     → authenticated session  (HTTP form POST)
-9. Catalog       → content tree + sizes   (HTTP GET/POST)
+6. DeviceStatus  → 200                    (delegated, session_key = creds.secret)
+7. Web login     → authenticated session  (HTTP form POST)
+8. Catalog       → content tree + sizes   (HTTP GET/POST)
 ```
 
-See [toolbox.md](.kiro/specs/medianav-toolbox/toolbox.md) for detailed reverse engineering notes.
+See [docs/reverse-engineering.md](docs/reverse-engineering.md) for full protocol documentation.
 
 ## License
 

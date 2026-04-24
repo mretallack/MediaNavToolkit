@@ -3,14 +3,13 @@
     "boot",
     "register (cached)",
     "login",
-    "sendfingerprint",
-    "getprocess",
-    "delegator",
-    "register_hu_device (cached/409)",
-    "senddevicestatus",
-    "web_login",
     "licenses",
-    "getprocess2"
+    "getprocess",
+    "sendfingerprint",
+    "senddevicestatus_0x60=409",
+    "delegator",
+    "senddevicestatus_delegated=409",
+    "web_login"
   ],
   "errors": [],
   "fingerprint_status": 200,
@@ -19,6 +18,5 @@
     "index_v3": "https://zippy.naviextras.com/services/index/rest/3",
     "register": "https://zippy.naviextras.com/services/register/rest/1",
     "selfie": "https://zippy.naviextras.com/services/selfie/rest/1"
-  },
-  "getprocess_body_hex": "0100c2bcbc"
+  }
 }

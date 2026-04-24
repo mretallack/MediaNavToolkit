@@ -27,9 +27,8 @@ values needed.
 
 ## Remaining ❌
 
-- [ ] **Live server 409s** — senddevicestatus returns 409 (server-side issue, not format)
 - [ ] **`sync` command** — full pipeline not yet wired end-to-end
-- [ ] **Paid content** — requires working senddevicestatus to establish content rights
+- [ ] **Paid content** — requires working delegated senddevicestatus to establish content rights
 
 ## Key Files
 

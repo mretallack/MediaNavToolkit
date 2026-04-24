@@ -93,6 +93,8 @@ def run_session(
 
         result["device_creds"] = creds
 
+        # --- Correct sequence (from run26 fresh session capture) ---
+        # 1. Login
         session = _login_wire(client, creds)
         result["session"] = session
         result["market_url"] = MARKET_BASE
@@ -102,16 +104,49 @@ def run_session(
             result["errors"].append("Login failed")
             return result
 
+        # 2. Licenses (early check)
+        try:
+            licenses = get_licenses(client, creds, session)
+            result["licenses"] = licenses
+            result["steps"].append("licenses")
+        except Exception:
+            result["licenses"] = []
+
+        # 3. GetProcess
+        gp_resp = _get_process(client, creds, session)
+        result["getprocess_status"] = gp_resp.status_code
+        result["steps"].append("getprocess")
+
+        # 4. SendFingerprint
         fp_resp = _send_fingerprint(client, creds, session)
         result["fingerprint_status"] = fp_resp.status_code
         result["steps"].append("sendfingerprint")
 
-        gp_resp = _get_process(client, creds, session)
-        result["getprocess_status"] = gp_resp.status_code
-        result["getprocess_body"] = gp_resp.content
-        result["steps"].append("getprocess")
+        # 5. Device descriptor list + hasActivatableService + model list
+        try:
+            from medianav_toolbox.api.register import (
+                get_device_descriptor_list,
+                get_device_model_list,
+            )
 
-        # 5. Get head unit credentials via delegator
+            get_device_descriptor_list(client, endpoints, creds)
+            result["steps"].append("get_device_descriptor_list")
+
+            _has_activatable_service(client, endpoints, creds, session)
+            result["steps"].append("hasActivatableService")
+
+            get_device_model_list(client, endpoints)
+            result["steps"].append("get_device_model_list")
+        except Exception:
+            pass  # non-fatal — these provide context but may not be required
+
+        # 6. SendDeviceStatus (0x60 — standard, with tb credentials)
+        ds_resp = _send_device_status_0x60(client, creds, session, usb_path, device)
+        result["devicestatus_0x60"] = ds_resp.status_code
+        result["steps"].append(f"senddevicestatus_0x60={ds_resp.status_code}")
+
+        # 7. Delegator → head unit credentials
+        hu_creds = None
         try:
             hu_creds = get_delegator_credentials(
                 client,
@@ -121,56 +156,19 @@ def run_session(
             )
             result["steps"].append("delegator")
 
-            # 5b. Register HU device separately (for 0x68 flag requests)
-            from medianav_toolbox.api.register import register_hu_device
-
-            hu_dev_creds = _load_hu_dev_creds(usb_path)
-            if hu_dev_creds is None:
-                hu_dev_creds = register_hu_device(
-                    client,
-                    endpoints,
-                    tb_creds=creds,
-                    appcid=device.appcid,
-                )
-                if hu_dev_creds:
-                    _save_hu_dev_creds(usb_path, hu_dev_creds)
-                    result["steps"].append("register_hu_device")
-                else:
-                    result["steps"].append("register_hu_device (cached/409)")
-            else:
-                result["steps"].append("register_hu_device (cached)")
-
-            # 6. Send device status (0x60 only — 0x68 comes after web login)
-            ds_resp = _send_device_status(client, creds, hu_creds, session, usb_path, device)
-            result["devicestatus_status"] = ds_resp.status_code
-            result["steps"].append("senddevicestatus")
+            # 8. SendDeviceStatus (delegated — with hu credentials)
+            ds_resp2 = _send_device_status(client, creds, hu_creds, session, usb_path, device)
+            result["devicestatus_delegated"] = ds_resp2.status_code
+            result["steps"].append(f"senddevicestatus_delegated={ds_resp2.status_code}")
         except RuntimeError:
-            hu_creds = None
-            pass  # delegator/senddevicestatus are optional for basic flow
+            pass  # delegator optional for basic flow
 
-        # 7. Web login (for /toolbox/ pages like catalog, managecontent)
+        # 9. Web login (for /toolbox/ pages like catalog, managecontent)
         if username and session.jsessionid:
             web_jsid = web_login(session.jsessionid, username, password)
             if web_jsid:
                 result["web_jsessionid"] = web_jsid
                 result["steps"].append("web_login")
-
-        # 8. Fetch licenses (available .lyc files)
-        try:
-            licenses = get_licenses(client, creds, session)
-            result["licenses"] = licenses
-            result["steps"].append("licenses")
-
-            # 9. Second getprocess with license SWIDs (triggers download tasks)
-            swids = list({lic.swid for lic in licenses})
-            if swids:
-                gp2 = _get_process(client, creds, session, swids=swids)
-                result["getprocess2_status"] = gp2.status_code
-                result["getprocess2_body"] = gp2.content
-                result["getprocess2_swids"] = swids
-                result["steps"].append("getprocess2")
-        except Exception:
-            result["licenses"] = []
 
     return result
 
@@ -234,6 +232,39 @@ def _get_process(client, creds, session, swids=None):
     )
     return client.post(
         f"{MARKET_BASE}/1/getprocess",
+        content=wire,
+        headers=_wire_headers(session),
+    )
+
+
+def _send_device_status_0x60(client, creds, session, usb_path, device):
+    """Send standard 0x60 device status (tb credentials, variant=0x02)."""
+    from medianav_toolbox.device_status import build_live_senddevicestatus
+
+    body = build_live_senddevicestatus(usb_path, variant=0x02)
+    cred_block = build_credential_block(creds.name)
+    query = bytes([0x40, 0x20]) + cred_block
+    wire = build_request(
+        query=query, body=body,
+        service_minor=SVC_MARKET, code=creds.code, secret=creds.secret,
+    )
+    return client.post(
+        f"{MARKET_BASE}/1/senddevicestatus",
+        content=wire,
+        headers=_wire_headers(session),
+    )
+
+
+def _has_activatable_service(client, endpoints, creds, session):
+    """Call hasActivatableService — empty body, service minor 0x0E."""
+    cred_block = build_credential_block(creds.name)
+    query = bytes([0xC4, 0x20]) + cred_block
+    wire = build_request(
+        query=query, body=b"",
+        service_minor=SVC_REGISTER, code=creds.code, secret=creds.secret,
+    )
+    return client.post(
+        f"{endpoints.register}/hasActivatableService",
         content=wire,
         headers=_wire_headers(session),
     )

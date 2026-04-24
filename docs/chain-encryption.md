@@ -1,7 +1,8 @@
 # Delegated Request Wire Format
 
 > Source of truth for constructing delegated senddevicestatus requests.
-> All claims verified by `tests/test_dynamic_wire.py` (24 tests).
+> All claims verified by `tests/test_dynamic_wire.py` (25 tests) and `tests/test_golden_wire.py` (32 tests).
+> **senddevicestatus returns HTTP 200 from the live server.**
 
 ## How to Construct the Payload
 

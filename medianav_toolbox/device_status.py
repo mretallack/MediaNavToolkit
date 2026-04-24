@@ -66,7 +66,7 @@ def _encode_e0_entry(md5_content: str, md5_file: str, fname: str,
     return (
         b"\xe0"
         + encode_string(md5_content)
-        + b"\x0a\xa0"
+        + b"\x08\xa0"
         + encode_string(md5_file)
         + encode_string(fname)
         + encode_string(mount)
@@ -78,7 +78,8 @@ def _encode_e0_entry(md5_content: str, md5_file: str, fname: str,
 
 
 def build_live_senddevicestatus(usb_path: Path, variant: int = 0x02,
-                                uniq_id_override: str = "") -> bytes:
+                                uniq_id_override: str = "",
+                                drive_path: str = "E:\\") -> bytes:
     """Build senddevicestatus body from live USB contents.
 
     Args:
@@ -155,10 +156,16 @@ def build_live_senddevicestatus(usb_path: Path, variant: int = 0x02,
             "license", "primary", "NaviSync", _file_ts_ms(license_dir)
         )
 
-    # All files in NaviSync/license/
+    # All files in NaviSync/license/ — device.nng first, then others sorted
     if license_dir.exists():
+        device_nng = license_dir / "device.nng"
+        if device_nng.exists():
+            entries += _encode_file_entry(
+                _md5_file(device_nng), "device.nng", "primary", "NaviSync/license",
+                device_nng.stat().st_size, _file_ts_ms(device_nng),
+            )
         for f in sorted(license_dir.iterdir()):
-            if f.is_file():
+            if f.is_file() and f.name != "device.nng":
                 entries += _encode_file_entry(
                     _md5_file(f), f.name, "primary", "NaviSync/license",
                     f.stat().st_size, _file_ts_ms(f),
@@ -174,7 +181,7 @@ def build_live_senddevicestatus(usb_path: Path, variant: int = 0x02,
         + encode_int64(0)  # minfree
         + b"\x00\x00\x00\x00\x00\x00"  # padding
         + b"\x10\x00"  # blocksize 4096
-        + encode_string("/mnt/pen")
+        + encode_string(drive_path)
         + encode_string(info_str)
     )
 

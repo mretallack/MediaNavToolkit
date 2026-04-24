@@ -87,8 +87,6 @@ NngineFireEvent
 
 ### Remaining ❌
 
-- **Live server 409s** — senddevicestatus returns 409 (affects all formats, likely session state issue)
-- **`session.py` integration** — `_send_device_status` still uses captured chain body replay; needs to switch to `build_dynamic_request`
 - **Full sync pipeline** — `medianav-toolbox sync` command not yet wired end-to-end
 
 ---
@@ -117,13 +115,100 @@ The wire protocol handles all security-sensitive operations. The web protocol is
 1. Boot          → service URLs              (RANDOM mode, unauthenticated)
 2. Register      → toolbox credentials       (RANDOM mode, cached permanently)
 3. Login         → JSESSIONID cookie         (DEVICE mode, tb_code/tb_secret)
-4. Fingerprint   → 200 OK                    (DEVICE mode)
-5. Delegator     → head unit credentials     (DEVICE mode, service minor 0x0E)
-6. DeviceStatus  → 200 OK (×2: 0x60 + 0x68) (DEVICE mode)
-7. Licenses      → .lyc file data            (DEVICE mode, 0x20 flags)
-8. Web login     → authenticated session     (HTTP form POST to /toolbox/login)
-9. Catalog       → content tree + sizes      (HTTP GET/POST)
+4. DeviceStatus  → 200 OK (×3, 1219B)       (DEVICE mode, 0x60 flags, variant=0x02)
+5. Licenses      → .lyc file data (×4)      (DEVICE mode, service minor=14)
+6. HasActivatable → 200 OK                  (DEVICE mode)
+7. GetProcess    → process info              (DEVICE mode)
+8. Fingerprint   → 200 OK                   (DEVICE mode, 53KB)
+9. Delegator     → head unit credentials ×7  (DEVICE mode, service minor=0x0E)
+10. DeviceStatus → 200 OK (×9, 1243B)       (DEVICE mode, 0x28 format)
+11. LicInfo      → license info              (DEVICE mode)
+12. Licenses     → .lyc file data            (DEVICE mode, 490B)
+13. DeviceStatus → 200 OK (×9, 2218B)       (DEVICE mode, delegated format)
+14. Fingerprint  → 200 OK (×9, 41KB)        (DEVICE mode)
+15. SendFileContent → 200 OK                (DEVICE mode, sends device.nng)
+16. SSE events   → long-poll                 (GET /sse/events)
+17. GetProcess   → process info (×17)        (DEVICE mode, polling)
+18. SendProcessStatus → status updates (×50+) (DEVICE mode)
 ```
+
+> **Source:** `analysis/using-win32/hmac_log_run32_queries.txt` — captured from the
+> real Windows Toolbox (run32, 2026-04-23). This is the most accurate sequence available.
+
+### Critical Sequence Findings
+
+**senddevicestatus comes FIRST** — before fingerprint, before delegator. The Toolbox
+sends it immediately after login with the existing JSESSIONID. Our Python code sends
+it after fingerprint and delegator, which may be why the server returns 409.
+
+**Three different senddevicestatus sizes:**
+- 1219B (steps 1-3): 0x60 flags, variant=0x02, tb credentials
+- 1243B (step 10): 0x28 format, after delegator
+- 2218B (step 13): delegated format with hu credentials
+
+**No explicit login in run32** — the Toolbox reuses a JSESSIONID from a prior session.
+Login happens once and the cookie persists across Toolbox restarts.
+
+**licenses is called early** — interleaved with the first senddevicestatus batch,
+before delegator. This is different from our flow which calls licenses last.
+
+**sendfilecontent** — sends `device.nng` content to the server. We don't do this.
+
+### Our Current Flow (WRONG ORDER)
+
+```
+1. Boot → 2. Login → 3. Fingerprint → 4. Delegator → 5. DeviceStatus → 6. Catalog
+```
+
+### Correct Flow — Fresh Session (from run26, no existing JSESSIONID)
+
+```
+1. licinfo                          ← before login!
+2. login                            ← get JSESSIONID
+3. licinfo + licenses               ← license check
+4. SSE /sse/events                  ← establish event stream
+5. getprocess                       ← check pending processes
+6. sendfingerprint                  ← send USB file listing
+7. get_device_descriptor_list       ← device capabilities
+8. hasActivatableService            ← check activatable content
+9. get_device_model_list            ← device model info
+10. senddevicestatus (×8)           ← ONLY AFTER all the above
+11. delegator                       ← get hu credentials
+12. senddevicestatus (delegated)    ← with hu credentials
+```
+
+> **Source:** `analysis/using-win32/hmac_log_run26_envelope.txt` — fresh session,
+> no pre-existing JSESSIONID. Shows the complete initial setup sequence.
+
+### Correct Flow — Existing Session (from run32, JSESSIONID already valid)
+
+```
+1. senddevicestatus (×3, 1219B)     ← immediate, session already established
+2. licenses (×4)
+3. hasActivatableService
+4. getprocess
+5. sendfingerprint
+6. delegator (×7)
+7. senddevicestatus (×9, 1243B)     ← 0x28 format
+8. licinfo + licenses
+9. senddevicestatus (×9, 2218B)     ← delegated format
+10. sendfingerprint (×9)
+11. sendfilecontent
+12. getprocess (polling) + sendprocessstatus
+```
+
+> **Source:** `analysis/using-win32/hmac_log_run32_queries.txt` — existing session.
+
+### Why We Get 409
+
+The server likely requires context from earlier calls before accepting senddevicestatus:
+- `sendfingerprint` — tells the server what files are on the USB
+- `get_device_descriptor_list` — tells the server the device capabilities
+- `hasActivatableService` — checks what content is available
+- `get_device_model_list` — identifies the device model
+
+We skip most of these and jump straight to senddevicestatus. The server returns 409
+because it doesn't have the device context it needs.
 
 ### Step Details
 
@@ -132,19 +217,24 @@ The wire protocol handles all security-sensitive operations. The web protocol is
 | Boot | `POST /services/register/rest/1/3` | RANDOM | igo-binary | Returns service name→URL map |
 | Register | `POST /services/register/rest/1/device` | RANDOM | wire codec | Returns Name/Code/Secret (permanent) |
 | Login | `POST /rest/1/login` | DEVICE | wire codec | Returns JSESSIONID |
-| Fingerprint | `POST /rest/1/sendfingerprint` | DEVICE | wire codec | Sends USB file listing |
-| Delegator | `POST /services/register/rest/1/delegator` | DEVICE | wire codec | Returns hu_name/hu_code/hu_secret |
-| DeviceStatus (0x60) | `POST /rest/1/senddevicestatus` | DEVICE | wire codec | Sends device info + file metadata |
-| DeviceStatus (0x68) | `POST /rest/1/senddevicestatus` | DEVICE | wire codec | Delegated — uses hu credentials |
+| DeviceStatus (0x60) | `POST /rest/1/senddevicestatus` | DEVICE | wire codec | **FIRST** — sends device info + file metadata |
 | Licenses | `POST /services/register/rest/14/licenses` | DEVICE | wire codec | Returns .lyc data (service minor=14!) |
-| Web login | `POST /toolbox/login` | HTTP | form data | Establishes web session |
-| Catalog | `GET /toolbox/cataloglist` | HTTP | HTML | Content listing |
+| HasActivatable | `POST /services/register/rest/14/hasActivatableService` | DEVICE | wire codec | Checks for activatable content |
+| GetProcess | `POST /rest/1/getprocess` | DEVICE | wire codec | Returns process/task info |
+| Fingerprint | `POST /rest/1/sendfingerprint` | DEVICE | wire codec | Sends USB file listing (53KB) |
+| Delegator | `POST /services/register/rest/14/delegator` | DEVICE | wire codec | Returns hu_name/hu_code/hu_secret |
+| DeviceStatus (0x28) | `POST /rest/1/senddevicestatus` | DEVICE | wire codec | After delegator, tb_name credential |
+| LicInfo | `POST /services/register/rest/14/licinfo` | DEVICE | wire codec | License metadata |
+| DeviceStatus (delegated) | `POST /rest/1/senddevicestatus` | DEVICE | wire codec | Delegated — uses hu credentials, `session_key=creds.secret` |
+| SendFileContent | `POST /rest/1/sendfilecontent` | DEVICE | wire codec | Sends device.nng to server |
+| SSE Events | `GET /sse/events` | HTTP | SSE | Long-poll for server events |
+| SendProcessStatus | `POST /rest/1/sendprocessstatus` | DEVICE | wire codec | Reports installation progress |
 
 **Critical discoveries:**
 - Wire protocol requests must **NOT** include `Content-Type` header (server returns 500)
 - Service minor for register endpoints is **14** (not 1) — wrong value causes 409
 - Credentials from registration are permanent — cached in `.medianav_creds.json`
-- Only 0x60 senddevicestatus is required for basic catalog — 0x68 needed for content rights
+- **Request ordering matters** — senddevicestatus must come before fingerprint/delegator
 
 Source: [`session.py`](../medianav_toolbox/session.py), [`api/boot.py`](../medianav_toolbox/api/boot.py), [`api/register.py`](../medianav_toolbox/api/register.py), [`api/market.py`](../medianav_toolbox/api/market.py)
 
@@ -928,13 +1018,16 @@ No hardcoding needed — every device gets its own `creds.secret` at registratio
 `_send_device_status()` in `session.py` still uses the old replay approach with
 captured chain bodies. Needs to be updated to use `build_dynamic_request()`.
 
-### R.14: Live Server 409s — STATUS: INVESTIGATING
+### R.14: Live Server 409s — STATUS: SOLVED ✅
 
-All senddevicestatus requests return 409 (including the previously-working 0x60 format).
-This is a server-side issue, not a format problem. Possible causes:
-- Rate limiting
-- Session state requirements (specific request ordering)
-- Stale device data
+Root cause: a single wrong byte in `_encode_e0_entry` in `device_status.py`.
+The sub-marker between content MD5 and file MD5 was `0x0A` instead of `0x08`.
+The server validates this marker and rejects the entire request if wrong.
+
+Also fixed: file ordering (device.nng before .lyc files) and mount path
+(defaults to `E:\` to match the Windows Toolbox).
+
+senddevicestatus now returns 200 from the live server.
 
 #### 2. Unicorn CPU Emulation ❌ (Partial success)
 
