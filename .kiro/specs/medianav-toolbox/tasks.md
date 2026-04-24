@@ -27,8 +27,9 @@ values needed.
 
 ## Remaining ❌
 
-- [ ] **`sync` command** — full pipeline not yet wired end-to-end
-- [ ] **Paid content** — requires working delegated senddevicestatus to establish content rights
+- [ ] **Map data file download** — sync handles selection + confirmation + license install,
+  but actual map data download not implemented (getprocess polling + file transfer + .stm writing).
+  Server only offers downloads when device reports older map versions.
 
 ## Key Files
 

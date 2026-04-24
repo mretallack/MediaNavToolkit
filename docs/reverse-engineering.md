@@ -87,7 +87,12 @@ NngineFireEvent
 
 ### Remaining ❌
 
-- **Paid content download** — sync command works for selection + confirmation, but actual file download from server not yet implemented (requires `getprocess` polling + file transfer)
+- **Map data file download** — sync command handles selection, confirmation, and license
+  installation, but downloading the actual map data files (hundreds of MB) is not yet
+  implemented. Requires `getprocess` polling for download URLs + file transfer + writing
+  `.stm` shadow files to USB. Note: the server only offers downloads when the device
+  reports older map versions — if the update is already installed on the head unit,
+  the server shows it as "installed" and doesn't provide download URLs.
 
 ---
 
