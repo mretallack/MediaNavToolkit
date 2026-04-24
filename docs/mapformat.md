@@ -760,3 +760,21 @@ come from an external source:
 
 The shape point data remains the only undecrypted part of the map format.
 All other data (metadata, coordinates, speed cameras, road topology) is accessible.
+
+### nngine.dll API Analysis
+
+The DLL exports only 12 functions. None pass encryption keys directly:
+- `NngineStart/Stop` — lifecycle
+- `NngineAttachConfig` — passes opaque config object from host app
+- `NngineConnectDevice/DisconnectDevice` — USB device management
+- `NngineFireEvent` — event dispatch
+
+The config object passed via `NngineAttachConfig` is the most likely source
+of the master key. On the head unit, the firmware creates this config object
+with device-specific parameters. The Toolbox creates a different config
+(without map rendering capabilities).
+
+The Blowfish key is set up when a map file is opened (in `FUN_10063e20`),
+not during `NngineStart`. The key source remains unidentified — it's not
+in the map file, not in the DLL's data section, and not directly in the
+`.lyc` RSA payload (though `.lyc` fields reduce entropy partially).
