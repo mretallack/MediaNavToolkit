@@ -778,3 +778,24 @@ The Blowfish key is set up when a map file is opened (in `FUN_10063e20`),
 not during `NngineStart`. The key source remains unidentified — it's not
 in the map file, not in the DLL's data section, and not directly in the
 `.lyc` RSA payload (though `.lyc` fields reduce entropy partially).
+
+### CORRECTION: Shape Data is Compressed, NOT Encrypted
+
+The high entropy (7.97) in the shape data section was initially interpreted as
+a second encryption layer. **This is likely wrong.** Evidence:
+
+1. **Deflate streams found** — zlib.decompress succeeds at multiple offsets within
+   section 16, producing valid decompressed data (up to 477 bytes)
+2. **The source data is OpenStreetMap** — freely available, no reason to encrypt
+3. **Entropy 7.97 is consistent with good compression** — Huffman/arithmetic coding
+   produces entropy 7.9-7.99, while encryption produces 7.99-8.00
+4. **The Blowfish code is for license management** — `FUN_10064bc0` decrypts a
+   16-byte content key, not bulk geometry data
+
+The shape data uses a **custom NNG compression codec** — likely a bitstream with
+variable-length coded coordinate deltas. The deflate hits are incidental (small
+sections may use standard deflate within the custom format).
+
+**This means the shape data is accessible** — it just needs the NNG codec to be
+reversed, not a decryption key. The codec is in `nngine.dll` and can be traced
+with Ghidra/Unicorn.
