@@ -159,6 +159,107 @@ To fully understand the `.fbl` format, you would need:
 The map rendering and routing code in `nngine.dll` would be the definitive reference
 for the format, but it's a massive undertaking (the DLL is 3.3 MB of compiled code).
 
+
+## Custom POI Format (Dealership POI / Userdata POI)
+
+The dealership POI files (e.g., `RenaultDealers.zip`, `DaciaDealers.zip`) are the
+most accessible content format on the MediaNav. They use **standard KML** inside a
+zip archive — a well-documented, open format.
+
+### How Custom POIs Work on iGO
+
+iGO reads POI data from `content/userdata/POI/` on the device. It supports:
+
+1. **Plain KML files** — `.kml` files placed directly in the POI folder
+2. **Zipped KML** — `.zip` files containing KML (what the dealership POIs use)
+3. **KMZ files** — Google Earth's zipped KML format
+
+The navigation engine scans this folder and shows custom POIs as a category
+in the "Find" / POI search menu.
+
+### Dealership POI Structure (Confirmed from `.stm` metadata)
+
+```
+content/userdata/POI/
+  RenaultDealers.zip          # 2.6 MB — Renault dealer locations
+  DaciaDealers.zip            # 963 KB — Dacia dealer locations
+  OpelDealers.zip             # 1.2 MB — Opel dealer locations
+  NissanDealers.zip           # 664 KB — Nissan dealer locations
+  FiatDealers.zip             # 1.1 MB — Fiat dealer locations
+  VauxhallDealers.zip         # varies — Vauxhall dealer locations
+  RenaultTrucksDealers.zip    # varies — Renault Trucks dealer locations
+  AvtovazDealers.zip          # 122 KB — Avtovaz (Lada) dealer locations
+```
+
+Each zip contains KML with dealer locations (name, address, GPS coordinates, phone).
+
+### KML Format (Standard — Well Documented)
+
+KML (Keyhole Markup Language) is an XML format originally from Google Earth:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>Renault Dealers</name>
+    <Folder>
+      <name>United Kingdom</name>
+      <Placemark>
+        <name>Renault London West</name>
+        <description>123 High Street, London W1</description>
+        <Point>
+          <coordinates>-0.1234,51.5678,0</coordinates>
+        </Point>
+      </Placemark>
+      <!-- more placemarks... -->
+    </Folder>
+  </Document>
+</kml>
+```
+
+### Creating Custom POIs
+
+Custom POIs can be created from any data source. The process:
+
+1. **Create a KML file** with your POI data (coordinates, names, descriptions)
+2. **Zip it** — iGO reads `.zip` files from the userdata/POI folder
+3. **Create a `.stm` shadow file** on the USB:
+   ```ini
+   purpose = shadow
+   size = 12345
+   content_id = 1082144207
+   header_id = 1514622542
+   timestamp = 1375186400
+   ```
+4. **Place on USB** at `NaviSync/content/userdata/POI/MyPOIs.zip.stm`
+5. **Sync to head unit** — the synctool copies the zip to internal storage
+
+**Important:** The `.stm` file tells the synctool to transfer the zip. Without it,
+the head unit won't pick up the file from the USB. The `content_id` should be unique.
+
+### License Requirement
+
+The `RenaultDealers_Pack.lyc` license covers the dealership POI **update mechanism**
+through NaviExtras. However, KML files placed directly in the POI folder may work
+without a license — the license gates the NaviExtras download, not the KML reader.
+*(Unconfirmed — needs testing on the actual head unit.)*
+
+### Tools for Creating KML POIs
+
+- **Google Earth** — export placemarks as KML
+- **Google My Maps** — create maps online, export as KML
+- **QGIS** — export any GIS data as KML
+- **GPSBabel** — convert between GPS formats (GPX ↔ KML ↔ CSV)
+- **Extra POI Editor** — Windows tool specifically for GPS POI management
+- **OpenStreetMap Overpass** — query OSM for POIs, export as KML
+
+### POI Factory
+
+[POI Factory](http://www.poi-factory.com/) is a community site with thousands of
+pre-made POI files (speed cameras, fuel stations, restaurants, etc.) in various
+formats including KML. Their [iGO 8 HOWTO](http://www.poi-factory.com/node/34380)
+documents the import process.
+
 ## References
 
 - [iGO (software) — Wikipedia](https://en.wikipedia.org/wiki/IGO_(software))
