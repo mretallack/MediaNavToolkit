@@ -55,12 +55,18 @@ naturally look random.
   - Vatican: 17–50m accuracy (Via della Conciliazione, Piazza San Pietro, Viale Vaticano)
   - Monaco: 78–427m accuracy (larger bbox = lower resolution per bit)
   - NFR-1 (0.001° tolerance) satisfied ✅
-- [ ] **7.3** Parse `.fpa` (address search) format
-  - Same SET container, different internal structure
-  - Likely contains street name → coordinate index
-- [ ] **7.4** Parse `.poi` format
-  - POI name, category, coordinates
-  - Export as GeoJSON/KML (US-4)
+- [ ] **7.3** Parse `.fpa` (address search) format — INVESTIGATED, complex
+  - Same SET container with UTF-16 metadata and Latin padding
+  - Data area has: uint32 offset table, packed bitstream coordinates, then high-entropy address index
+  - The address index (~60-80% of file) uses a custom encoding for street name lookups
+  - Full parser would require significant reverse engineering of the index structure
+  - Low priority — address search is less useful than road geometry
+- [ ] **7.4** Parse `.poi` format — INVESTIGATED, different container
+  - Does NOT use SET container — has its own header (magic `0xC56766 2A`, header_id 3311887914)
+  - XOR table decryption works — UTF-16 metadata readable at offset 0x14
+  - Country code and offset table found at ~0x136
+  - Contains POI coordinates + names in a custom encoding
+  - Needs dedicated parser (different from FBL/FPA)
 - [x] **7.5** Identify what each section contains
   - All sections are packed bitstreams of coordinates
   - Section roles mapped: 4=main roads, 5=secondary, 8=tertiary, 16=areas, etc.
