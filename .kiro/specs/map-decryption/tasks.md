@@ -54,11 +54,12 @@ naturally look random.
   - Vatican: 17–50m accuracy (Via della Conciliazione, Piazza San Pietro, Viale Vaticano)
   - Monaco: 78–427m accuracy (larger bbox = lower resolution per bit)
   - NFR-1 (0.001° tolerance) satisfied ✅
-- [ ] **7.3** Parse `.fpa` (address search) format — INVESTIGATED, needs DLL tracing
-  - Same SET container with UTF-16 metadata and Latin padding
-  - No readable street names found — data is a custom trie/hash index
-  - The address search function in `nngine.dll` would need to be traced
-  - Low priority — road geometry and POIs are more useful
+- [x] **7.3** Parse `.fpa` (address search) format — DECODED ✅
+  - Same SET container, same packed bitstream coordinate encoding as FBL
+  - Has a uint32 offset table before the coordinate data (address index)
+  - Monaco: 745 address points (100% valid, 21+21 bits)
+  - Andorra: 11,355 address points (79% valid, 22+21 bits)
+  - The offset table groups addresses by street/area
 - [x] **7.4** `tools/maps/poi_to_geojson.py` — extract POI coordinates as GeoJSON
   - Different container from FBL (magic `0xC5676632A`, no SET header)
   - XOR table decryption works, coordinates as uint16 pairs scaled to bbox
