@@ -26,28 +26,42 @@ The primary map format. Contains vector road network, boundaries, labels, and re
 
 **What we know:**
 - Proprietary NNG binary format
-- Country-level files (one `.fbl` per country)
-- Sizes range from 0.02 MB (Vatican) to 221 MB (France)
+- Country-level files (one `.fbl` per country), with `_osm` suffix indicating OpenStreetMap source data
+- Sizes range from 0.01 MB (Vatican) to 267 MB (France)
 - `Basemap.fbl` (9 MB) provides low-zoom overview of all regions
 - Referenced by `content_id` and `header_id` in `.stm` shadow files
-- **Not encrypted** — the `.lyc` license is the protection, not file encryption *(likely but unconfirmed)*
-- Described by third parties as "compiled map data" containing "vector geometry, road networks, and points of interest"
+- **Encrypted** — Shannon entropy 7.98/8.0 bits per byte (99.79%), indistinguishable from random
+- Magic bytes: **`f9 6d 4a 16 6f c5 78 ee`** (shared with `.fpa` files)
+- Bytes 9–16 vary slightly between files (likely region ID or file size)
+- For the same country, `.fbl` and `.fpa` share nearly identical first 64 bytes,
+  differing only at offsets `0x10–0x13` and `0x1E` — small plaintext header then encrypted payload
 
 **What we don't know:**
-- Internal binary structure (header format, data encoding, compression)
-- Whether there's a magic number/signature at the start of the file
+- The encryption algorithm (likely tied to the `.lyc` license / device key)
 - How routing data is indexed
 - The relationship between `.fbl` and `.hnr` files
 
-### HNR — Historical Navigation Routing (Inferred)
+### FPA — Address Search Data (Confirmed)
 
-Routing optimization data, likely pre-computed route weights based on historical traffic patterns.
+Address lookup/geocoding data, paired with `.fbl` map files.
 
 **What we know:**
-- 6 files covering Eastern and Western Europe
+- Same magic bytes as `.fbl`: `f9 6d 4a 16 6f c5 78 ee`
+- Same encryption scheme — first 64 bytes nearly identical to corresponding `.fbl`
+- Country-level files with `_osm` suffix
+- Sizes: 1.5 KB (Vatican) to 147 MB (France)
+- Used for address search / geocoding in the navigation UI
+
+### HNR — Historical Navigation Routing (Confirmed)
+
+Routing optimization data — pre-computed route weights based on historical traffic patterns.
+
+**What we know:**
+- Region-level files (not per-country): `EuropeEconomic.hnr`, `EuropeFastest.hnr`, etc.
 - Named by region + routing strategy: `Fastest`, `Shortest`, `Economic`
-- Sizes: 17–47 MB each
-- Same `header_id` (1182797806–1182797819) suggesting they're part of one dataset
+- Sizes: 17–62 MB each
+- Different magic bytes from FBL/FPA: **`e2 66 4c 50 34 c2 7f ce`**
+- Also encrypted (high entropy)
 
 **Speculation:**
 - Likely contains time-of-day traffic speed profiles for road segments
@@ -65,11 +79,13 @@ Routing optimization data, likely pre-computed route weights based on historical
 ### SPC — Speed Cameras (Confirmed)
 
 **What we know:**
-- Country-level files for 9 countries
-- Very small (total 0.3 MB)
-- Contains GPS coordinates + speed limits + camera types
+- Country-level files with `_osm` suffix
+- Very small (450 bytes for Andorra, 61 KB for France, 44 KB for UK)
+- Different magic bytes: **`0b f4 2d 4b 0f c3 7f ce`**
+- Also encrypted (high entropy)
 - The [SCDB.info](https://www.scdb.info/en/installation-igo/) project provides
-  compatible speed camera databases, confirming the format is at least partially understood
+  compatible speed camera databases — but these may use a different (unencrypted) format
+  for older iGO versions
 
 ### TMC — Traffic Message Channel (Confirmed)
 
@@ -77,6 +93,51 @@ Routing optimization data, likely pre-computed route weights based on historical
 - Provider-specific files (e.g., `France-V-Trafic.tmc`, `Germany_HERE.tmc`)
 - Very small (<0.1 MB total)
 - Maps TMC location codes to road segments for real-time traffic
+
+## Encryption
+
+**All map data files are encrypted.** This was confirmed by analysis of the actual
+`.fbl`, `.fpa`, `.hnr`, `.poi`, and `.spc` files from a USB backup
+(`disk-backup-with-map-Apr2026.zip`, 3.1 GB, 119 map data files).
+
+| Property | Value |
+|----------|-------|
+| Shannon entropy | 7.98 / 8.0 bits per byte (99.79%) |
+| Byte distribution | All 256 values present even in 11 KB files |
+| `file` command | Identifies all files as `data` — no recognisable structure |
+
+### Magic Bytes
+
+| Format | Magic (8 bytes) | Used by |
+|--------|----------------|---------|
+| FBL/FPA | `f9 6d 4a 16 6f c5 78 ee` | Map data + address search |
+| HNR | `e2 66 4c 50 34 c2 7f ce` | Historical routing |
+| SPC | `0b f4 2d 4b 0f c3 7f ce` | Speed cameras |
+
+The magic bytes are consistent across all files of the same type. Bytes 9–16 vary
+per file (likely encoding region ID or file size).
+
+### Encryption Scheme (Unknown)
+
+The encryption is likely tied to the device licensing system (`.lyc` files contain
+RSA-encrypted keys). Possible schemes:
+- AES with a key derived from the `.lyc` license
+- XOR-CBC with a key from the RSA-decrypted license header (similar to `.lyc` decryption)
+- Device-specific key derived from hardware ID
+
+**The map data cannot currently be decrypted.** The encryption key is inside the
+`.lyc` license file, which is itself RSA-encrypted. We have the RSA public key
+(see `docs/license-system.md`) but RSA public keys can only encrypt, not decrypt.
+
+### Data Source
+
+Despite the encryption, the filenames confirm the data source:
+- `France_osm.fbl` — the `_osm` suffix indicates **OpenStreetMap** source data
+- The same geographic data is freely available from [Geofabrik](https://download.geofabrik.de/)
+  in open formats (PBF, XML)
+
+NNG compiles OSM data into their proprietary encrypted format using their internal
+map compiler toolchain.
 
 ## Shadow Metadata (.stm)
 
