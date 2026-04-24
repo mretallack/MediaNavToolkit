@@ -676,3 +676,26 @@ PKCS#1 padding when applied to the `.lyc` files. Possible reasons:
 
 **Next step:** Find the correct RSA key by tracing `FUN_10154b40` (RSA PKCS#1 v1.5)
 in the DLL to see which key structure it uses for `.lyc` decryption.
+
+### .lyc License Decryption — SOLVED ✅
+
+The `.lyc` files have an **8-byte header** before the RSA block (not at offset 0).
+The RSA modulus is stored **byte-reversed** in the DLL at file offset `0x309988`.
+
+**Decryption steps:**
+1. Skip 8-byte `.lyc` header
+2. RSA decrypt bytes 8-264 with public key (n from DLL, e=65537)
+3. Strip PKCS#1 v1.5 padding (type 0x02)
+4. 40-byte payload: magic `0x36C8B267` + XOR-CBC key at bytes 8-24
+
+**Verified on all three license files:**
+- Factory license: key = `a0febca0bc92c9003c9e976f49cb93eb`
+- Global config: key = `72f74e67e0107936286f111ba4a86f6f`
+- Language update: key = `d7e72e5cdd64edc430b01bdb5dc79667`
+
+The XOR-CBC key decrypts the remaining `.lyc` data (after the RSA block) to
+reveal the license content (product name, activation key, etc.).
+
+**Note:** These keys do NOT directly decrypt the map shape data via Blowfish.
+The shape data master key may be derived differently — possibly from the
+full 40-byte payload or from a combination of license + file-specific data.
