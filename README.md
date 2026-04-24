@@ -254,6 +254,48 @@ Full session flow:
 
 See [docs/reverse-engineering.md](docs/reverse-engineering.md) for full protocol documentation.
 
+
+## Map Analysis Tools
+
+Standalone tools in `tools/maps/` for analysing NNG map files from the head unit.
+These decrypt and parse the proprietary map format — no installation needed, just Python 3.
+
+```bash
+# Show metadata for any map file (country, version, bounding box)
+python tools/maps/fbl_info.py tools/maps/testdata/
+
+# Decrypt a map file (removes the XOR encryption layer)
+python tools/maps/decrypt_fbl.py tools/maps/testdata/Vatican_osm.fbl -o decrypted/
+
+# Export speed cameras to CSV (coordinates + speed limits)
+python tools/maps/spc_to_csv.py /path/to/spc/files/ -o cameras.csv
+
+# Decrypt .lyc license files (shows SWID, product name)
+python tools/maps/lyc_decrypt.py /path/to/license/dir/
+
+# Extract road junction coordinates as GeoJSON
+python tools/maps/junctions_to_geojson.py map_file.fbl -o junctions.geojson
+
+# Extract road segment metadata
+python tools/maps/segments_to_csv.py map_file.fbl -o segments.csv
+
+# Overview of all map files in a directory
+python tools/maps/map_overview.py /path/to/map/files/
+```
+
+| Tool | Output | Example |
+|------|--------|---------|
+| `fbl_info.py` | Metadata: country, version, bbox, copyright | `VAT, SET v4.6.7.32, 2025.09` |
+| `decrypt_fbl.py` | Decrypted map file | Removes XOR encryption layer |
+| `spc_to_csv.py` | Speed camera CSV | 1,404 cameras across 21 countries |
+| `lyc_decrypt.py` | License content | SWID, product name, encryption key |
+| `junctions_to_geojson.py` | Road junctions as GeoJSON | Viewable in geojson.io / QGIS |
+| `segments_to_csv.py` | Road segment metadata | Road type, shape point count |
+| `map_overview.py` | Summary table | All countries with sizes and versions |
+
+See [docs/mapformat.md](docs/mapformat.md) for the full format specification and
+[tools/maps/README.md](tools/maps/README.md) for detailed usage.
+
 ## Interesting Things to Look At
 
 ### Voice Files — Lua TTS Scripts, No DRM
