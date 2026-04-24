@@ -699,3 +699,26 @@ reveal the license content (product name, activation key, etc.).
 **Note:** These keys do NOT directly decrypt the map shape data via Blowfish.
 The shape data master key may be derived differently — possibly from the
 full 40-byte payload or from a combination of license + file-specific data.
+
+### .lyc RSA Payload Structure (40 bytes)
+
+```
+[0:4]   Magic:     0x36C8B267 (little-endian)
+[4:8]   Field2:    varies per license
+[8:24]  XOR-CBC key: 16 bytes — decrypts the remaining .lyc data
+[24:36] Field4:    12 bytes — purpose unknown
+[36:40] Data size: uint32 LE — size of remaining data after RSA block
+```
+
+### .lyc Decrypted Content
+
+After XOR-CBC decryption (NNG variant: `output = input XOR running_key; running_key ^= output`):
+
+```
+[0:16]  IV/garbled (first block)
+[16:32] SWID string (e.g., "CW-MQAA-I7U3-E7M7")
+[32:64] Product name (e.g., "LGe Western Europe", "Renault/Dacia Global Config update")
+[64+]   Content references, activation data
+```
+
+Verified on all three license files. Product names and SWIDs clearly readable.
