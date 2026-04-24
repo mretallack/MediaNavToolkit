@@ -77,6 +77,82 @@ def detect(ctx):
 
 @cli.command()
 @click.pass_context
+def status(ctx):
+    """Show installed maps, licenses, and content on the USB drive."""
+    import re
+
+    from rich.table import Table
+
+    from medianav_toolbox.device import parse_device_nng, read_device_status, validate_drive
+
+    usb = ctx.obj["usb_path"]
+    errors = validate_drive(usb)
+    if errors:
+        for e in errors:
+            console.print(f"[red]✗ {e}[/red]")
+        sys.exit(1)
+
+    device = parse_device_nng(usb / "NaviSync" / "license" / "device.nng")
+    try:
+        ds = read_device_status(usb)
+        console.print(
+            f"[green]✓[/green] {ds.os_version}  "
+            f"{ds.free_space / 1e9:.1f} GB free / {ds.total_space / 1e9:.1f} GB total"
+        )
+    except FileNotFoundError:
+        console.print(f"[green]✓[/green] AppCID: 0x{device.appcid:08X}")
+
+    # Maps
+    map_dir = usb / "NaviSync" / "content" / "map"
+    if map_dir.exists():
+        table = Table(title="Installed Maps")
+        table.add_column("Map", style="cyan")
+        table.add_column("Size", justify="right")
+        table.add_column("Content ID", justify="right", style="dim")
+        total = 0
+        for stm in sorted(map_dir.glob("*.stm")):
+            data = stm.read_text()
+            name = stm.stem.replace(".fbl", "").replace(".hnr", "")
+            size_m = re.search(r"size\s*=\s*(\d+)", data)
+            cid = re.search(r"content_id\s*=\s*(\d+)", data)
+            sz = int(size_m.group(1)) if size_m else 0
+            total += sz
+            if ".hnr" not in stm.name:  # skip routing files, show map files only
+                table.add_row(
+                    name,
+                    f"{sz / 1024 / 1024:.1f} MB",
+                    cid.group(1) if cid else "",
+                )
+        console.print(table)
+        console.print(f"  Total map data: {total / 1024 / 1024 / 1024:.2f} GB")
+
+    # Licenses
+    lic_dir = usb / "NaviSync" / "license"
+    if lic_dir.exists():
+        lycs = sorted(lic_dir.glob("*.lyc"))
+        if lycs:
+            console.print(f"\n[bold]Licenses ({len(lycs)})[/bold]")
+            for lyc in lycs:
+                md5_file = lyc.parent / f"{lyc.name}.md5"
+                md5_status = "✓" if md5_file.exists() else "no md5"
+                console.print(f"  {lyc.name:<70s} {lyc.stat().st_size:>6d} B  {md5_status}")
+
+    # Other content summary
+    content_dir = usb / "NaviSync" / "content"
+    if content_dir.exists():
+        summary = []
+        for subdir in ["speedcam", "poi", "voice", "lang", "tmc"]:
+            d = content_dir / subdir
+            if d.exists():
+                count = len(list(d.glob("*.stm")))
+                if count:
+                    summary.append(f"{subdir}: {count}")
+        if summary:
+            console.print(f"\n[bold]Other content:[/bold] {', '.join(summary)}")
+
+
+@cli.command()
+@click.pass_context
 def register(ctx):
     """Register device with NaviExtras (creates new credentials)."""
     import json

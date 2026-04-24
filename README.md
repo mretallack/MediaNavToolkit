@@ -85,6 +85,9 @@ With `NAVIEXTRAS_USB_PATH` set, you can omit `--usb-path`:
 # Detect your MediaNav USB drive
 medianav-toolbox detect
 
+# Show installed maps, licenses, and content versions
+medianav-toolbox status
+
 # Authenticate and show session info
 medianav-toolbox login
 
@@ -123,6 +126,22 @@ $ medianav-toolbox detect
   AppCID:  0x42000B53
   Space:   2.3 GB free / 4.4 GB total
   OS:      6.0.12.2.1166_r2
+
+$ medianav-toolbox status
+✓ 6.0.12.2.1166_r2  2.3 GB free / 4.4 GB total
+              Installed Maps
+┏━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┓
+┃ Map                    ┃     Size ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━┩
+│ France                 │ 220.7 MB │
+│ Germany                │ 174.4 MB │
+│ UnitedKingdom          │ 104.4 MB │
+│ ...                    │      ... │
+└────────────────────────┴──────────┘
+  Total map data: 1.28 GB
+Licenses (3)
+  Renault_Dacia_Global_Config_update.lyc  472 B  ✓
+Other content: speedcam: 9, poi: 28, voice: 67
 
 $ medianav-toolbox catalog
   Dealership POI                       2012 Q1    61811  ✓ purchased
