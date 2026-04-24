@@ -44,7 +44,7 @@ def parse_spc(dec: bytes) -> list[dict]:
     cameras = []
     data_start = find_metadata_end(dec)
 
-    # Scan for coordinate pairs
+    # Scan for 12-byte camera records
     off = data_start
     while off + 12 <= len(dec):
         lon_raw = struct.unpack_from("<i", dec, off)[0]
@@ -55,12 +55,11 @@ def parse_spc(dec: bytes) -> list[dict]:
         # Validate: must be plausible coordinates
         if -180 < lon < 180 and -90 < lat < 90 and (abs(lon) > 0.1 or abs(lat) > 0.1):
             flags = struct.unpack_from("<H", dec, off + 8)[0]
-            speed_type = struct.unpack_from("<BB", dec, off + 10)
-            speed = speed_type[0]
-            cam_type = speed_type[1]
+            speed = dec[off + 10]
+            cam_type = dec[off + 11]
 
-            # Real camera records have flags=0x0400 and type=0x80
-            if flags == 0x0400 and cam_type == 0x80:
+            # Accept records with camera flag (0x0400) and plausible speed
+            if flags == 0x0400 and speed <= 200:
                 cameras.append(
                     {
                         "latitude": round(lat, 6),
