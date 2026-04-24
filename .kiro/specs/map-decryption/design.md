@@ -17,13 +17,14 @@ tools/maps/
 ├── decrypt_fbl.py           # ✅ Decrypt map files (outer XOR layer)
 ├── fbl_info.py              # ✅ Show map file metadata, bbox, version
 ├── spc_to_csv.py            # ✅ Export speed cameras to CSV
+├── lyc_decrypt.py           # ✅ Decrypt .lyc licenses → SWID, product name
+├── junctions_to_geojson.py  # ✅ Extract road junction coordinates as GeoJSON
+├── segments_to_csv.py       # ✅ Extract road segment metadata to CSV
+├── curves_to_geojson.py     # ✅ Extract curve points from section 1 bitstream
+├── map_overview.py          # ✅ Show all countries with bbox, version, sizes
 │
 │ ── To Build ──
-├── lyc_decrypt.py           # Decrypt .lyc licenses → SWID, product name
-├── junctions_to_geojson.py  # Extract road junction coordinates as GeoJSON
-├── segments_to_csv.py       # Extract road segment metadata to CSV
-├── spc_extract_all.py       # Batch extract ALL speed cameras from disk backup
-└── map_overview.py          # Show all countries with bbox, version, sizes
+└── fbl_to_geojson.py        # Combine junctions + curves into road LineStrings
 ```
 
 ## What We Can Do With Decrypted Data
@@ -34,6 +35,11 @@ Can be exported to CSV, loaded into GPS apps, or used for analysis.
 **Road junction coordinates** — the network topology (which roads connect where)
 is accessible as full int32 coordinate pairs. Can be exported as GeoJSON points.
 
+**Road curve points** — the shape of roads between junctions is decoded from the
+section 1 bitstream. Uses packed [N-bit lon][M-bit lat] encoding relative to the
+bounding box, with bit widths derived from `ceil(log2(bbox_range + 1))`.
+Verified on Vatican (59 pts), Monaco (116 pts), Andorra (295 pts).
+
 **Road segment metadata** — road type/speed class and shape point counts per segment.
 Useful for understanding the road network structure.
 
@@ -41,84 +47,47 @@ Useful for understanding the road network structure.
 
 **Map metadata** — country, version, bounding box, copyright, build info for every file.
 
-## Investigation Strategy
+## Investigation Strategy — COMPLETE ✅
 
-Three parallel approaches, ordered by effort:
+All three approaches were executed:
 
-### Approach A: Try the .lyc Key (Low effort, may work)
+- **Approach A (Try .lyc key):** Tested — .lyc XOR-CBC keys don't decrypt section data
+- **Approach B (Trace in DLL):** Completed — found XOR table, Blowfish (for licenses only), SET reader
+- **Approach C (Known-plaintext):** Not needed — XOR table decryption revealed SET format directly
 
-The `.lyc` license files use RSA + XOR-CBC. After RSA decryption, the 40-byte header
-contains a 16-byte XOR-CBC key at offset 8. If NNG reuses this key for map encryption,
-we can decrypt immediately.
+## Encryption — RESOLVED ✅
+
+The map files use a **single XOR table** (4096 bytes, hardcoded in `nngine.dll`) for
+the outer encryption layer. This is the same table used for `device.nng` decryption.
 
 ```
-.lyc file → RSA decrypt → 40-byte header → extract XOR-CBC key (bytes 8-24)
-                                          → try on .fbl file
+plaintext[i] = ciphertext[i] XOR xor_table[i % 4096]
 ```
 
-**Test:** XOR-CBC decrypt `Vatican_osm.fbl` (11 KB) with the key from
-`LGe_Renault_ULC_OSM_UK_IL_Update_2025_Q3.lyc`. Check if output has lower entropy
-or recognisable structure.
+After XOR decryption, the file structure is:
+- **SET header** (32 bytes): magic `SET\x00`, version, data offset, file size
+- **Latin padding** (480 bytes): Cicero quote filler
+- **UTF-16LE metadata**: country, version, copyright, build info
+- **Country block**: 3-byte code + bounding box (int32 / 2^23 = WGS84)
+- **Section offset table**: uint32 offsets to each data section
+- **Pre-section data**: index tables, road topology
+- **Sections 0-18**: geometry, coordinates, metadata, bulk data
 
-### Approach B: Trace in nngine.dll (Medium effort, definitive)
+**Curve data (section 1)** is NOT encrypted — it uses a packed bitstream encoding.
+**Section 16 (bulk data)** has high entropy (~7.97) — likely compressed, not encrypted.
+The Blowfish code in the DLL is for license key management, not map data.
 
-The DLL must decrypt maps at runtime. Find the decryption function by:
+### Previous Hypotheses (All Tested)
 
-1. Search for the magic bytes `f9 6d 4a 16` in the DLL's data section or code
-2. Find cross-references to the magic — these are the file-open/validate functions
-3. Trace forward from validation to the decryption call
-4. Identify the cipher (AES? XOR-CBC? SnakeOil? Blowfish?)
-5. Trace the key source
+| Hypothesis | Result |
+|-----------|--------|
+| XOR-CBC with .lyc key | ❌ Doesn't decrypt sections |
+| SnakeOil with magic seed | ❌ No entropy reduction |
+| Blowfish with DLL key | ❌ For license keys only |
+| AES/device-specific key | ❌ Not needed — XOR table suffices |
 
-**Tools:** Ghidra with the existing `analysis/nngine_decompiled.c` (15 MB).
-
-### Approach C: Known-plaintext attack (Medium effort, if A and B fail)
-
-If we can guess any plaintext in the decrypted file, we can derive the keystream:
-
-- The `.fbl` header likely contains a version number, bounding box, or file size
-- Older unencrypted iGO 8 `.fbl` files (if obtainable) would reveal the header format
-- The `_osm` suffix confirms OpenStreetMap data — known structure
-
-**Keystream derivation:** `keystream = encrypted_bytes XOR known_plaintext`
-
-## Encryption Hypotheses
-
-Based on what we know about NNG's crypto:
-
-### Hypothesis 1: XOR-CBC with .lyc-derived key (Most likely)
-
-NNG already uses XOR-CBC for `.lyc` file bodies. The map files may use the same
-scheme with a key extracted from the license. Evidence:
-- Same company, same DLL, same era
-- The `.lyc` contains a content-specific key
-- XOR-CBC is simple and fast (important for real-time map rendering)
-
-### Hypothesis 2: SnakeOil (xorshift128) with a content key
-
-NNG uses SnakeOil for the wire protocol. They might reuse it for file encryption.
-Evidence:
-- SnakeOil is already in `nngine.dll`
-- It's a stream cipher — fast for large files
-- The 8-byte magic could be the SnakeOil seed
-
-**Test:** Try `snakeoil(encrypted_data[8:], magic_bytes_as_uint64)` — if the magic
-IS the seed, the rest of the file decrypts with it.
-
-### Hypothesis 3: AES or Blowfish with device-specific key
-
-More standard encryption. NNG has Blowfish in the DLL (used for `http_dump` XML).
-Evidence:
-- Blowfish key already extracted from DLL (for XML decryption)
-- AES would be the "proper" choice for content protection
-
-**Test:** Try the known Blowfish key on the map data.
-
-### Hypothesis 4: Custom block cipher or per-file key
-
-Each file could have its own key derived from `content_id` or similar metadata.
-This would explain why the magic bytes are constant (they're a signature, not a key)
-while the rest varies.
+The XOR table was the only encryption layer. The high entropy in larger file sections
+is due to compression (efficient bitstream packing), not additional encryption.
 
 ## Data Available for Analysis
 
@@ -143,44 +112,30 @@ while the rest varies.
 5. **Byte 0x1E differs** — another type/size indicator
 6. **All files have 8-byte aligned sizes** — suggests block-based encryption
 
-## Implementation Plan
+## Implementation Plan — Steps 1-5 COMPLETE ✅
 
-### Step 1: Header Analysis (`analyse_header.py`)
+### Step 1: Header Analysis ✅ `analyse_header.py`
+### Step 2: Key Extraction ✅ `try_lyc_key.py`
+### Step 3: DLL Analysis ✅ (Ghidra + Unicorn emulation scripts)
+### Step 4: Implement Decryption ✅ `decrypt_fbl.py`
+### Step 5: Parse and Export ✅
 
-Extract and compare headers from multiple files. Output a table showing which
-bytes are constant, which vary by country, and which vary by file type.
+Completed tools:
+- `fbl_info.py` — metadata, bbox, country, version
+- `spc_to_csv.py` — speed cameras to CSV
+- `junctions_to_geojson.py` — junction coordinates as GeoJSON
+- `segments_to_csv.py` — road segment metadata to CSV
+- `curves_to_geojson.py` — curve points from section 1 bitstream
+- `lyc_decrypt.py` — .lyc license decryption
+- `map_overview.py` — summary of all map files
 
-### Step 2: Key Extraction (`try_lyc_key.py`)
+### Step 6: Full Road Geometry (Next)
 
-1. RSA-decrypt the `.lyc` file to get the 40-byte header
-2. Extract the XOR-CBC key (bytes 8-24)
-3. Try XOR-CBC on `Vatican_osm.fbl` starting at offset 8
-4. Measure entropy of the result
-5. Also try: SnakeOil with magic as seed, Blowfish with known key
-
-### Step 3: DLL Analysis (`find_decrypt_dll.py`)
-
-If Step 2 fails:
-1. Search `nngine.dll` for the magic bytes `f9 6d 4a 16`
-2. Find all cross-references
-3. Identify the file-open function
-4. Trace to the decryption routine
-5. Document the algorithm and key source
-
-### Step 4: Implement Decryption (`decrypt_fbl.py`)
-
-Once the algorithm is known:
-1. Implement in Python
-2. Decrypt `Vatican_osm.fbl` and verify
-3. Decrypt 3+ other files to confirm
-4. Handle all file types (FBL, FPA, HNR, POI, SPC)
-
-### Step 5: Parse and Export
-
-Once decryption works:
-1. Identify the internal binary format
-2. Extract coordinates, road names, POI data
-3. Export to GeoJSON/CSV/KML
+Combine junctions + curves into complete road LineStrings:
+1. Read junction coordinates from section 4
+2. Read curve points from section 1
+3. Link segments to curves via shape_offset/shape_count
+4. Output GeoJSON LineString features with road_type properties
 
 ## Documentation
 

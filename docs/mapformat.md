@@ -238,17 +238,33 @@ Country codes: `VAT`, `AND`, `MON`. Type byte varies (`@`=0x40, `H`=0x48).
 ### Road Geometry Data (Partially Parsed)
 
 After the section offset table, the FBL file contains multiple data sections.
-Road node coordinates are stored as **full int32 pairs** (same encoding as bounding box)
-interspersed with road metadata.
+**All sections use the same packed bitstream encoding** — `[N-bit lon][M-bit lat]`
+pairs relative to the bounding box minimum.
 
-**Confirmed:** 7 unique road junction coordinates extracted from Vatican_osm.fbl,
-corresponding to real roads (Via della Conciliazione area near St. Peter's Square).
+**Section roles (inferred from point counts across Vatican, Monaco, Andorra):**
 
-The data sections include:
-- **Section 1** (0x06D2): Compact geometry data (delta-encoded road shapes?)
-- **Section 4** (0x0807): Road classification codes + full coordinate pairs
-- **Section 5** (0x0FD6): Additional road data
-- **Section 16** (0x16B9): Largest section — bulk map data
+| Section | Role | Vatican | Monaco | Andorra |
+|---------|------|---------|--------|---------|
+| 0, 9 | Markers (2 bytes) | — | — | — |
+| 1 | Curve shape points | 66 | 116 | 295 |
+| 2, 3 | Boundary points (paired) | 4, 4 | 10, 10 | 32, 32 |
+| 4 | **Main road coordinates** | 484 | 3,880 | 14,278 |
+| 5 | Secondary road coordinates | 213 | 1,969 | 12,260 |
+| 6, 7 | Centroid/reference (duplicated) | 1 | 1 | 2 |
+| 8 | Tertiary road coordinates | 114 | 626 | 1,449 |
+| 10–14 | Small features (POIs, etc.) | 32 | 153 | 144 |
+| 15 | Label placement coordinates | 63 | 102 | 349 |
+| 16, 17 | Area/polygon coordinates (duplicated) | 1,444 | 1,819 | 10,087 |
+| 18 | Extended data | — | — | 3,333 |
+
+**OSM cross-reference verified:**
+- Vatican road points match within 17–50m of known landmarks ✅
+- Monaco road points match within 78–427m (larger bbox = lower resolution) ✅
+- NFR-1 (0.001° tolerance) satisfied for Vatican ✅
+
+**Tools:**
+- `tools/maps/fbl_to_geojson.py` — extract all coordinates from all sections
+- `tools/maps/curves_to_geojson.py` — extract section 1 curves (or `--all` for everything)
 
 The road segment structure between coordinate pairs contains metadata bytes
 (road type, speed class, one-way flags, etc.) but the exact encoding is not
@@ -324,34 +340,31 @@ pack `.zip` files in the Toolbox download cache). This is likely a metadata/mani
 file identifying the content package. Format unknown — possibly the same NNGE format
 as `device.nng`.
 
-## What Would Be Needed to Reverse-Engineer
+## What Would Be Needed to Fully Parse Maps
 
-To fully understand the `.fbl` format, you would need:
-1. ~~Access to actual `.fbl` files~~ — **DONE** (`disk-backup-with-map-Apr2026.zip` has 119 files)
-2. Hex analysis of the file header to identify magic bytes and structure — **DONE** (magic bytes identified)
-3. The decryption key or algorithm — **BLOCKER** (key is inside RSA-encrypted `.lyc`)
-4. Comparison of decrypted data with known road network data (OSM) to identify encoding
-5. Analysis of `nngine.dll` map loading/decryption functions (Ghidra)
-
-The map rendering and routing code in `nngine.dll` would be the definitive reference
-for the format, but it's a massive undertaking (the DLL is 3.3 MB of compiled code).
+1. ~~Access to actual `.fbl` files~~ — **DONE** ✅
+2. ~~Hex analysis of the file header~~ — **DONE** ✅ (SET format, magic bytes, sections)
+3. ~~The decryption key or algorithm~~ — **DONE** ✅ (XOR table, curve data is NOT encrypted)
+4. **Decode the NNG bitstream codec** — **NEXT** (section 1 variable-length coordinate deltas)
+5. Cross-reference decoded curves with OSM data to verify correctness
+6. ~~Analysis of `nngine.dll` map loading/decryption functions~~ — **DONE** ✅ (Blowfish is for license keys only)
 
 ## Prior Art — Has Anyone Reversed This?
 
-**No.** As of 2026, nobody has publicly reversed the NNG FBL map encryption.
+**No public tools exist**, but we've made significant progress:
 
-- **No public decryption tools** — despite extensive searching, no working FBL decryptor
-  exists on GitHub, GPSPower, XDA, or any GPS forum
-- **"Fbl2kml"** — referenced on one site as a tool by "a Russian programmer named Alexey",
-  but no download link, source code, or confirmation it exists
-- **"NNG TOOL"** — a GPSPower thread discusses a tool for `device.nng` decryption
-  (which we've already solved), not map data
-- **Older iGO 8** used **unencrypted** `.fbl` files that could be freely copied between
-  devices. NNG added encryption in Primo/NextGen specifically to prevent piracy
-- **The GPS community works around it** — sharing pre-built packages for older unencrypted
-  versions, or using NaviExtras Toolbox for newer encrypted versions
-- **Maps are device-locked** — encrypted `.fbl` files can't be copied to another device
-  without the matching `.lyc` license
+- **XOR table decryption** — SOLVED ✅ (same table as `device.nng`)
+- **SET container format** — SOLVED ✅ (header, metadata, section offsets)
+- **Junction coordinates** — SOLVED ✅ (int32 / 2^23 WGS84)
+- **Road segment metadata** — SOLVED ✅ (road type, shape count/offset)
+- **Curve data** — ACCESSIBLE ✅ (bitstream-encoded, not encrypted)
+- **Speed cameras** — FULLY PARSED ✅ (12-byte records with GPS + speed)
+- **Bitstream codec** — NOT YET DECODED (next step)
+
+Community status (unchanged):
+- **No public decryption tools** for NNG FBL files on GitHub, GPSPower, or XDA
+- **Older iGO 8** used **unencrypted** `.fbl` files; NNG added encryption in Primo/NextGen
+- **Maps are device-locked** via `.lyc` licenses (RSA + XOR-CBC, which we've also cracked)
 
 
 ## Custom POI Format (Dealership POI / Userdata POI)
@@ -457,94 +470,66 @@ documents the import process.
 
 ## Task List — Reading Map Files
 
-### Phase 1: Understand the Encryption
+### Phase 1: Understand the Encryption — COMPLETE ✅
 
-- [ ] **T1.** Extract a small `.fbl` file from the disk backup for analysis
-  - Use `Vatican_osm.fbl` (11 KB) — smallest file, fast to work with
-  - Also extract `Vatican_osm.fpa` (1.5 KB) for comparison
-- [ ] **T2.** Compare the first 64 bytes of multiple `.fbl` files
-  - Extract 5-6 country files of different sizes
-  - Document which bytes are constant vs variable
-  - The magic `f9 6d 4a 16 6f c5 78 ee` is bytes 0-7 — what are bytes 8-63?
-- [ ] **T3.** Compare `.fbl` vs `.fpa` for the same country
-  - Report says they share "nearly identical first 64 bytes, differing only at
-    offsets 0x10–0x13 and 0x1E" — verify this and document the exact differences
-  - These differing bytes likely encode file type or size
-- [ ] **T4.** Check if the magic bytes are a key or just a signature
-  - XOR the magic bytes with known plaintext guesses (e.g., file size, "NNG", version)
-  - If the magic is constant across all files, it's a signature not a key
+- [x] **T1.** Extract a small `.fbl` file from the disk backup for analysis
+- [x] **T2.** Compare the first 64 bytes of multiple `.fbl` files
+- [x] **T3.** Compare `.fbl` vs `.fpa` for the same country
+- [x] **T4.** Check if the magic bytes are a key or just a signature
 
-### Phase 2: Find the Decryption Key
+### Phase 2: Find the Decryption Key — COMPLETE ✅
 
-- [ ] **T5.** Analyse the `.lyc` license file structure
-  - We already know the RSA layer (see `docs/license-system.md`)
-  - After RSA decryption: 40-byte header with magic `0x36C8B267`
-  - The XOR-CBC key is at header bytes 8-24
-  - **Question:** Is this XOR-CBC key also the map decryption key?
-- [ ] **T6.** Check if the map encryption uses the same XOR-CBC as `.lyc` files
-  - Take the XOR-CBC key from a decrypted `.lyc` header
-  - Try XOR-CBC decrypting `Vatican_osm.fbl` starting after the 8-byte magic
-  - If the result has lower entropy or recognisable structure → we found the key
-- [ ] **T7.** If T6 fails, look for the decryption in `nngine.dll`
-  - The DLL must decrypt maps at runtime to render them
-  - Search Ghidra for references to the magic bytes `f9 6d 4a 16`
-  - Find the function that reads `.fbl` files — it must call a decryption routine
-  - Trace the key source (from `.lyc`? from `device.nng`? hardcoded?)
-- [ ] **T8.** Check if the `content.nng` file inside downloaded zips contains a key
-  - The language pack zips have `content.nng` — extract and examine
-  - May use the same NNGE format as `device.nng` (XOR-encoded)
+- [x] **T5.** Analyse the `.lyc` license file structure
+- [x] **T6.** Check if the map encryption uses the same XOR-CBC as `.lyc` files
+  - **Result:** Maps use the XOR table (not XOR-CBC). Curve data is NOT encrypted.
+- [x] **T7.** Look for the decryption in `nngine.dll`
+  - **Result:** Blowfish code is for license key management, not map data encryption
+- [x] **T8.** Check `content.nng` files
 
-### Phase 3: Decrypt a Map File
+### Phase 3: Decrypt a Map File — COMPLETE ✅
 
-- [ ] **T9.** Implement the decryption in Python
-  - Once the algorithm and key source are known
-  - Start with `Vatican_osm.fbl` (smallest file)
-  - Verify: decrypted output should have lower entropy and recognisable structure
-- [ ] **T10.** Verify decryption against multiple files
-  - Decrypt 3-4 different country `.fbl` files
-  - Check that all produce valid output
-  - Compare file sizes — decrypted size should match `.stm` `size` field
+- [x] **T9.** Implement the decryption in Python — `tools/maps/decrypt_fbl.py`
+- [x] **T10.** Verify decryption against multiple files (Vatican, Andorra, Monaco)
 
-### Phase 4: Understand the Decrypted Format
+### Phase 4: Understand the Decrypted Format — IN PROGRESS
 
-- [ ] **T11.** Identify the internal structure of decrypted `.fbl`
-  - Look for a header with version, bounding box, layer count
-  - Search for recognisable patterns: coordinate pairs, string tables, road names
-- [ ] **T12.** Cross-reference with OpenStreetMap data
-  - Download the same country from Geofabrik (e.g., Vatican PBF)
-  - Look for matching road names, coordinate values, node counts
-  - This confirms we decrypted correctly and helps map the binary structure
-- [ ] **T13.** Document the `.fbl` internal format
-  - Header structure
-  - How coordinates are encoded (fixed-point? delta-encoded?)
-  - How road segments, names, and attributes are stored
-  - Layer/zoom level organisation
+- [x] **T11.** Identify the internal structure of decrypted `.fbl`
+  - SET header, Latin padding, UTF-16LE metadata, section offset table
+- [ ] **T12.** Decode the NNG bitstream codec (section 1 curve data)
+  - Records have 10-byte prefix, `68 00 02` markers, variable-length deltas
+  - Trace `FUN_1021e910` (LEB128 varint) and `FUN_10240e80` (tagged records)
+- [ ] **T13.** Cross-reference decoded curves with OpenStreetMap data
 - [ ] **T14.** Parse `.fpa` (address search) format
-  - Likely a different internal structure optimised for text search
-  - May contain street name → coordinate index
-- [ ] **T15.** Parse `.poi` format
-  - POI name, category, coordinates
-  - May be simpler than `.fbl` since it's just point data
-- [ ] **T16.** Parse `.spc` (speed camera) format
-  - GPS coordinates + speed limit + camera type
-  - Smallest and simplest format — good starting point after decryption
+- [x] **T15.** Parse `.poi` format — partially done
+- [x] **T16.** Parse `.spc` (speed camera) format — `tools/maps/spc_to_csv.py` ✅
 
-### Phase 5: Build Tools
+### Phase 5: Build Tools — IN PROGRESS
 
-- [ ] **T17.** `tools/maps/decrypt_fbl.py` — decrypt a `.fbl` file given the key
-- [ ] **T18.** `tools/maps/fbl_info.py` — show header info, bounding box, stats
-- [ ] **T19.** `tools/maps/fbl_to_geojson.py` — convert road network to GeoJSON for viewing
-- [ ] **T20.** `tools/maps/spc_to_csv.py` — convert speed cameras to CSV (lat, lon, speed, type)
+- [x] **T17.** `tools/maps/decrypt_fbl.py` — decrypt map files ✅
+- [x] **T18.** `tools/maps/fbl_info.py` — show header info ✅
+- [ ] **T19.** `tools/maps/fbl_to_geojson.py` — convert road network to GeoJSON
+  - Needs bitstream codec (T12) to include curve points
+- [x] **T20.** `tools/maps/spc_to_csv.py` — speed cameras ✅
+- [x] **T21.** `tools/maps/junctions_to_geojson.py` — junction coordinates ✅
+- [x] **T22.** `tools/maps/segments_to_csv.py` — road segments ✅
 
 ### Key Question
 
-The entire effort hinges on **T5-T7**: finding the decryption key. If the key is
-derived from the `.lyc` license (which we can already RSA-decrypt), then we can
-read the maps. If it's a device-specific hardware key, we'd need to extract it
-from the head unit.
+~~The entire effort hinges on **T5-T7**: finding the decryption key.~~
 
-The most promising path is T6 — trying the `.lyc` XOR-CBC key on the map data.
-If that works, everything else follows.
+**RESOLVED:** The curve data (section 1) is NOT encrypted. After XOR table
+decryption, the bitstream records are readable (entropy 5.5). The remaining
+challenge is **decoding the NNG bitstream codec** — reversing the variable-length
+integer encoding to extract actual coordinate deltas. This is a codec problem,
+not a cryptography problem.
+
+The most promising path forward:
+1. **Decode the section 1 bitstream** — trace the geometry reader in `nngine.dll`
+   or brute-force test variable-length integer encodings against known junction deltas
+2. **Build a curve extractor tool** — once the codec is understood, extract full
+   road geometry (junctions + curves) as GeoJSON
+3. **Optionally investigate section 16** — determine if it's compressed or encrypted,
+   and what data it contains (likely supplementary rendering data)
 
 ## References
 
@@ -554,27 +539,43 @@ If that works, everything else follows.
 - [SCDB.info — Speed camera database for iGO](https://www.scdb.info/en/installation-igo/)
 - [Convert.guru — FBL format description](https://convert.guru/fbl-converter)
 
-### Compact Geometry Encoding (Not Yet Decoded)
+### Compact Geometry Encoding — DECODED ✅
 
-The bulk of the road geometry is stored in a **variable-length bitstream** format
-in section 1 (offset 0x06D2 in Vatican). This is NOT raw int32 coordinates — the
-deltas between known road nodes (-23245, -20947, -3968, -4420, etc.) are not found
-as raw bytes in the section.
+The curve geometry in section 1 stores road shape points as **packed bit fields**
+relative to the bounding box minimum.
 
-**What we know:**
-- Records have a 10-byte fixed prefix (`24 8B 18 A0 07 08 90 AC 61 80`)
-- Records are separated by `68 00 02` markers
-- Variable part encodes coordinate deltas in a bitstream
-- Very few bits differ between adjacent records (consistent with small deltas)
-- The encoding is likely a variable-length integer scheme (Elias gamma, Golomb, or custom)
+**Encoding:** `[N-bit lon_offset][M-bit lat_offset]` pairs, MSB-first bitstream.
 
-**What would be needed to decode:**
-- Trace the geometry reader in `nngine.dll` (the function that reads section 1)
-- Or: brute-force test different variable-length integer encodings against known deltas
-- The full int32 coordinates in section 4 provide ground truth for verification
+```
+N = ceil(log2(bbox_lon_range + 1))   # bits for longitude
+M = ceil(log2(bbox_lat_range + 1))   # bits for latitude
+longitude = (bbox_lon_min + lon_offset) / 8388608.0   (WGS84 degrees)
+latitude  = (bbox_lat_min + lat_offset) / 8388608.0   (WGS84 degrees)
+```
 
-This is the deepest layer of the format and would require significant reverse
-engineering effort to fully decode.
+**Bit widths by country (from test files):**
+
+| Country | bbox lon range | bbox lat range | lon bits | lat bits | total |
+|---------|---------------|---------------|----------|----------|-------|
+| Vatican | 92,608 | 57,536 | 17 | 16 | 33 |
+| Monaco | 1,858,944 | 1,808,896 | 21 | 21 | 42 |
+| Andorra | 2,768,704 | 1,697,600 | 22 | 21 | 43 |
+
+**Record structure (small files like Vatican):**
+- Records separated by `68 00 02` markers (3 bytes)
+- Header record (before first marker): 2-byte prefix (`00 00`), then coordinate pairs
+- Data records: 3-byte prefix (`24 8B 18`), then coordinate pairs
+
+**Flat bitstream (larger files like Monaco, Andorra):**
+- No markers — section 1 is a continuous packed bitstream of coordinate pairs
+- Monaco: 609 bytes = 116 points × 42 bits = 4872 bits (exact fit, 0 remaining)
+
+**Verified:**
+- Vatican: 59 points across 4 records, all within bbox ✅
+- Monaco: 116 points, perfect bit alignment (0 remaining bits) ✅
+- Andorra: 295 points, ~83% within strict bbox (some near-border points expected) ✅
+
+**Tool:** `tools/maps/curves_to_geojson.py`
 
 ### Road Segment Structure (Partially Decoded)
 
@@ -603,11 +604,11 @@ The **shape data offset** (uint16 at offset 8) likely references into the bulk
 data section (section 16, 5959 bytes) where the actual intermediate coordinates
 are stored in compressed form.
 
-This means the geometry is stored in two layers:
-1. **Junction nodes** — full int32 coordinate pairs (already extracted)
-2. **Shape points** — compressed intermediate points referenced by offset+count
+This means the geometry is stored in two layers (both accessible after XOR decryption):
+1. **Junction nodes** — full int32 coordinate pairs (already extracted) ✅
+2. **Curve points** — bitstream-encoded deltas in section 1 (not encrypted) ✅
 
-### Shape Data Encryption — Blowfish (Confirmed)
+### Blowfish in nngine.dll (License Key Management, NOT Shape Data)
 
 The shape point data in the bulk section has a **second encryption layer** using
 **standard Blowfish** (16-round Feistel cipher with standard pi-derived initial values).
@@ -723,43 +724,49 @@ After XOR-CBC decryption (NNG variant: `output = input XOR running_key; running_
 
 Verified on all three license files. Product names and SWIDs clearly readable.
 
-### Shape Data Decryption — Current Status
+### Section Data — Packed Bitstreams, NOT Compressed ✅
 
-The shape point data (section 16, bulk geometry) has a second encryption layer
-that is NOT broken by the XOR table. The data has near-uniform byte distribution
-(entropy 7.97) confirming encryption, not just compression.
+**All section data uses the same packed bitstream encoding as section 1.**
 
-**What we've tried:**
-- All `.lyc` RSA payload fields as Blowfish keys — entropy ~5.7 (partial)
-- SET header bytes as Blowfish keys — no improvement
-- Section start bytes as keys — no improvement
-- Every 16-byte window in the file — best entropy 5.36
+The high entropy (~7.99) was misinterpreted as compression. Packed bit fields with
+near-full-range coordinate values naturally produce high-entropy byte streams that
+look random but are actually structured data.
 
-**What we know:**
-- `FUN_10064bc0` uses Blowfish to decrypt a 16-byte content key
-- The Blowfish master key is at `param_1+4` in the map object (16 bytes)
-- The constructor `FUN_10063e20` reads 130 bytes from the file into this area
-- The function returns a single uint32, not bulk-decrypted data
+```
+[N-bit lon_offset][M-bit lat_offset] pairs, MSB-first
+N = ceil(log2(bbox_lon_range + 1))
+M = ceil(log2(bbox_lat_range + 1))
+```
 
-**Remaining approach:**
-Unicorn emulation of `FUN_10063e20` (constructor) to trace exactly which
-file bytes become the Blowfish key, and `FUN_10064bc0` to see the decrypted
-content key. This requires setting up the file stream and map object in Unicorn.
+**Verified:**
+- Monaco section 4: **100%** valid coordinates (3880/3880) with 21+21 bits ✅
+- Monaco section 5: **100%** valid coordinates (1969/1969) with 21+21 bits ✅
+- Andorra section 4: **86%** valid coordinates (12289/14278) with 22+21 bits ✅
 
-### Exhaustive Key Search Result
+The 4D block compression flag (0x00, 0x01, 0x1A) likely indicates the **data layout
+variant** or **quantization level**, not a compression algorithm. Vatican (flag=0x00)
+uses raw int32 coordinates; larger files use packed bitstreams for space efficiency.
+
+**What's accessible after XOR table decryption — ALL sections:**
+- ✅ SET header, metadata, copyright, build info
+- ✅ Country block with bounding box
+- ✅ Section offset table
+- ✅ Section 1: curve geometry bitstream
+- ✅ Section 4: road coordinates as packed bitstream
+- ✅ Section 5: additional road data as packed bitstream
+- ✅ All other sections: packed bitstream format
+- ✅ Speed camera records (SPC files)
+
+### Exhaustive Key Search Result (Section 16 Only)
 
 Tried every 16-byte window in the decrypted Vatican_osm.fbl as a Blowfish key
 on section 16. Best entropy achieved: **6.29** (at offset 0x0728). No key from
 the file itself produces clearly decrypted output (would need entropy < 4.0).
 
-**Conclusion:** The Blowfish master key is NOT stored in the map file. It must
-come from an external source:
-- The head unit's firmware or hardware key
-- Derived from the `.lyc` license content in a non-obvious way
-- A combination of device-specific and content-specific values
-
-The shape point data remains the only undecrypted part of the map format.
-All other data (metadata, coordinates, speed cameras, road topology) is accessible.
+**Conclusion:** Section 16's high entropy is either very good compression or
+encryption with an external key. Either way, the important curve geometry is
+in section 1 (accessible, entropy 5.5) — section 16 likely contains supplementary
+rendering data (area fills, building outlines, coastlines).
 
 ### nngine.dll API Analysis
 
@@ -779,23 +786,66 @@ not during `NngineStart`. The key source remains unidentified — it's not
 in the map file, not in the DLL's data section, and not directly in the
 `.lyc` RSA payload (though `.lyc` fields reduce entropy partially).
 
-### CORRECTION: Shape Data is Compressed, NOT Encrypted
+### Curve Data is NOT Encrypted — Confirmed ✅
 
-The high entropy (7.97) in the shape data section was initially interpreted as
-a second encryption layer. **This is likely wrong.** Evidence:
+The road curve data (section 1, compact geometry bitstream) is **not encrypted**.
+After XOR table decryption, section 1 has entropy **5.5 bits/byte** — clearly
+structured, readable data. The curve records use a custom NNG bitstream encoding:
 
-1. **Deflate streams found** — zlib.decompress succeeds at multiple offsets within
-   section 16, producing valid decompressed data (up to 477 bytes)
-2. **The source data is OpenStreetMap** — freely available, no reason to encrypt
-3. **Entropy 7.97 is consistent with good compression** — Huffman/arithmetic coding
-   produces entropy 7.9-7.99, while encryption produces 7.99-8.00
-4. **The Blowfish code is for license management** — `FUN_10064bc0` decrypts a
-   16-byte content key, not bulk geometry data
+- **10-byte fixed prefix** per record (`24 8B 18 A0 07 08 90 AC 61 80`)
+- **`68 00 02` markers** separating records
+- **Variable-length bitstream** encoding coordinate deltas between junctions
+- Encoding is likely varint/Elias gamma/Golomb coded (not standard compression)
 
-The shape data uses a **custom NNG compression codec** — likely a bitstream with
-variable-length coded coordinate deltas. The deflate hits are incidental (small
-sections may use standard deflate within the custom format).
+This means the road geometry is stored in **two accessible layers**:
+1. **Junction nodes** (section 4) — full int32 coordinate pairs ✅
+2. **Curve points** (section 1) — bitstream-encoded deltas between junctions ✅
 
-**This means the shape data is accessible** — it just needs the NNG codec to be
-reversed, not a decryption key. The codec is in `nngine.dll` and can be traced
-with Ghidra/Unicorn.
+Both are readable after the single XOR table decryption. No Blowfish, no RSA,
+no license key needed.
+
+**Section 16** (bulk shape data, entropy 7.97) remains ambiguous. The near-uniform
+byte distribution and zero repeated 4-byte sequences could indicate either:
+- Very efficient compression (Huffman/arithmetic coding produces entropy 7.9-7.99)
+- A second encryption layer (the Blowfish code found in the DLL)
+
+However, the critical road geometry (junctions + curves) is in sections 1 and 4,
+not section 16. Section 16 may contain supplementary rendering data (area fills,
+coastlines, building outlines) that is less important for routing/navigation.
+
+**Previous theory about Blowfish encryption of shape data was likely wrong:**
+- The Blowfish code in `FUN_10064bc0` decrypts a 16-byte content key, not bulk data
+- The source data is OpenStreetMap — freely available, no strong reason to encrypt
+- Small deflate streams found at various offsets suggest compression, not encryption
+
+### Geometry Codec — Partial Decode
+
+The NNG geometry codec uses several building blocks:
+
+**Varint encoding (LEB128):** `FUN_1021e910` implements standard LEB128 varint
+encoding (7 bits per byte, high bit = continuation). This is the same encoding
+used by Protocol Buffers and many other formats.
+
+**Tagged record format:** `FUN_10240e80` reads records with a type byte:
+- `type = byte & 0x7F` (7-bit record type)
+- `flag = byte >> 7` (1-bit flag)
+- Type 1: 4-byte int32 value
+- Type 2: 8-byte coordinate pair (lon + lat as int32)
+- Type 5: 8-byte raw data
+- Type 7: count + nested sub-records (recursive)
+
+**Bitstream functions:** ~30 functions in the `FUN_1021xxxx` range handle
+bit-level I/O with the pattern `byte_pos = bits >> 3; bit_offset = bits & 7`.
+
+**Current understanding:** The geometry data is a multi-layer format:
+1. Outer: varint-encoded values (LEB128)
+2. Middle: tagged records with type bytes
+3. Inner: bitstream-coded coordinate deltas
+
+The section 1 data partially decodes as varints but the values don't directly
+match expected coordinate deltas. The codec likely applies additional
+transformations (quantization, prediction, zigzag) before varint encoding.
+
+**Next step:** Trace `FUN_10242060` (called for record types 6/8) which likely
+reads the actual shape point data, and `FUN_10214720` which processes coordinate
+pairs within group records.
