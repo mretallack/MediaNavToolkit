@@ -12,6 +12,7 @@ Tests:
 Usage:
     python tools/maps/try_lyc_key.py tools/maps/testdata/Vatican_osm.fbl
 """
+
 import math
 import struct
 import sys
@@ -88,7 +89,7 @@ def try_method(name: str, data: bytes, decrypted: bytes):
     print(f"  {name:<40s} entropy={ent:.3f}  {status}")
     if strings:
         for s in strings[:5]:
-            print(f"    → \"{s}\"")
+            print(f'    → "{s}"')
     if ent < 7.5:
         print(f"    First 32B: {decrypted[:32].hex()}")
 
@@ -164,7 +165,7 @@ def main():
     best_ent = 8.0
     best_key = 0
     for key in range(256):
-        dec = bytes(b ^ key for b in data[16:min(512, len(data))])
+        dec = bytes(b ^ key for b in data[16 : min(512, len(data))])
         ent = shannon_entropy(dec)
         if ent < best_ent:
             best_ent = ent

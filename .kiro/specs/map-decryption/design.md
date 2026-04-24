@@ -8,16 +8,38 @@ All tools live in `tools/maps/` and are standalone Python scripts (no package in
 
 ```
 tools/maps/
-├── README.md             # This file — usage docs
-├── testdata/             # Extracted test files (gitignored)
-├── analyse_header.py     # Phase 1: Compare headers across files
-├── try_lyc_key.py        # Phase 2: Try .lyc XOR-CBC key on map data
-├── find_decrypt_dll.py   # Phase 3: Search nngine.dll for decryption functions
-├── decrypt_fbl.py        # Phase 4: Decrypt a map file
-├── fbl_info.py           # Phase 5: Show header info and stats
-├── fbl_to_geojson.py     # Phase 5: Export to GeoJSON
-└── spc_to_csv.py         # Phase 5: Export speed cameras to CSV
+├── README.md                # Usage docs
+├── testdata/                # Extracted test files (gitignored)
+│
+│ ── Completed ──
+├── analyse_header.py        # ✅ Compare headers across map files
+├── try_lyc_key.py           # ✅ Try known keys on encrypted map data
+├── decrypt_fbl.py           # ✅ Decrypt map files (outer XOR layer)
+├── fbl_info.py              # ✅ Show map file metadata, bbox, version
+├── spc_to_csv.py            # ✅ Export speed cameras to CSV
+│
+│ ── To Build ──
+├── lyc_decrypt.py           # Decrypt .lyc licenses → SWID, product name
+├── junctions_to_geojson.py  # Extract road junction coordinates as GeoJSON
+├── segments_to_csv.py       # Extract road segment metadata to CSV
+├── spc_extract_all.py       # Batch extract ALL speed cameras from disk backup
+└── map_overview.py          # Show all countries with bbox, version, sizes
 ```
+
+## What We Can Do With Decrypted Data
+
+**Speed cameras** — fully parsed. Coordinates + speed limits for all 30 countries.
+Can be exported to CSV, loaded into GPS apps, or used for analysis.
+
+**Road junction coordinates** — the network topology (which roads connect where)
+is accessible as full int32 coordinate pairs. Can be exported as GeoJSON points.
+
+**Road segment metadata** — road type/speed class and shape point counts per segment.
+Useful for understanding the road network structure.
+
+**License content** — SWIDs, product names, activation data from all .lyc files.
+
+**Map metadata** — country, version, bounding box, copyright, build info for every file.
 
 ## Investigation Strategy
 

@@ -2,74 +2,46 @@
 
 > Requirements: [requirements.md](requirements.md) | Design: [design.md](design.md)
 
-## Phase 1: Header Analysis
+## Done ✅
 
-- [ ] **1.1** Extract small test files from `disk-backup-with-map-Apr2026.zip`
-  - Vatican_osm.fbl (11 KB), Vatican_osm.fpa (1.5 KB), Andorra_osm.spc (450 B)
-  - Monaco_osm.fbl (53 KB), Monaco_osm.fpa (5 KB)
-  - France_osm.fbl (first 1 KB only — for header comparison)
-- [ ] **1.2** Build `tools/maps/analyse_header.py`
-  - Read first 64 bytes of each extracted file
-  - Output comparison table: offset, FBL value, FPA value, constant/variable
-  - Identify the header structure (magic, type field, size field, encrypted payload start)
-- [ ] **1.3** Check if file sizes are 8-byte or 16-byte aligned (block cipher indicator)
-- [ ] **1.4** Document findings in `docs/mapformat.md`
+- [x] **1.1-1.4** Header analysis — magic bytes, constant/variable fields, 512-byte alignment
+- [x] **2.1** .lyc RSA decryption — 8-byte header offset, byte-reversed modulus, all 3 licenses decrypted
+- [x] **2.2** Key testing — XOR table found (same as device.nng), SnakeOil/Blowfish/.lyc keys tested
+- [x] **3.1-3.5** DLL analysis — SET reader, Blowfish functions, key hierarchy traced
+- [x] **4.1** `tools/maps/decrypt_fbl.py` — outer XOR decryption working
+- [x] **4.2** Verified on all file types (.fbl, .fpa, .hnr, .poi, .spc)
+- [x] **5.1** SET header structure (magic, version, data offset, file size)
+- [x] **5.2** Coordinate encoding (int32 / 2^23 = WGS84 degrees)
+- [x] **5.4** `tools/maps/fbl_info.py` — metadata, bbox, country, version, copyright
+- [x] **5.5** `tools/maps/spc_to_csv.py` — speed cameras to CSV (coordinates + speed)
 
-## Phase 2: Try Known Keys
+## Blocked ❌
 
-- [ ] **2.1** Extract the XOR-CBC key from a `.lyc` license file
-  - RSA-decrypt `LGe_Renault_ULC_OSM_UK_IL_Update_2025_Q3.lyc`
-  - Extract bytes 8-24 from the 40-byte header
-  - Document the key value
-- [ ] **2.2** Build `tools/maps/try_lyc_key.py`
-  - Try XOR-CBC decrypt on `Vatican_osm.fbl` with the .lyc key
-  - Try SnakeOil decrypt with magic bytes as uint64 seed
-  - Try SnakeOil decrypt with tb_secret, hu_secret as seeds
-  - Try Blowfish decrypt with the known DLL Blowfish key
-  - For each attempt: measure Shannon entropy, check for ASCII strings
-  - Report which (if any) produces structured output
-- [ ] **2.3** If a key works: verify on 3+ other files (different countries, different types)
-- [ ] **2.4** If no key works: proceed to Phase 3
+- [ ] **Shape data decryption** — second encryption layer (Blowfish), master key from head unit config
+- [ ] **5.6** `tools/maps/fbl_to_geojson.py` — needs shape data decryption for full road geometry
 
-## Phase 3: DLL Analysis (only if Phase 2 fails)
+## Can Do Now 🔧
 
-- [ ] **3.1** Search `nngine.dll` for magic bytes `f9 6d 4a 16 6f c5 78 ee`
-  - Check .rdata and .data sections
-  - Find all cross-references to the magic
-- [ ] **3.2** Identify the file-open/validate function
-  - Should read the 8-byte magic, validate, then call decryption
-- [ ] **3.3** Trace the decryption function
-  - Identify cipher (AES? XOR-CBC? SnakeOil? Blowfish? custom?)
-  - Identify block size and mode
-- [ ] **3.4** Trace the key source
-  - Where does the key come from? (.lyc? device.nng? hardcoded? content_id-derived?)
-- [ ] **3.5** Document the complete algorithm
-
-## Phase 4: Implement Decryption
-
-- [ ] **4.1** Implement `tools/maps/decrypt_fbl.py`
-  - Input: encrypted file + key material
-  - Output: decrypted file
-  - Verify: entropy < 7.0, recognisable strings present
-- [ ] **4.2** Verify on all file types: .fbl, .fpa, .hnr, .poi, .spc
-- [ ] **4.3** Write tests with known input/output pairs
-
-## Phase 5: Parse and Export
-
-- [ ] **5.1** Analyse decrypted `.fbl` header structure
-- [ ] **5.2** Identify coordinate encoding
-- [ ] **5.3** Cross-reference with OSM data for Vatican (smallest, easiest to verify)
-- [ ] **5.4** Build `tools/maps/fbl_info.py` — show bounding box, road count, stats
-- [ ] **5.5** Build `tools/maps/spc_to_csv.py` — speed cameras to CSV
-- [ ] **5.6** Build `tools/maps/fbl_to_geojson.py` — road network to GeoJSON
-
-## Current Status
-
-**Not started.** First task is 1.1 — extract test files from the zip.
+- [ ] **6.1** Extract ALL speed cameras from the full disk backup
+  - Extract all `.spc` files from `disk-backup-with-map-Apr2026.zip`
+  - Run `spc_to_csv.py` to produce a complete speed camera database
+  - Expected: ~20 countries × 10-100 cameras each
+- [ ] **6.2** Build `tools/maps/lyc_decrypt.py` — decrypt .lyc license files
+  - RSA decrypt (skip 8-byte header, use byte-reversed modulus)
+  - XOR-CBC decrypt remaining data with key from RSA payload
+  - Output: SWID, product name, activation data per license
+- [ ] **6.3** Build `tools/maps/junctions_to_geojson.py`
+  - Scan decrypted .fbl for full int32 coordinate pairs
+  - Filter to valid coordinates within the bounding box
+  - Output GeoJSON FeatureCollection of points
+  - Verify against OSM for Vatican (smallest, easiest to check)
+- [ ] **6.4** Build `tools/maps/segments_to_csv.py`
+  - Parse the 12-byte segment metadata between junction coordinates
+  - Output: from_lon, from_lat, to_lon, to_lat, road_type, shape_count
+- [ ] **6.5** Build `tools/maps/map_overview.py`
+  - Run fbl_info on all files in a directory or zip
+  - Output summary table: country, type, version, size, bbox
 
 ## Documentation Rule
 
 **Keep [`docs/mapformat.md`](../../docs/mapformat.md) up to date as findings are made.**
-Every completed task that reveals new information about the format, encryption, keys,
-or internal structure must be documented there before moving to the next task.
-`mapformat.md` is the single source of truth for the map file format.

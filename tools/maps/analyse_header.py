@@ -8,6 +8,7 @@ Usage:
     python tools/maps/analyse_header.py tools/maps/testdata/
     python tools/maps/analyse_header.py file1.fbl file2.fpa file3.spc
 """
+
 import math
 import sys
 from pathlib import Path
