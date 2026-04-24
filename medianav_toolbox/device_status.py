@@ -113,8 +113,10 @@ def build_live_senddevicestatus(usb_path: Path, variant: int = 0x02,
         + b"\x00\x00\x00\x00"
         + encode_int32(device.appcid)
         + encode_string(serial)
-        + encode_string(uniq_id)
     )
+    # UniqId is only present for variant=0x02 (bitmask 1F40, bit 0 set)
+    if variant == 0x02:
+        device_info += encode_string(uniq_id)
 
     # Content version block — use value from device_status or default
     content_ver = 46475  # from captured traffic

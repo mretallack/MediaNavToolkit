@@ -8,7 +8,9 @@
     "delegator",
     "register_hu_device (cached/409)",
     "senddevicestatus",
-    "web_login"
+    "web_login",
+    "licenses",
+    "getprocess2"
   ],
   "errors": [],
   "fingerprint_status": 200,

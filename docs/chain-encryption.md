@@ -150,11 +150,25 @@ The server received identical encrypted body bytes as the original request.
 All cryptographic parameters for constructing delegated requests are now known
 and derived from credentials obtained during the normal session flow.
 
+## Verification
+
+Every claim in this document is tested:
+
+- `tests/test_dynamic_wire.py` (25 tests) — wire format structure, HMAC computation,
+  `build_dynamic_request` byte-exact match, session key = `creds.secret`
+- `tests/test_golden_wire.py` (32 tests) — decodes a known-good capture field by field,
+  verifies byte-exact round-trip, generates fresh messages with new timestamps/bodies
+
+The golden test proves: decode the server-accepted message → verify every field →
+re-encode byte-for-byte → therefore fresh messages with new keys are structurally correct.
+
 ## Files
 
 | File | Purpose |
 |------|---------|
 | `medianav_toolbox/protocol.py` | `build_dynamic_request()` |
-| `tests/test_dynamic_wire.py` | 24 tests verifying all claims in this doc |
-| `analysis/using-win32/run25_ssl/ssl_write_14_2218.bin` | Ground truth wire capture |
+| `medianav_toolbox/wire_message.py` | `WireMessage` — structured decode/encode of complete wire messages |
+| `tests/test_dynamic_wire.py` | 25 tests verifying wire format and HMAC |
+| `tests/test_golden_wire.py` | 32 tests: decode every field, byte-exact round-trip, fresh message generation |
+| `analysis/using-win32/run25_ssl/ssl_write_14_2218.bin` | Ground truth wire capture (returned HTTP 200) |
 | `analysis/using-win32/hmac_log_run25_ssl.txt` | SnakeOil + HMAC log |

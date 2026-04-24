@@ -14,9 +14,7 @@ Header (16 bytes, unencrypted):
 
 Key functions:
   build_request()          — standard requests (login, fingerprint, register)
-  build_dynamic_request()  — delegated senddevicestatus (no captured data needed)
-  build_0x68_request()     — LEGACY: replay with captured chain body
-  build_delegated_request() — LEGACY: uses wrong encryption model
+  build_dynamic_request()  — delegated senddevicestatus (session_key = creds.secret)
 """
 
 import os
@@ -99,134 +97,6 @@ def build_request(
     encrypted_query = snakeoil(query, q_seed)
     encrypted_body = snakeoil(body, b_seed) if body else b""
     return header + encrypted_query + encrypted_body
-
-
-def build_0x68_request(
-    counter: int,
-    tb_name: bytes,
-    hu_code: int,
-    tb_code: int,
-    hu_secret: int,
-    chain_body: bytes,
-    extra_6: bytes,
-    code: int,
-    service_minor: int = SVC_MARKET,
-    session_id: int | None = None,
-) -> bytes:
-    """Build a complete 0x68 wire request.
-
-    The ENTIRE payload (query + chain_body) is encrypted as ONE continuous
-    SnakeOil stream with tb_code. NOT split into separate segments.
-
-    Wire format (from SSL_write capture run25):
-      [16B header, key=tb_code]
-      [SnakeOil(payload, tb_code)]
-        payload = [counter][0x68][D8+Name₃_XOR(17B)][extra_6(6B)][chain_body]
-
-    The chain_body is the igo-binary serialized body with field-level chain
-    encryption applied. The extra_6 bytes must be consistent with the chain_body
-    (server validates this).
-
-    Args:
-        counter: request sequence counter byte
-        tb_name: 16-byte toolbox credential Name (for 0x28 variant)
-        hu_code: head unit Code (uint64)
-        tb_code: toolbox Code (uint64)
-        hu_secret: head unit Secret (uint64)
-        chain_body: pre-encrypted body (from chain encryption or captured data)
-        extra_6: the 6 extra bytes that match the chain_body
-        code: tb_code for encryption (uint64)
-        service_minor: service version byte
-        session_id: header nonce byte (auto-generated if None)
-
-    Returns:
-        Complete wire bytes ready to send
-    """
-    from medianav_toolbox.igo_serializer import (
-        build_credential_block,
-        build_delegation_name3,
-    )
-
-    sid = session_id if session_id is not None else (os.urandom(1)[0] | 0x01)
-
-    header = struct.pack(
-        ">BBBB Q B HB",
-        0x01,
-        0xC2,
-        0xC2,
-        AUTH_DEVICE,
-        code,
-        service_minor,
-        0x0000,
-        sid,
-    )
-
-    # Build Name₃ credential block for 0x68
-    name3 = build_delegation_name3(hu_code, tb_code)
-    cred_block = build_credential_block(name3[:16])
-
-    # Build payload: query + chain_body, encrypted as ONE stream with tb_code
-    query = bytes([counter, 0x68]) + cred_block + extra_6
-    payload = query + chain_body
-    encrypted_payload = snakeoil(payload, code)
-
-    return header + encrypted_payload
-
-
-def build_delegated_request(
-    counter: int,
-    body: bytes,
-    name3: bytes,
-    hu_code: int,
-    tb_code: int,
-    hu_secret: int,
-    secret: int,
-    service_minor: int = SVC_MARKET,
-    session_id: int | None = None,
-    timestamp: int | None = None,
-) -> bytes:
-    """Build a delegated wire request using the 0x80 query format.
-
-    Wire format:
-      [16B header, key=tb_code]
-      [SnakeOil(query + body, tb_code)]  ← ONE continuous stream, no separator
-
-    Query (41B) = [counter][0x80][Name₃(17B)][ts(4B)][0x30][0x10][HMAC(16B)]
-    Separator (1B) = session nonce (same as header byte 15)
-    Body (var) = standard plaintext body
-
-    The entire encrypted payload is ONE continuous SnakeOil stream using
-    the key from the header (tb_code). NOT separate streams.
-    """
-    import hashlib
-    import hmac as hmac_mod
-    import time
-
-    ts = timestamp if timestamp is not None else int(time.time()) & 0xFFFFFFFF
-    hmac_data = (
-        b"\xc4" + struct.pack(">Q", hu_code) + struct.pack(">Q", tb_code) + struct.pack(">I", ts)
-    )
-    hmac_key = struct.pack(">Q", hu_secret)
-    hmac_result = hmac_mod.new(hmac_key, hmac_data, hashlib.md5).digest()
-
-    query = bytes([counter, 0x80]) + name3 + struct.pack(">I", ts) + b"\x30\x10" + hmac_result
-
-    sid = session_id if session_id is not None else (os.urandom(1)[0] | 0x01)
-    header = struct.pack(
-        ">BBBB Q B HB",
-        0x01,
-        0xC2,
-        0xC2,
-        AUTH_DEVICE,
-        tb_code,
-        service_minor,
-        0x0000,
-        sid,
-    )
-
-    # One continuous stream: query + body
-    payload = query + body
-    return header + snakeoil(payload, tb_code)
 
 
 def build_dynamic_request(

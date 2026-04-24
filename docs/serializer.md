@@ -226,6 +226,7 @@ class FieldDescriptor:      # Field metadata: name, type, accessor offset, sub-f
 | File | Description |
 |------|-------------|
 | `medianav_toolbox/igo_serializer_model.py` | Python model with Ghidra C as comments |
+| `medianav_toolbox/wire_message.py` | Structured decode/encode of complete wire messages |
 | `medianav_toolbox/bitstream.py` | Simple BitStream writer |
 | `analysis/serializer_functions.c` | 18 Ghidra-decompiled C functions |
 | `analysis/nngine_decompiled.c` | Full Ghidra decompilation (15MB) |
