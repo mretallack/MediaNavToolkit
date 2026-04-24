@@ -60,12 +60,11 @@ naturally look random.
   - The address index (~60-80% of file) uses a custom encoding for street name lookups
   - Full parser would require significant reverse engineering of the index structure
   - Low priority — address search is less useful than road geometry
-- [ ] **7.4** Parse `.poi` format — INVESTIGATED, different container
-  - Does NOT use SET container — has its own header (magic `0xC56766 2A`, header_id 3311887914)
-  - XOR table decryption works — UTF-16 metadata readable at offset 0x14
-  - Country code and offset table found at ~0x136
-  - Contains POI coordinates + names in a custom encoding
-  - Needs dedicated parser (different from FBL/FPA)
+- [x] **7.4** `tools/maps/poi_to_geojson.py` — extract POI coordinates as GeoJSON
+  - Different container from FBL (magic `0xC5676632A`, no SET header)
+  - XOR table decryption works, coordinates as uint16 pairs scaled to bbox
+  - Andorra: 1,278 POIs with category names (_Cafe, _Cinema, Hyundai, etc.)
+  - Category name encoding partially decoded (some garbled — needs further work)
 - [x] **7.5** Identify what each section contains
   - All sections are packed bitstreams of coordinates
   - Section roles mapped: 4=main roads, 5=secondary, 8=tertiary, 16=areas, etc.
