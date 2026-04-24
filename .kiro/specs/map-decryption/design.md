@@ -4,15 +4,19 @@
 
 ## Architecture
 
+All tools live in `tools/maps/` and are standalone Python scripts (no package install needed).
+
 ```
 tools/maps/
-├── analyse_header.py     # T1-T4: Compare headers across files
-├── try_lyc_key.py        # T5-T6: Try .lyc XOR-CBC key on map data
-├── find_decrypt_dll.py   # T7: Search nngine.dll for decryption functions
-├── decrypt_fbl.py        # T9: Decrypt a map file
-├── fbl_info.py           # T18: Show header info and stats
-├── fbl_to_geojson.py     # T19: Export to GeoJSON
-└── spc_to_csv.py         # T20: Export speed cameras to CSV
+├── README.md             # This file — usage docs
+├── testdata/             # Extracted test files (gitignored)
+├── analyse_header.py     # Phase 1: Compare headers across files
+├── try_lyc_key.py        # Phase 2: Try .lyc XOR-CBC key on map data
+├── find_decrypt_dll.py   # Phase 3: Search nngine.dll for decryption functions
+├── decrypt_fbl.py        # Phase 4: Decrypt a map file
+├── fbl_info.py           # Phase 5: Show header info and stats
+├── fbl_to_geojson.py     # Phase 5: Export to GeoJSON
+└── spc_to_csv.py         # Phase 5: Export speed cameras to CSV
 ```
 
 ## Investigation Strategy
@@ -155,3 +159,10 @@ Once decryption works:
 1. Identify the internal binary format
 2. Extract coordinates, road names, POI data
 3. Export to GeoJSON/CSV/KML
+
+## Documentation
+
+**All findings must be recorded in [`docs/mapformat.md`](../../docs/mapformat.md).**
+This is the single source of truth for the NNG map file format. Update it after
+every phase — header structure, encryption algorithm, key source, internal format,
+coordinate encoding, etc. The doc should always reflect current knowledge.

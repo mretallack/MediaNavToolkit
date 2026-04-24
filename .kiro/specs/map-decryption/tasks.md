@@ -66,3 +66,10 @@
 ## Current Status
 
 **Not started.** First task is 1.1 — extract test files from the zip.
+
+## Documentation Rule
+
+**Keep [`docs/mapformat.md`](../../docs/mapformat.md) up to date as findings are made.**
+Every completed task that reveals new information about the format, encryption, keys,
+or internal structure must be documented there before moving to the next task.
+`mapformat.md` is the single source of truth for the map file format.
