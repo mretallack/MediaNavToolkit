@@ -87,7 +87,7 @@ NngineFireEvent
 
 ### Remaining ❌
 
-- **Full sync pipeline** — `medianav-toolbox sync` command not yet wired end-to-end
+- **Paid content download** — sync command works for selection + confirmation, but actual file download from server not yet implemented (requires `getprocess` polling + file transfer)
 
 ---
 
@@ -1013,10 +1013,11 @@ matches all captured SnakeOil calls.
 
 No hardcoding needed — every device gets its own `creds.secret` at registration.
 
-### R.13: session.py Integration — STATUS: OPEN
+### R.13: session.py Integration — STATUS: SOLVED ✅
 
-`_send_device_status()` in `session.py` still uses the old replay approach with
-captured chain bodies. Needs to be updated to use `build_dynamic_request()`.
+`_send_device_status()` updated to use `build_dynamic_request()`. Session flow
+reordered to match captured Toolbox sequences. Both 0x60 and delegated
+senddevicestatus return HTTP 200.
 
 ### R.14: Live Server 409s — STATUS: SOLVED ✅
 
