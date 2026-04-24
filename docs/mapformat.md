@@ -606,3 +606,26 @@ are stored in compressed form.
 This means the geometry is stored in two layers:
 1. **Junction nodes** — full int32 coordinate pairs (already extracted)
 2. **Shape points** — compressed intermediate points referenced by offset+count
+
+### Shape Data Encryption — Blowfish (Confirmed)
+
+The shape point data in the bulk section has a **second encryption layer** using
+**standard Blowfish** (16-round Feistel cipher with standard pi-derived initial values).
+
+**DLL functions:**
+- `FUN_101189e0` — Blowfish Feistel round (16 rounds, 4 S-boxes)
+- `FUN_10118080` / `FUN_10118b00` — Blowfish key schedule
+- `FUN_10118a70` — Blowfish decrypt (reverse round order)
+- `FUN_10118260` — Blowfish CBC decrypt (processes 8-byte blocks in sequence)
+
+**Initial values:** Standard Blowfish P-array (`0x243F6A88...`) and S-boxes from
+`nngine.dll` at RVA `0x2C24C0` (P-array) and `0x2C2508` (S-boxes).
+
+**Key:** Unknown. The `http_dump` Blowfish key reduces entropy from 7.97 to ~5.7
+but doesn't produce valid coordinates. The shape data key is likely:
+- Per-file (derived from the SET header or content_id)
+- Or from the `.lyc` license file
+- Or a different hardcoded key in the DLL
+
+**Next step:** Trace `FUN_10118080` with Unicorn to capture the actual key bytes
+passed during map file loading.
