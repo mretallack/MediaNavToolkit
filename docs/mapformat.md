@@ -553,3 +553,25 @@ If that works, everything else follows.
 - [GPSPower iGO Maps forum](https://www.gpspower.net/igo-maps.html)
 - [SCDB.info — Speed camera database for iGO](https://www.scdb.info/en/installation-igo/)
 - [Convert.guru — FBL format description](https://convert.guru/fbl-converter)
+
+### Compact Geometry Encoding (Not Yet Decoded)
+
+The bulk of the road geometry is stored in a **variable-length bitstream** format
+in section 1 (offset 0x06D2 in Vatican). This is NOT raw int32 coordinates — the
+deltas between known road nodes (-23245, -20947, -3968, -4420, etc.) are not found
+as raw bytes in the section.
+
+**What we know:**
+- Records have a 10-byte fixed prefix (`24 8B 18 A0 07 08 90 AC 61 80`)
+- Records are separated by `68 00 02` markers
+- Variable part encodes coordinate deltas in a bitstream
+- Very few bits differ between adjacent records (consistent with small deltas)
+- The encoding is likely a variable-length integer scheme (Elias gamma, Golomb, or custom)
+
+**What would be needed to decode:**
+- Trace the geometry reader in `nngine.dll` (the function that reads section 1)
+- Or: brute-force test different variable-length integer encodings against known deltas
+- The full int32 coordinates in section 4 provide ground truth for verification
+
+This is the deepest layer of the format and would require significant reverse
+engineering effort to fully decode.
