@@ -23,6 +23,8 @@ RUN34_WIRE = Path("analysis/captures/run34/wire_19_1236.bin")
 @pytest.fixture
 def usb_copy(tmp_path):
     """Create a writable copy of the reference USB image."""
+    if not REF_USB.exists():
+        pytest.skip("Reference USB image not available")
     dst = tmp_path / "usb"
     shutil.copytree(REF_USB, dst)
     return dst
@@ -90,6 +92,11 @@ def parse_entries(body, start):
 
 class TestReferenceUSBLayout:
     """Verify the reference USB image has the expected structure."""
+
+    @pytest.fixture(autouse=True)
+    def _require_ref(self):
+        if not REF_USB.exists():
+            pytest.skip("Reference USB image not available")
 
     def test_device_nng_exists(self):
         assert (REF_USB / "NaviSync/license/device.nng").exists()
