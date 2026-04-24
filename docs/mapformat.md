@@ -660,3 +660,19 @@ key. Without the private key, we cannot:
 This is a proper DRM system. The shape geometry is protected by RSA + Blowfish.
 The junction coordinates and metadata are only protected by the XOR table
 (which we've already broken), but the detailed road shapes require the license.
+
+### RSA Key Status
+
+**Correction:** The `.lyc` license uses RSA as a **signing** scheme — the server
+signs with the private key, the device verifies with the public key. This means
+we SHOULD be able to decrypt `.lyc` files with the public key we have.
+
+However, the RSA modulus from the spec (`6B231771...`) does not produce valid
+PKCS#1 padding when applied to the `.lyc` files. Possible reasons:
+- The modulus might be for a different purpose (protocol, not licenses)
+- There may be multiple RSA keys in the DLL
+- The `.lyc` format might not use standard PKCS#1 padding
+- The modulus byte order might be different
+
+**Next step:** Find the correct RSA key by tracing `FUN_10154b40` (RSA PKCS#1 v1.5)
+in the DLL to see which key structure it uses for `.lyc` decryption.
