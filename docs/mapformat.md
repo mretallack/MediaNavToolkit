@@ -169,9 +169,50 @@ Despite the encryption, the filenames confirm the data source:
 - `France_osm.fbl` — the `_osm` suffix indicates **OpenStreetMap** source data
 - The same geographic data is freely available from [Geofabrik](https://download.geofabrik.de/)
   in open formats (PBF, XML)
+- Copyright string in decrypted files: `© 2025 NNG Ltd. with OpenStreetMap`
 
-NNG compiles OSM data into their proprietary encrypted format using their internal
-map compiler toolchain.
+NNG compiles OSM data into their proprietary SET format, then encrypts with the XOR table.
+
+## SET Format (Decrypted)
+
+After XOR decryption, FBL and FPA files use the **SET** container format:
+
+### Header (32 bytes)
+
+| Offset | Size | Value | Meaning |
+|--------|------|-------|---------|
+| 0x00 | 4 | `SET\x00` | Magic signature |
+| 0x04 | 4 | `04 06 07 20` | Version 4.6.7.32 |
+| 0x08 | 4 | varies | Timestamp or content hash |
+| 0x0C | 4 | `01 00 00 00` | Section count (1) |
+| 0x10 | 4 | varies | Content identifier |
+| 0x14 | 4 | `00 00 00 00` | Reserved |
+| 0x18 | 4 | `00 02 00 00` | Data offset (512 = 0x200) |
+| 0x1C | 4 | file size | Total file size in bytes |
+
+### Padding (offset 0x20 to 0x200)
+
+480 bytes of Latin text (Cicero, *Pro Murena*): "Nihil est incertius vulgo, nihil
+obscurius voluntate hominum..." — used as padding between header and data.
+
+### Data Section (offset 0x200+)
+
+Starts with a sub-header followed by UTF-16LE metadata:
+
+```
+[nng]#COUNTRY# 2025.09
+© 2025 NNG Ltd. with OpenStreetMap (http://openstreetmap.org/copyright)
+
+_VAT|2025.09|||
+```
+
+Followed by build info in XML-like format:
+```xml
+<L><SP T="20250930 174807" N="convl_nng" V="23,304,263,424" A="W 64 bit" C="831840" /></L>
+```
+
+The actual map geometry data follows after the metadata. The coordinate encoding
+and road network structure are not yet parsed — this is the next investigation step.
 
 ## Shadow Metadata (.stm)
 
