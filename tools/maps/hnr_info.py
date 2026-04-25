@@ -111,6 +111,23 @@ def main():
         print(f"  Suburban tiles (15-35%):   {suburban}", file=sys.stderr)
         print(f"  Rural tiles (major > 35%): {rural}", file=sys.stderr)
 
+    if "--csv" in sys.argv:
+        output_path = None
+        if "-o" in sys.argv:
+            output_path = Path(sys.argv[sys.argv.index("-o") + 1])
+        import csv
+        out = open(output_path, "w", newline="") if output_path else sys.stdout
+        w = csv.writer(out)
+        w.writerow(["tile", "major_records", "minor_records", "total_segments", "major_ratio", "classification"])
+        for i, (a, b) in enumerate(info["pairs"]):
+            if a + b > 0:
+                ratio = a / b if b > 0 else 0
+                cls = "urban" if ratio < 0.15 else ("suburban" if ratio < 0.35 else "rural")
+                w.writerow([i, a, b, (a + b) * 64, f"{ratio:.3f}", cls])
+        if output_path:
+            out.close()
+            print(f"Wrote CSV to {output_path}", file=sys.stderr)
+
 
 if __name__ == "__main__":
     main()

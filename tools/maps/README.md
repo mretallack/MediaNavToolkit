@@ -32,7 +32,26 @@ ls -lh tools/maps/testdata/
 
 ## Tools
 
+## Tools
+
 ### analyse_header.py — Compare file headers
+### try_lyc_key.py — Try known keys on encrypted data
+### decrypt_fbl.py — Decrypt a map file
+### fbl_info.py — Show map file info
+### spc_to_csv.py — Speed cameras to CSV
+### fbl_to_geojson.py — Road network to GeoJSON
+### fbl_road_class.py — Extract road class per segment
+### fbl_segments.py — List segments with byte offsets
+### fbl_road_network.py — Road network GeoJSON with road classes
+### junctions_to_geojson.py — Junction coordinates
+### segments_to_csv.py — Road segment metadata
+### curves_to_geojson.py — Curve shape points
+### map_overview.py — Multi-country overview
+### poi_to_geojson.py — POI extraction with decoded names
+### lyc_decrypt.py — License file decryption
+### hnr_info.py — HNR routing data (with --csv export)
+### nng_varint.py — Varint decoder library
+### nng_emulator.py — Unicorn DLL emulation framework
 
 Reads the first 64 bytes of each file and shows which bytes are constant
 vs variable across files. Identifies the header structure.
