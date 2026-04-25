@@ -1131,3 +1131,21 @@ road_type = 1CFFF SSS (binary)
 - 0x95 = FRC 2, speed 5 → OSM: footway (minor road in Vatican)
 - 0x9A = FRC 3, speed 2 → OSM: footway
 - 0xA5 = FRC 4, speed 5 → OSM: pedestrian (Piazza Santa Marta)
+
+### Road Attributes in Large FBL Files — Not Present
+
+Exhaustive analysis confirms that **road attributes (FRC, speed class) are NOT stored
+in the coordinate bitstreams** of larger FBL files:
+
+1. Section 4 bitstream decodes as 100% valid coordinates at exactly N+M bits per point.
+   Adding any extra attribute bits (K=1 to K=8) produces maximum-entropy "attributes"
+   (uniform distribution) — confirming no interleaved data.
+2. Gap area coordinates are 95-100% valid; the 5% "invalid" points are near-border
+   roads, not attribute data.
+3. Section 15 size doesn't scale linearly with road count (0.07-0.67 B/point).
+4. No other sections contain structured attribute data.
+
+**Road classification sources:**
+- **Vatican only:** Inline road_type byte in section 4 raw format (FRC in bits 3-5)
+- **All files:** HNR type A/B block split (major ~19% vs minor ~81%)
+- **Not available:** Per-segment FRC for files larger than Vatican without DLL runtime
