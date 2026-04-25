@@ -114,8 +114,9 @@ naturally look random.
   - Region-level files (e.g. EuropeEconomic.hnr, EuropeFastest.hnr)
   - Contains time-of-day traffic speed profiles for road segments
 - [ ] **9.6** Parse TMC (traffic message channel) files
+  - Only `.stm` shadow files available on USB (actual TMC data on head unit internal storage)
   - Provider-specific files (e.g. France-V-Trafic.tmc, Germany_HERE.tmc)
-  - Very small (<0.1 MB total), not yet investigated
+  - Cannot investigate without extracting actual files from head unit
   - Maps TMC location codes to road segments for real-time traffic
 
 ## Documentation Rule
