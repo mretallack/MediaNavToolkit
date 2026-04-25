@@ -1370,3 +1370,24 @@ To extract road class from any FBL file:
 1. Convert raw section bytes to uint32 records (FUN_1024a720)
 2. Find records with type 0x80030000
 3. Low 16 bits = road class index (0-9)
+
+### Road Class Marker — Value 92 (0x5C) ✅
+
+In the varint stream, **value 92 (0x5C = backslash)** marks a road class record.
+When the pattern compiler encounters value 92, it calls `FUN_10244b70` which
+processes the following values and returns a negative road class index.
+
+**Verified counts:**
+
+| Country | Segments | Value 92 count | Match? |
+|---------|----------|---------------|--------|
+| Vatican | 81 | 3 | ✓ (3 known road segments) |
+| Monaco | 395 | 70 | ~18% of segments |
+| Andorra | 1440 | 191 | ~13% of segments |
+| Malta | 8096 | 1148 | ~14% of segments |
+
+Not every segment has a road class marker — only ~14-18% do. The remaining
+segments likely inherit the road class from a parent or default value.
+
+The road class index is computed by `FUN_10244b70` from the values following
+the 92 marker. The exact computation requires emulating this sub-function.
