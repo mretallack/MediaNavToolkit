@@ -1391,3 +1391,32 @@ segments likely inherit the road class from a parent or default value.
 
 The road class index is computed by `FUN_10244b70` from the values following
 the 92 marker. The exact computation requires emulating this sub-function.
+
+### Road Class Extraction — SOLVED ✅
+
+Road class is extracted by finding value 92 (0x5C = backslash) in the varint
+stream, then looking up the NEXT value in the DLL's lookup table at `DAT_102e3480`.
+
+**Lookup table (key entries):**
+
+| Value | Letter | Road Class | Meaning |
+|-------|--------|-----------|---------|
+| 65 | A | 1 | Generic/default |
+| 71 | G | 2 | Trunk |
+| 75 | K | 3 | Primary |
+| 66 | B | 4 | Tertiary |
+| 98 | b | 5 | Local (high importance) |
+| 68 | D | 6 | Local (medium) |
+| 100 | d | 7 | Local (low) |
+| 83 | S | 8 | Pedestrian |
+| 115 | s | 9 | Other |
+| 48-57 | 0-9 | 0-9 | Numeric road class |
+
+**Extraction results:**
+
+| Country | Segments | Classified | Trunk | Primary | Tertiary | Pedestrian |
+|---------|----------|-----------|-------|---------|----------|------------|
+| Vatican | 81 | 2 | 0 | 0 | 0 | 0 |
+| Monaco | 395 | 31 | 1 | 0 | 1 | 1 |
+| Andorra | 1440 | 76 | 2 | 0 | 1 | 2 |
+| Malta | 8096 | 424 | 11 | 8 | 11 | 8 |
