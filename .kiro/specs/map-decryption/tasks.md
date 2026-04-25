@@ -104,19 +104,20 @@ naturally look random.
   - The earlier "high entropy" finding was about trailing data after the section table,
     which is actually packed coordinate data (decoded in 9.7)
   - No compression or encryption to investigate
-- [ ] **9.5** Parse HNR (historical navigation routing) files — PARTIALLY DECODED
+- [ ] **9.5** Parse HNR (historical navigation routing) files — SUBSTANTIALLY DECODED
   - Magic: `HNRF` (not SET container), XOR table decryption works
   - Header: magic(4) + version(4) + hash(4) + flags(4) + metadata_len(4)
-  - Metadata: same NNG format `[nng]#COUNTRY# 2025.09`, routing type (Economic/Fastest/Shortest)
-  - After metadata (0x0118): routing parameters (speed values, bbox, thresholds)
-  - At 0x01B4: 484 (block count?), 0x01B8: 517 (another count?)
-  - At 0x01D4/0x01D8: file offsets near end (58.9M / 61.1M in 62M file)
-  - At 0x0210: count table — 384 entries (192 pairs), values are uint32 >> 8
-    - Sum of all counts: 306,756 — matches ~202 bytes/record for 62MB data
-    - Pair structure: (small_count, large_count) per region/tile
-  - Data at 0x1000: 202-byte fixed-size records, high-entropy (packed speed profiles)
-  - No visible record headers — data is densely packed binary
-  - Region-level files (EuropeEconomic.hnr, EuropeFastest.hnr, EuropeShortest.hnr)
+  - Metadata: same NNG format, routing type (Economic/Fastest/Shortest)
+  - Count table at 0x0210: 384 entries, values are uint32 >> 8 = record counts
+  - Record size: exactly 256 bytes (count × 256 = block size, verified for all entries)
+  - **Bit-level structure decoded** by cross-referencing Economic vs Fastest:
+    - Per 32-bit group: ~22 shared bits (road data) + ~10 routing bits
+    - Bit 0 of byte 0: ALWAYS inverted between Economic/Fastest (variant flag)
+    - Byte 1: independent routing weight per variant
+    - Byte 3: 100% shared road topology data
+  - Economic and Fastest share same record ordering for first ~1000 records
+  - Shortest uses completely different format (counts don't fit >> 8 pattern)
+  - 306,756 records × 64 groups = ~19.6M road segment entries per variant
 - [ ] **9.6** Parse TMC (traffic message channel) files
   - Only `.stm` shadow files available on USB (actual TMC data on head unit internal storage)
   - Provider-specific files (e.g. France-V-Trafic.tmc, Germany_HERE.tmc)
