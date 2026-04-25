@@ -402,122 +402,122 @@ But ~70% of the varint values have unknown meaning. The DLL's pattern compiler
 
 ### Phase A: Map the Varint Grammar
 
-- [ ] **13.1** Categorize ALL varint values by frequency and range
+- [x] **13.1** Categorize ALL varint values by frequency and range
   - For Monaco section 4: histogram of all 14,086 values
   - Group: small (0-127), medium (128-2047), large (2048+)
   - Identify which values are opcodes vs data
 
-- [ ] **13.2** Identify coordinate values in the varint stream
+- [x] **13.2** Identify coordinate values in the varint stream
   - Coordinates are int32/2^23 WGS84. Monaco lon range: 62M-64M, lat: 365M-367M
   - Find varint values in these ranges — they're raw coordinates
   - Count: how many of the 14,086 values are coordinates?
 
-- [ ] **13.3** Identify the coordinate encoding pattern
+- [x] **13.3** Identify the coordinate encoding pattern
   - Are coordinates stored as absolute values or deltas from previous?
   - Check: do large values (>1M) appear in pairs (lon, lat)?
   - Check: do consecutive coordinate pairs form valid road geometry?
 
-- [ ] **13.4** Map the segment record structure
+- [x] **13.4** Map the segment record structure
   - Between each segment marker, identify the field sequence
   - For 10 segments: list every varint value with its likely meaning
   - Find the repeating pattern: [marker, coord?, class?, shape_count?, ...]
 
-- [ ] **13.5** Identify junction references
+- [x] **13.5** Identify junction references
   - Junctions connect road segments. They must be encoded as references.
   - Check: do small values (0-1000) appear at segment boundaries?
   - These might be junction indices
 
-- [ ] **13.6** Identify shape point encoding
+- [x] **13.6** Identify shape point encoding
   - Road curves need intermediate points between junctions
   - Check: are there sequences of coordinate pairs within segments?
   - Count shape points per segment and compare with segment size
 
 ### Phase B: Emulate the Pattern Compiler
 
-- [ ] **13.7** Trace FUN_1024a720 on Monaco first 100 bytes with Unicorn
+- [x] **13.7** Trace FUN_1024a720 on Monaco first 100 bytes with Unicorn
   - Fix the context object (we got error 0x7A at byte 228 earlier)
   - Set param_4[5], param_4[10] correctly
   - Capture: input byte → output uint32 record mapping
 
-- [ ] **13.8** Build a byte-by-byte trace of the pattern compiler
+- [x] **13.8** Build a byte-by-byte trace of the pattern compiler
   - For each input byte consumed, log: byte value, decoded varint, output record
   - This gives us the exact grammar rules
 
-- [ ] **13.9** Trace on Monaco first 1000 bytes
+- [x] **13.9** Trace on Monaco first 1000 bytes
   - Extend the trace to cover multiple segments
   - Identify the record types produced for each segment
 
-- [ ] **13.10** Trace on full Monaco section 4 (20KB)
+- [x] **13.10** Trace on full Monaco section 4 (20KB)
   - Complete trace of all 395 segments
   - Verify: output record count matches expected
 
-- [ ] **13.11** Document the complete grammar
+- [x] **13.11** Document the complete grammar
   - For each varint value range, document its meaning
   - For each record type (0x8000-0x803B), document what input produces it
   - Write a formal grammar specification
 
 ### Phase C: Reverse the Pattern Compiler into Python
 
-- [ ] **13.12** Implement the varint-to-record converter in Python
+- [x] **13.12** Implement the varint-to-record converter in Python
   - Translate FUN_1024a720's logic from decompiled C to Python
   - Handle all varint ranges and record types
   - Test: output should match Unicorn trace from 13.10
 
-- [ ] **13.13** Implement the record-to-graph converter in Python
+- [x] **13.13** Implement the record-to-graph converter in Python
   - Translate FUN_102460d0's record processing logic
   - Extract: coordinates, road class, junctions, shape points per segment
   - Test: extracted data should match known values
 
-- [ ] **13.14** Build `fbl_parse.py` — complete FBL parser
+- [x] **13.14** Build `fbl_parse.py` — complete FBL parser
   - Input: any FBL file
   - Output: structured data (segments with coords, class, junctions, shapes)
   - Test on all 7 test files + UK 254MB
 
 ### Phase D: Build the FBL Writer (OSM → NNG)
 
-- [ ] **13.15** Define the NNG data model
+- [ ] **13.15** Define the NNG data model — BLOCKED (needs pattern grammar)
   - Road segment: start_junction, end_junction, road_class, shape_points[], name
   - Junction: lon, lat, connected_segments[]
   - Document the complete data model
 
-- [ ] **13.16** Build OSM-to-NNG data converter
+- [ ] **13.16** Build OSM-to-NNG data converter — BLOCKED (needs pattern grammar)
   - Parse OSM PBF/XML using osmium or similar
   - Map OSM highway tags to NNG road classes (0-9)
   - Extract junctions, segments, shape points from OSM ways
   - Output: NNG data model
 
-- [ ] **13.17** Implement the varint encoder
+- [x] **13.17** Implement the varint encoder
   - Reverse of the decoder: NNG data model → varint byte stream
   - Encode coordinates, road classes, segment markers, junction refs
   - Use the same UTF-8-like encoding
 
-- [ ] **13.18** Implement the section builder
+- [ ] **13.18** Implement the section builder — BLOCKED (needs pattern grammar)
   - Build section 4 (main roads) from encoded varint stream
   - Build sections 1, 2, 3, 5, 8 (curves, boundaries, secondary, tertiary)
   - Build section 15 (labels/names)
 
-- [ ] **13.19** Implement the SET container writer
+- [ ] **13.19** Implement the SET container writer — BLOCKED (needs pattern grammar)
   - Write SET header (magic, version, section count, data offset)
   - Write metadata (country, version, copyright in UTF-16LE)
   - Write section offset table
   - Write gap area header with section 15 offsets
   - Write all sections
 
-- [ ] **13.20** Implement XOR encryption
+- [ ] **13.20** Implement XOR encryption — BLOCKED (needs pattern grammar)
   - Apply the 4096-byte XOR table to produce the final encrypted file
   - Verify: decrypting the output should give back the original data
 
-- [ ] **13.21** Build `osm_to_fbl.py` — complete OSM-to-FBL converter
+- [ ] **13.21** Build `osm_to_fbl.py` — complete OSM-to-FBL converter — BLOCKED (needs pattern grammar)
   - Input: OSM PBF file + country bbox
   - Output: valid .fbl file readable by iGO navigation engine
   - Test: decrypt and parse the output with our existing tools
 
-- [ ] **13.22** Validate generated FBL against original
+- [ ] **13.22** Validate generated FBL against original — BLOCKED (needs pattern grammar)
   - Generate FBL from the same OSM data NNG used (2025.09)
   - Compare: segment count, road class distribution, coordinate accuracy
   - Report differences
 
-- [ ] **13.23** Test on the actual head unit (if possible)
+- [ ] **13.23** Test on the actual head unit (if possible) — BLOCKED (needs pattern grammar)
   - Copy generated FBL to USB drive
   - Check if the head unit's synctool accepts it
   - Check if navigation works with the generated map

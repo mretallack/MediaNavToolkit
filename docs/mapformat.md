@@ -1490,3 +1490,152 @@ Large countries span multiple HNR tiles and require multi-tile matching.
 FrenchGuiana→11, Liechtenstein→20, Reunion→21, Guadeloupe→36,
 SanMarino→38, Martinique→41, Andorra→51, Gibraltar→52,
 Monaco→147, Mayotte→166
+
+### FBL Section Data — Varint Stream Grammar (Task 13 Findings)
+
+#### Encoding Confirmed: UTF-8-like Varints
+
+The DLL's `FUN_1024a720` (RVA 0x24A720) is the **decoder** that reads raw
+section bytes and produces uint32 records. It confirms the UTF-8-like encoding:
+
+```
+Byte range    Encoding         Value bits
+0x00-0x7F     0xxxxxxx         7 bits (0-127)
+0xC0-0xDF     110xxxxx 10xxxxxx    11 bits (0-2047)
+0xE0-0xEF     1110xxxx 10xx 10xx   16 bits
+0xF0-0xF7     11110xxx ...         21 bits
+0xF8-0xFB     111110xx ...         26 bits
+0xFC-0xFF     1111110x ...         31 bits
+```
+
+The decoder checks bit 19 of its flags parameter (`param_2 >> 0x13 & 1`).
+When set, bytes > 0xBF trigger multi-byte varint decoding. When clear,
+each byte is treated as a single value.
+
+#### DLL Tables (for compiled output format, NOT raw input)
+
+The DLL has two tables used for the **compiled** output format (written by
+the graph builder, not the raw FBL input):
+
+- **Size table** `DAT_102e58a0` (164 bytes): maps first byte → token size
+  - Size 0: bytes 0x70, 0x77 (variable-length blocks)
+  - Size 1: 50 bytes (single-byte opcodes)
+  - Size 2-6: multi-byte tokens
+  - Size 33: bytes 0x6E-0x6F (fixed 33-byte records)
+
+- **Extension table** `DAT_102e5860` (64 bytes): for compiled tokens 0x1D-0x54,
+  if the last byte > 0xBF, adds extra bytes:
+  - 0xC0-0xDF: +1 byte
+  - 0xE0-0xEF: +2 bytes
+  - 0xF0-0xF7: +3 bytes
+  - 0xF8-0xFB: +4 bytes
+  - 0xFC-0xFF: +5 bytes
+
+- **Character class table** at 0x102E50C8 (256 bytes): identity mapping with
+  A-Z → a-z case folding. Used for case-insensitive pattern matching.
+
+#### Decoder Output: Record Stream
+
+Unicorn emulation of `FUN_1024a720` on Monaco section 4 (20,370 bytes)
+produces **13,451 uint32 records**:
+
+- **13,432 data records**: raw varint values passed through unchanged
+- **19 control records** (0x80XX0000 format):
+
+| Type | Count | Meaning |
+|------|-------|---------|
+| 0x80090000 | 8 | Separator (divides data into 9 blocks) |
+| 0x80300000 | 2 | Road segment type marker |
+| 0x80160000 | 2 | Unknown marker |
+| 0x80080000 | 2 | Unknown marker (with data field) |
+| 0x80170000 | 2 | Unknown marker |
+| 0x80180007 | 1 | Attribute (data=7) |
+| 0x80010000 | 1 | Section marker |
+| 0x80000000 | 1 | End/start marker |
+
+#### Structural Characters in Varint Stream
+
+The decoder consumes certain varint values as structural characters:
+
+- `(` (0x28, 65 occurrences): opens a group
+- `)` (0x29, 50 occurrences): closes a group
+- `#` (0x23, 56 occurrences): reference/hash marker
+- `\` (0x5C, 70 occurrences): escape sequence (road class, etc.)
+
+These values are consumed by the decoder and either generate control records
+or modify the decoder's state. They do NOT appear in the output record stream.
+
+Additionally, ~635 other varint values are consumed as arguments to these
+structural characters (e.g., the value after `\` specifies the escape type).
+
+#### Packed Coordinate Pairs
+
+Large varint values encode packed coordinate pairs:
+
+```
+lon_offset = value >> lat_bits
+lat_offset = value & ((1 << lat_bits) - 1)
+lon = (bbox_lon_min + lon_offset) / 2^23
+lat = (bbox_lat_min + lat_offset) / 2^23
+```
+
+Where `lat_bits = ceil(log2(bbox_lat_range + 1))` (21 for Monaco).
+
+Monaco section 4 contains **398 packed coordinate pairs** in the main data
+block (segment 7), matching the expected ~395 road segments.
+
+#### Data Value Distribution
+
+The non-coordinate data values (0-199 range) have a **nearly uniform
+distribution** — each value appears 61-73 times. This suggests the data
+is a compressed/encoded bitstream split into varint-sized chunks, not
+discrete attributes.
+
+#### Record Stream Structure
+
+The 0x80090000 separators divide the record stream into 9 blocks:
+
+| Block | Records | Coords | Description |
+|-------|---------|--------|-------------|
+| 0 | 24 | 3 | Preamble |
+| 1 | 46 | 3 | Header data |
+| 2 | 53 | 4 | Attributes |
+| 3 | 105 | 7 | Extended attributes |
+| 4 | 68 | 2 | More attributes |
+| 5 | 1 | 0 | Separator |
+| 6 | 26 | 2 | Pre-road data |
+| 7 | 13,079 | 393 | **Main road data** (97% of records) |
+| 8 | 41 | 3 | Post-road data |
+
+Block 7 contains the bulk of the road network data. The graph builder
+(`FUN_102460d0`) processes these records to build the road graph.
+
+
+### Varint Stream Grammar — Current Understanding
+
+The FBL section data is a varint-encoded stream where:
+- **7.2% is coordinates** (packed lon/lat pairs as large varint values)
+- **92.8% is compressed road network structure** (junction connectivity,
+  shape points, road attributes, names)
+
+The compressed structure uses a **pattern matching grammar** implemented
+in the DLL's `FUN_1024a720`. Without the pattern data (stored in the DLL
+or derived from the FBL file's structure), we cannot fully decode or
+reconstruct the non-coordinate data.
+
+**What we CAN do:**
+- Extract all packed coordinate pairs from any FBL file
+- Identify road class markers (value 92 + class code)
+- Count segments and identify section boundaries
+- Encode new coordinates as packed varint pairs
+- Write valid SET containers with XOR encryption
+
+**What we CANNOT do yet:**
+- Reconstruct the 92.8% non-coordinate data from scratch
+- Build junction connectivity graphs
+- Encode shape points for road curves
+- Generate the pattern-matched compressed structure
+
+**Next step for full OSM-to-FBL:** Extract the DLL's pattern data tables
+and implement the pattern compiler in Python. This requires deeper
+emulation of the map loading pipeline.

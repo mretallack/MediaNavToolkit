@@ -137,3 +137,72 @@ class TestSegments:
         sec4 = _get_sec4(dec)
         segs = extract_segments(sec4)
         assert all(s[3] > 0 for s in segs)
+
+
+# ── fbl_parse tests ──────────────────────────────────────────────────────────
+
+
+class TestFblParse:
+    """Tests for the FBL parser (packed coordinate extraction)."""
+
+    def test_parse_monaco(self):
+        from tools.maps.fbl_parse import parse_fbl
+
+        r = parse_fbl(TESTDATA_MAPS / "Monaco_osm.fbl")
+        assert r["country"] == "MON"
+        assert 7.4 < r["bbox"]["lon_min"] < 7.5
+        assert r["lon_bits"] == 21
+        assert r["lat_bits"] == 21
+        assert "roads_main" in r["sections"]
+        assert len(r["sections"]["roads_main"]["coordinates"]) > 200
+
+    def test_parse_vatican(self):
+        from tools.maps.fbl_parse import parse_fbl
+
+        r = parse_fbl(TESTDATA_MAPS / "Vatican_osm.fbl")
+        assert r["country"] == "VAT"
+        assert len(r["sections"]["roads_main"]["coordinates"]) > 50
+
+    def test_parse_all_files(self):
+        from tools.maps.fbl_parse import parse_fbl
+
+        for f in TESTDATA_MAPS.glob("*.fbl"):
+            r = parse_fbl(f)
+            total = sum(len(s["coordinates"]) for s in r["sections"].values())
+            assert total > 0, f"{f.name}: no coordinates"
+
+    def test_coordinates_in_bbox(self):
+        from tools.maps.fbl_parse import parse_fbl
+
+        r = parse_fbl(TESTDATA_MAPS / "Monaco_osm.fbl")
+        bbox = r["bbox"]
+        for sec_data in r["sections"].values():
+            for lon, lat in sec_data["coordinates"]:
+                assert bbox["lon_min"] - 0.01 <= lon <= bbox["lon_max"] + 0.01
+                assert bbox["lat_min"] - 0.01 <= lat <= bbox["lat_max"] + 0.01
+
+    def test_packed_coord_decoding(self):
+        """Verify packed coordinate pair decoding formula."""
+        from tools.maps.fbl_parse import decode_varint
+
+        # Monaco: lon_bits=21, lat_bits=21
+        # Value 31710617 should decode to a valid Monaco coordinate
+        lon_min = 62154560
+        lat_min = 365208000
+        val = 31710617
+        lat_bits = 21
+        lon_off = val >> lat_bits
+        lat_off = val & ((1 << lat_bits) - 1)
+        lon = (lon_min + lon_off) / (2**23)
+        lat = (lat_min + lat_off) / (2**23)
+        assert 7.3 < lon < 7.7
+        assert 43.5 < lat < 43.8
+
+    def test_geojson_output(self):
+        from tools.maps.fbl_parse import parse_fbl, to_geojson
+
+        r = parse_fbl(TESTDATA_MAPS / "Vatican_osm.fbl")
+        gj = to_geojson(r)
+        assert gj["type"] == "FeatureCollection"
+        assert len(gj["features"]) > 0
+        assert gj["features"][0]["geometry"]["type"] == "Point"
