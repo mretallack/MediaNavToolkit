@@ -117,6 +117,30 @@ Economic and Fastest files share the same record ordering for the first ~1000
 records, then diverge due to different block sizes. The Shortest variant uses
 a completely different format.
 
+### HNR Grid Parameters
+
+The parameter block at 0x0118 contains grid/tile configuration:
+
+| Offset | Value | As degrees | Meaning |
+|--------|-------|-----------|---------|
+| 0x011C | 6,553,600 | 0.7812° | Repeated 10× — tile size or speed threshold |
+| 0x0124 | 58,982,400 | 7.0312° | Grid extent or larger grouping |
+| 0x0128 | 7,864,320 | 0.9375° | Secondary tile size |
+| 0x01B4 | 484 | — | Grid dimension (22 × 22 = 484) |
+| 0x01B8 | 517 | — | Total block count |
+
+The 192 occupied pairs (out of 484 possible tiles) suggest a 22×22 grid where
+39% of tiles contain road data. The road IDs are uniformly distributed hashes
+(not spatial coordinates), so mapping HNR to FBL requires knowing the hash function.
+
+### Prior Art
+
+**No public tools or documentation exist** for the NNG/iGO map format. Searches of
+GitHub, GPSPower forums, and general web found no prior reverse engineering of FBL,
+HNR, or the SET container format. The closest related work is the Bosch headunit
+root project (github.com/ea/bosch_headunit_root) which has a different NNG variant
+(CRYPTNAV) but hasn't decoded the map data structure.
+
 **Record format:** 256-byte records containing a **packed bitstream** with 64 groups
 of 32 bits each. Within each 32-bit group, certain bit positions encode shared road
 data and others encode routing-variant-specific weights:
