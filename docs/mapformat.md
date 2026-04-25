@@ -1445,3 +1445,24 @@ are not derivable from coordinates, spatial keys, or any hash function.
 1. FBL road class via value 92 + DLL lookup table (5-14% of segments)
 2. HNR A/B block split (major 19% vs minor 81%)
 3. FBL segment size (larger = more important road)
+
+### HNR↔FBL Tile Matching — 10 Countries Linked ✅
+
+By combining segment count matching (FBL_total × 8.3 ≈ HNR_tile_total) with
+geographic bbox isolation, 10 countries are definitively linked to HNR tiles:
+
+| Country | FBL segs | HNR tile | Error |
+|---------|----------|----------|-------|
+| FrenchGuiana | 4,403 | 11 | 0.3% |
+| Reunion | 14,576 | 21 | 0.4% |
+| Guadeloupe | 12,045 | 36 | 0.8% |
+| SanMarino | 1,338 | 38 | 0.9% |
+| Mayotte | 2,289 | 166 | 1.1% |
+| Martinique | 9,553 | 41 | 1.3% |
+| Monaco | 395 | 147 | 1.5% |
+| Andorra | 1,440 | 51 | 2.0% |
+| Liechtenstein | 1,597 | 20 | 3.0% |
+| Gibraltar | 426 | 52 | 3.2% |
+
+The matching ratio is 8.3 FBL segments per HNR entry (consistent across all countries).
+Large countries span multiple HNR tiles and require multi-tile matching.
