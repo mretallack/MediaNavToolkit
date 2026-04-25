@@ -128,6 +128,15 @@ def parse_fbl(dec: bytes):
                 if end - start >= 4:
                     section_ranges[i] = (start, end)
 
+            # For large files, include data after the last section offset
+            # (the section table only covers the first part of the file)
+            last_offset = max((o for o in offsets if 0 < o < len(dec)), default=0)
+            if last_offset > 0 and len(dec) - last_offset > 1024:
+                # Check if there's significant data after the last section
+                trailing = len(dec) - last_offset
+                if trailing > max(end - start for start, end in section_ranges.values()):
+                    section_ranges[19] = (last_offset, len(dec))
+
             bbox = (
                 round(lon_min / SCALE, 6), round(lat_min / SCALE, 6),
                 round(lon_max / SCALE, 6), round(lat_max / SCALE, 6),

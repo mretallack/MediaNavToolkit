@@ -67,11 +67,15 @@ def parse_poi(dec: bytes, lon_min, lat_min, lon_range, lat_range):
         if sec[i] == 0 and sec[i + 1] == 0:
             if i + 4 < len(sec) and sec[i + 2] >= 0x20 and sec[i + 3] == 0:
                 j = i + 2
-                name = ""
+                raw_bytes = []
                 while j < len(sec) - 1 and sec[j + 1] == 0 and sec[j] >= 0x20:
-                    name += chr(sec[j])
+                    raw_bytes.append(sec[j])
                     j += 2
-                current_name = name
+                # POI names use byte*2 encoding for non-ASCII names
+                if raw_bytes and raw_bytes[0] >= 0x80:
+                    current_name = ''.join(chr(b >> 1) for b in raw_bytes)
+                else:
+                    current_name = ''.join(chr(b) for b in raw_bytes)
                 i = j + 2
                 continue
             i += 2

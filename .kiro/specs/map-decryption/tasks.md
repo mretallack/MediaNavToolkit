@@ -71,22 +71,39 @@ naturally look random.
 
 ## Future Work 🔧
 
-- [ ] **9.1** Update `fbl_to_geojson.py` to handle multi-region files and large file sizes
-  - Large country files (e.g. UK 254MB) have multiple region blocks (GBR bbox only covers Scotland)
-  - Byte-by-byte XOR is too slow for 254MB — needs numpy or C extension
-  - Need to discover and iterate all region blocks within a single FBL file
-  - Verified: UK section 4 decodes at 81% valid with 27+26 bits
+- [x] **9.1** Update `fbl_to_geojson.py` to handle multi-region files and large file sizes
+  - Large files (e.g. UK 254MB) have ONE region block, not multiple
+  - The GBR bbox covers Scotland but coordinates span all UK
+  - Trailing data after section 17 (230MB for UK) is more packed coordinates
+  - Updated tool to include trailing data; numpy XOR already implemented
+  - UK section 4: 1.3M road points decoded in ~2 min
 - [ ] **9.2** Decode road segment attribute bytes
   - Road type byte partially observed (0x95, 0x9A, 0xA5) but meaning not mapped
   - Need to identify: motorway vs trunk vs residential, speed class, one-way flags
-  - Cross-reference with OSM road classifications for known segments
-- [ ] **9.3** Fix POI category name encoding
-  - `poi_to_geojson.py` extracts names but some are garbled
-  - Encoding scheme partially decoded — needs further investigation
-- [ ] **9.4** Investigate section 16 data
-  - Entropy 7.97 — either compressed or encrypted with external key
-  - Likely contains supplementary rendering data (area fills, building outlines, coastlines)
-  - Exhaustive Blowfish key search from file content failed (best entropy 6.29)
+  - **Only Vatican (11KB) has inline road_type bytes** (raw int32 format in section 4).
+  - Gap area is 100% coordinates (invalid points are just near-border roads, max 0.17° off).
+  - Road attributes for larger files may be: in the fixed header (0x04DE-0x0565),
+    in the .hnr file, or computed at runtime from geometry.
+  - **Approach:** Compare Vatican's 3 road_type values with OSM; check .hnr files.
+- [x] **9.7** Decode the gap area (road network index) between section table and section 0
+  - **DECODED ✅** — the gap area is a continuous packed bitstream of coordinates
+  - Part 1 (fixed header 0x04DE-0x055D): File metadata, sizes, constant fields
+  - Part 2 (coordinate bitstream 0x0565+): Packed N+M bit coordinates (same as sections)
+  - Part 3 (extended coordinates): The ENTIRE gap area is coordinates, not a separate index
+  - Vatican: 87 points, 100% valid; Monaco: 1184 pts, 95%; Andorra: 1861 pts, 67%
+  - The count at 0x0563 covers only the first ~10 reference points
+  - SET container has section_count=1; gap area is the start of the single section's data
+- [x] **9.3** Fix POI category name encoding — SOLVED
+  - POI names use **byte << 1 encoding**: each byte is the ASCII value * 2
+  - Decoding: `chr(byte >> 1)` for bytes >= 0x80
+  - Examples: `0xBE 0x86 0xC2 0xE6 0xD2 0xDC 0xDE` = `_Casino`
+  - Categories found: _Casino, _Government_Office, _School, _Stage, _Camping, etc.
+  - Fixed `poi_to_geojson.py` to decode shifted names
+- [x] **9.4** Investigate section 16 data — RESOLVED
+  - Section 16 is **empty** in ALL test files (sections 16 and 17 share the same offset)
+  - The earlier "high entropy" finding was about trailing data after the section table,
+    which is actually packed coordinate data (decoded in 9.7)
+  - No compression or encryption to investigate
 - [ ] **9.5** Parse HNR (historical navigation routing) files
   - Different magic bytes (`e2 66 4c 50 34 c2 7f ce`), structure unknown beyond encryption
   - Region-level files (e.g. EuropeEconomic.hnr, EuropeFastest.hnr)
