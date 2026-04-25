@@ -1102,3 +1102,32 @@ FBL key = (tile_index << 23) | sequential_counter
 This is the FBL's internal spatial index format. The HNR uses a **different** 32-bit
 ID scheme (uniformly distributed, not tile-based). The two ID spaces are linked only
 at runtime through the navigation engine's internal data structures.
+
+### Road Type Byte — DECODED ✅
+
+The `road_type` byte in the 12-byte segment metadata encodes a **Functional Road
+Class (FRC)** and speed modifier:
+
+```
+road_type = 1CFFF SSS (binary)
+  Bit 7:     Always 1 (road segment flag)
+  Bit 6:     Sub-flag (0 for all Vatican roads)
+  Bits 5-3:  FRC (Functional Road Class, 0-7)
+  Bits 2-0:  Speed/sub-class modifier (0-7)
+```
+
+| FRC | road_type range | Road class |
+|-----|----------------|------------|
+| 0 | 0x80-0x87 | Motorway |
+| 1 | 0x88-0x8F | Trunk / Major highway |
+| 2 | 0x90-0x97 | Primary / Other major road |
+| 3 | 0x98-0x9F | Secondary |
+| 4 | 0xA0-0xA7 | Tertiary / Local connecting |
+| 5 | 0xA8-0xAF | Local road (high importance) |
+| 6 | 0xB0-0xB7 | Local road (medium importance) |
+| 7 | 0xB8-0xBF | Local road (low importance) |
+
+**Verified against Vatican OSM data:**
+- 0x95 = FRC 2, speed 5 → OSM: footway (minor road in Vatican)
+- 0x9A = FRC 3, speed 2 → OSM: footway
+- 0xA5 = FRC 4, speed 5 → OSM: pedestrian (Piazza Santa Marta)
