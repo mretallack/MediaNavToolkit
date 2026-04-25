@@ -151,44 +151,16 @@ All sub-tasks superseded by the direct solution:
 
 ## Future Tasks
 
-- [ ] **F1** Build `fbl_road_class.py` CLI tool
-  - Extract road class per segment from any FBL file using value 92 + DLL lookup table
-  - Output CSV: segment_index, byte_offset, road_class_index, road_class_name
-  - Test on all 7 test files + UK 254MB
-
-- [ ] **F2** Build `fbl_segments.py` CLI tool
-  - Count and list all segments with byte offsets and sizes
-  - Output CSV: segment_index, start_byte, end_byte, size, segment_marker_value
-  - Useful for understanding file structure
-
-- [ ] **F3** Build `fbl_road_network.py` — complete road network export
-  - Combine coordinates (from fbl_to_geojson) with road classes (from fbl_road_class)
-  - Output GeoJSON with road class as property on each feature
-  - Color-coded: motorway=red, trunk=orange, primary=yellow, local=grey, pedestrian=blue
-
+- [x] **F1** Build `fbl_road_class.py` CLI tool ✅
+- [x] **F2** Build `fbl_segments.py` CLI tool ✅
+- [x] **F3** Build `fbl_road_network.py` — complete road network export ✅
 - [ ] **F4** Improve road class coverage — trace inheritance for unclassified segments
   - Currently ~5-14% of segments have explicit road class markers
-  - The remaining segments inherit from parent/default
-  - Trace the inheritance logic in the DLL to classify ALL segments
-
-- [ ] **F5** Build `hnr_export.py` — export HNR tile data as CSV
-  - Per-tile: tile_index, type_A_count, type_B_count, major_ratio, classification
-  - Per-entry (optional): tile, block_type, 4-byte ID hex
-
+  - Requires tracing the DLL's inheritance logic
+- [x] **F5** Build HNR CSV export (added --csv to hnr_info.py) ✅
 - [ ] **F6** Publish mapformat.md as standalone format documentation
-  - Clean up for external audience
-  - Add table of contents, glossary, file type summary
-  - Suitable for sharing as the first public NNG format documentation
-
 - [ ] **F7** Build complete FBL parser library with tests
-  - Package nng_varint, road class extractor, coordinate decoder, segment counter
-  - Proper Python package with setup.py/pyproject.toml
-  - Unit tests for all components
-
 - [ ] **F8** Build `fbl_validate.py` — validate FBL data against OSM
-  - For a given country, compare FBL road classes with OSM highway tags
-  - Report accuracy metrics (precision, recall per road class)
-  - Useful for verifying our road class extraction is correct
 
 ## 12. HNR Routing Weight Semantics and HNR↔FBL Linking
 
