@@ -70,7 +70,7 @@ def main():
     # Extract FBL road classes
     sec4s = struct.unpack_from("<I", dec, 0x048E + 16)[0]
     sec4e = struct.unpack_from("<I", dec, 0x048E + 20)[0]
-    fbl_results = extract_road_classes(dec[sec4s:sec4e])
+    fbl_results = extract_road_classes(dec[sec4s:sec4e], inherit=True)
     fbl_classes = {}
     for _, _, rc, name in fbl_results:
         if rc is not None and rc <= 9:
