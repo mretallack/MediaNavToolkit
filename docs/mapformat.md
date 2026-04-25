@@ -1199,3 +1199,24 @@ in the record stream — after coordinate records and before shape references.
 **Correction:** The earlier "packed coordinate bitstream" interpretation was wrong.
 The data is opcode-structured records that happen to produce valid-looking coordinates
 when misread as N+M bit pairs (because the byte values are uniformly distributed).
+
+### Road Segment Counting via Opcodes ✅
+
+Opcodes 0x06 and 0x62-0x67 mark **road segment boundaries** in the section data.
+The DLL's counter function (`FUN_1025e228`) increments a segment counter at these opcodes.
+
+**Segment counts per country (section 4):**
+
+| Country | Segments | Section 4 size |
+|---------|----------|---------------|
+| Vatican | 15 | 2 KB |
+| Gibraltar | 75 | 20 KB |
+| Monaco | 83 | 20 KB |
+| San Marino | 251 | 68 KB |
+| Andorra | 262 | 77 KB |
+| Liechtenstein | 297 | 82 KB |
+| Malta | 1,565 | 425 KB |
+
+The segment opcodes (0x62-0x67) are uniformly distributed (~13-16% each) and their
+payload bytes are also uniform — they do NOT encode road class directly. Road class
+is encoded within the variable-length record data between segment boundaries.
