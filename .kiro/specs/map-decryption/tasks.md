@@ -158,9 +158,9 @@ All sub-tasks superseded by the direct solution:
   - Currently ~5-14% of segments have explicit road class markers
   - Requires tracing the DLL's inheritance logic
 - [x] **F5** Build HNR CSV export (added --csv to hnr_info.py) ✅
-- [ ] **F6** Publish mapformat.md as standalone format documentation
-- [ ] **F7** Build complete FBL parser library with tests
-- [ ] **F8** Build `fbl_validate.py` — validate FBL data against OSM
+- [x] **F6** Publish mapformat.md as standalone format documentation ✅
+- [x] **F7** Build test suite for map tools (10 tests, 301 total) ✅
+- [x] **F8** Build `fbl_validate.py` — validate FBL data against OSM ✅
 
 ## 12. HNR Routing Weight Semantics and HNR↔FBL Linking
 
