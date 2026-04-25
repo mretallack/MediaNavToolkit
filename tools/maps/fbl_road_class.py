@@ -72,8 +72,12 @@ def decrypt(data, xor_table):
     return bytes(d ^ np.tile(t, (len(d) // len(t)) + 1)[: len(d)])
 
 
-def extract_road_classes(sec4_data):
-    """Extract (segment_index, byte_offset, road_class, road_class_name) tuples."""
+def extract_road_classes(sec4_data, inherit=False):
+    """Extract (segment_index, byte_offset, road_class, road_class_name) tuples.
+
+    If inherit=True, forward-fills road class from the most recent marker
+    to classify ~97-99% of segments (vs ~5-14% with explicit markers only).
+    """
     table = get_rc_table()
     results = []
     seg_idx = 0
@@ -101,7 +105,8 @@ def extract_road_classes(sec4_data):
                 )
             seg_idx += 1
             seg_start = pos
-            current_rc = None
+            if not inherit:
+                current_rc = None
         if val == 92 and new_pos < len(sec4_data):
             nv, _ = decode_varint(sec4_data, new_pos)
             if nv is not None:
@@ -129,7 +134,7 @@ def extract_road_classes(sec4_data):
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: fbl_road_class.py <fbl_file> [-o output.csv]", file=sys.stderr)
+        print("Usage: fbl_road_class.py <fbl_file> [-o output.csv] [--inherit]", file=sys.stderr)
         sys.exit(1)
 
     xor_table = XOR_TABLE_PATH.read_bytes()
@@ -145,7 +150,8 @@ def main():
     sec4e = struct.unpack_from("<I", dec, 0x048E + 20)[0]
     sec4 = dec[sec4s:sec4e]
 
-    results = extract_road_classes(sec4)
+    inherit = "--inherit" in sys.argv
+    results = extract_road_classes(sec4, inherit=inherit)
     classified = sum(1 for _, _, rc, _ in results if rc is not None)
     print(f"{input_path.name}: {len(results)} segments, {classified} classified", file=sys.stderr)
 
