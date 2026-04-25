@@ -1428,3 +1428,20 @@ confirms:
 
 The routing data is binary (major/minor), not a continuous speed or cost value.
 The 4-byte entries serve only as road segment identifiers for the lookup table.
+
+### HNR↔FBL Linking — Confirmed Impossible Without Runtime (Tasks 12.6-12.12)
+
+Exhaustive testing confirms HNR road IDs cannot be linked to FBL segments:
+- FBL spatial keys (tile<<23|counter) produce 0 matches in HNR
+- MD5 and CRC32 hashes of FBL keys produce 0 matches
+- FBL segment counts (13K for 7 countries) vs HNR (19.6M for all Europe)
+- Our test files cover only 0.1% of total FBL data
+
+**The HNR↔FBL mapping exists only in the DLL's runtime data structures.**
+The map compiler assigns opaque IDs during OSM→NNG conversion. These IDs
+are not derivable from coordinates, spatial keys, or any hash function.
+
+**Practical road classification available without linking:**
+1. FBL road class via value 92 + DLL lookup table (5-14% of segments)
+2. HNR A/B block split (major 19% vs minor 81%)
+3. FBL segment size (larger = more important road)
