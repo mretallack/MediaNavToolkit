@@ -1412,3 +1412,19 @@ stream, then looking up the NEXT value in the DLL's lookup table at `DAT_102e348
 | Monaco | 395 | 31 | 1 | 0 | 1 | 1 |
 | Andorra | 1440 | 76 | 2 | 0 | 1 | 2 |
 | Malta | 8096 | 424 | 11 | 8 | 11 | 8 |
+
+### HNR Routing Weights — Binary Classification (Tasks 12.1-12.3)
+
+The HNR routing "weight" is NOT a per-entry continuous value. Statistical analysis
+confirms:
+- Individual bytes are uniformly distributed for both type A and B
+- No bit position shows >2% difference between A and B entries
+- Popcount is identical (16.03 bits = exactly random)
+- 4-byte entries are opaque road segment IDs
+
+**The A/B block assignment IS the routing classification:**
+- Type A blocks = major road segments (used for faster/economic routes)
+- Type B blocks = minor road segments
+
+The routing data is binary (major/minor), not a continuous speed or cost value.
+The 4-byte entries serve only as road segment identifiers for the lookup table.
