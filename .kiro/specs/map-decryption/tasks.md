@@ -109,10 +109,14 @@ naturally look random.
   - Header: magic(4) + version(4) + hash(4) + flags(4) + metadata_len(4)
   - Metadata: same NNG format `[nng]#COUNTRY# 2025.09`, routing type (Economic/Fastest/Shortest)
   - After metadata (0x0118): routing parameters (speed values, bbox, thresholds)
-  - At 0x0208: size table — pairs of uint32 values (block sizes for road segments/regions)
-  - At ~0x1000: high-entropy data begins (packed routing weights)
-  - Region-level files (e.g. EuropeEconomic.hnr, EuropeFastest.hnr)
-  - Contains time-of-day traffic speed profiles for road segments
+  - At 0x01B4: 484 (block count?), 0x01B8: 517 (another count?)
+  - At 0x01D4/0x01D8: file offsets near end (58.9M / 61.1M in 62M file)
+  - At 0x0210: count table — 384 entries (192 pairs), values are uint32 >> 8
+    - Sum of all counts: 306,756 — matches ~202 bytes/record for 62MB data
+    - Pair structure: (small_count, large_count) per region/tile
+  - Data at 0x1000: 202-byte fixed-size records, high-entropy (packed speed profiles)
+  - No visible record headers — data is densely packed binary
+  - Region-level files (EuropeEconomic.hnr, EuropeFastest.hnr, EuropeShortest.hnr)
 - [ ] **9.6** Parse TMC (traffic message channel) files
   - Only `.stm` shadow files available on USB (actual TMC data on head unit internal storage)
   - Provider-specific files (e.g. France-V-Trafic.tmc, Germany_HERE.tmc)

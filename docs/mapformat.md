@@ -71,6 +71,33 @@ Routing optimization data — pre-computed route weights based on historical tra
 
 **Encrypted magic bytes** (before XOR decryption): `e2 66 4c 50 34 c2 7f ce`
 
+### HNR Internal Structure (Partially Decoded)
+
+```
+0x0000: "HNRF"          Magic (4 bytes)
+0x0004: uint32           Version (351 for current files)
+0x0008: uint32           Hash/timestamp
+0x000C: uint32           Flags
+0x0010: uint32           Metadata length (127 = 0x7F)
+0x0014: UTF-16LE text    Metadata: [nng]#COUNTRY# 2025.09, routing type
+0x0118: parameters       Routing parameters (speed values, thresholds)
+0x01B4: uint32           Block count A (484)
+0x01B8: uint32           Block count B (517)
+0x01D4: uint32           File offset to section A (58,959,925)
+0x01D8: uint32           File offset to section B (61,128,441)
+0x0210: uint32[384]      Count table (192 pairs, values >> 8)
+0x1000: data             Fixed-size records (202 bytes each)
+```
+
+**Count table:** 192 pairs of (count_A, count_B) values. The raw uint32 values
+are all multiples of 256; the actual counts are `value >> 8`. Total count:
+306,756 records. With 62MB of data starting at 0x1000, each record is ~202 bytes.
+
+**Record format:** 202-byte fixed-size records with no visible headers. High entropy
+throughout — likely packed binary speed/time profiles for road segments. Each record
+probably contains 24-hour speed profiles (e.g., 24 hours × 8 bytes = 192 bytes of
+speed data + 10 bytes of segment ID/metadata).
+
 ### POI — Points of Interest (Confirmed)
 
 **Partially decoded ✅:**
