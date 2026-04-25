@@ -93,10 +93,27 @@ Routing optimization data — pre-computed route weights based on historical tra
 are all multiples of 256; the actual counts are `value >> 8`. Total count:
 306,756 records. With 62MB of data starting at 0x1000, each record is ~202 bytes.
 
-**Record format:** 202-byte fixed-size records with no visible headers. High entropy
-throughout — likely packed binary speed/time profiles for road segments. Each record
-probably contains 24-hour speed profiles (e.g., 24 hours × 8 bytes = 192 bytes of
-speed data + 10 bytes of segment ID/metadata).
+**Record format:** 256-byte records, each containing **64 road segment entries of 4 bytes**:
+
+```
+[base_speed] [routing_weight] [road_char] [segment_id]
+```
+
+| Byte | Name | Description |
+|------|------|-------------|
+| 0 | base_speed | Base speed/weight (0.951 correlation between Economic/Fastest) |
+| 1 | routing_weight | Routing-variant-specific weight (independent between variants) |
+| 2 | road_char | Road characteristics (mostly shared, small diffs between variants) |
+| 3 | segment_id | Road segment identifier (100% identical across all routing variants) |
+
+**Verified by cross-referencing Economic vs Fastest files:**
+- Byte 3 (segment_id): 100% shared across 100 records
+- Byte 0 (base_speed): 0% shared but r=0.951 correlation (nearly same values)
+- Byte 1 (routing_weight): 0% shared, r=-0.03 (completely independent)
+- Byte 2 (road_char): 24% shared, small differences when different
+
+Each record is a **tile** of 64 road segments. With 306,756 records × 64 segments
+= ~19.6 million road segment entries for the Economic routing variant.
 
 ### POI — Points of Interest (Confirmed)
 
