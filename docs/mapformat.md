@@ -1320,3 +1320,29 @@ The varint decoding matches UTF-8:
 
 This function is the key preprocessing step. It reads the raw FBL section
 bytes and produces the uint32 record array that FUN_102460d0 processes.
+
+### uint32 Record Types (Task 11.3)
+
+The graph builder processes uint32 records with type in high 16 bits:
+
+| Type | Name | Action |
+|------|------|--------|
+| 0x8000 | end | Terminates processing |
+| 0x8001 | skip | Advance past record |
+| 0x8002 | set_flag | Sets road flag |
+| **0x8003** | **road_class** | **Index 0-9 into road class lookup table** |
+| 0x8004 | coord_pair | Coordinate pair (lon, lat follow) |
+| 0x8005 | advance | Skip 1 uint32 |
+| 0x8006 | advance_3 | Skip 3 uint32s |
+| 0x8008 | segment | Road segment boundary marker |
+| 0x800A | junction_ref | Junction reference |
+| 0x800D | end_segment | End of segment data |
+| 0x800E | segment_data | Segment with coordinates |
+| 0x8019 | return | Return from processing |
+| 0x801C | dir_forward | Forward direction |
+| 0x801D | dir_reverse | Reverse direction |
+| 0x8020 | junction_def | Junction definition |
+| 0x8027 | speed | Speed data |
+| 0x8028 | lanes | Lane information |
+| 0x802A | restriction | Turn restriction |
+| 0x8030-0x803B | range | Range/area data |
