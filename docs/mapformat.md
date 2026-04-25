@@ -91,7 +91,31 @@ Routing optimization data — pre-computed route weights based on historical tra
 
 **Count table:** 192 pairs of (count_A, count_B) values. The raw uint32 values
 are all multiples of 256; the actual counts are `value >> 8`. Total count:
-306,756 records. With 62MB of data starting at 0x1000, each record is ~202 bytes.
+306,756 records for Economic. Type A blocks are ~30% the size of type B blocks,
+suggesting A = major roads, B = all roads (or different zoom levels).
+
+**Block structure:** Blocks are sequential from offset 0x1000. Each block contains
+`count × 256` bytes. The 192 pairs represent 192 geographic regions, each with
+a type A block (smaller, ~30% of entries) and type B block (larger).
+
+**XOR analysis between Economic and Fastest variants:**
+
+| Byte | Bits | XOR Pattern | Interpretation |
+|------|------|-------------|----------------|
+| 0 | 7-1 | Rarely differs (1-6%) | Road segment ID (high bits) |
+| 0 | 0 | **Always 1** | Variant flag (inverted between files) |
+| 1 | 7-0 | Uniform (50%) | Routing weight (independent per variant) |
+| 2 | 7-3 | Never differs (0-1%) | Road segment ID (mid bits) |
+| 2 | 2-0 | Sometimes differs (5-50%) | Mixed road/routing data |
+| 3 | 7-0 | **Never differs** (0%) | Road segment ID (low bits) |
+
+The full 32-bit value is unique per entry (100% unique across 6,400 tested).
+~22 bits encode road segment identity (shared between variants), ~10 bits
+encode routing-specific weights (independent per variant).
+
+Economic and Fastest files share the same record ordering for the first ~1000
+records, then diverge due to different block sizes. The Shortest variant uses
+a completely different format.
 
 **Record format:** 256-byte records containing a **packed bitstream** with 64 groups
 of 32 bits each. Within each 32-bit group, certain bit positions encode shared road
