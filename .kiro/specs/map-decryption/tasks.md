@@ -239,27 +239,27 @@ All sub-tasks superseded by the direct solution:
     - Count how many segments get classified this way
     - Cross-reference with OSM to check if the assignments make sense
 
-  - [ ] **F4.3** Check if segment size correlates with inherited road class
+  - [x] **F4.3** Check if segment size correlates with inherited road class
     - Large segments (>200B) should be major roads
     - Small segments (<20B) should be local roads
     - If inherited class matches size pattern, the inheritance is correct
 
-  - [ ] **F4.4** Check the DLL's graph builder for inheritance logic
+  - [x] **F4.4** Check the DLL's graph builder for inheritance logic
     - In FUN_102460d0, `local_b0` holds the current road class value
     - It's set by 0x8003 records and persists across segments
     - Trace: does `local_b0` reset between segments or carry forward?
 
-  - [ ] **F4.5** Check if the varint value AFTER the segment marker encodes class
+  - [x] **F4.5** Check if the varint value AFTER the segment marker encodes class
     - Segment markers (6, 98-103) have a payload value
     - The payload might be a road class index or a reference to a class table
     - Compare payload values with known road classes from value-92 markers
 
-  - [ ] **F4.6** Check if the section number implies road class
+  - [x] **F4.6** Check if the section number implies road class
     - Sections 4, 5, 8 might correspond to different road importance levels
     - Extract segments from sections 5 and 8 separately
     - Compare road class distribution across sections
 
-  - [ ] **F4.7** Use Unicorn to emulate the graph builder on a small section
+  - [x] **F4.7** Use Unicorn to emulate the graph builder on a small section
     - Feed Monaco section 4 (first 1000 bytes) to FUN_102460d0
     - Hook the 0x8003 handler to capture road class assignments
     - Track which segments get which class (including inherited ones)
@@ -269,7 +269,7 @@ All sub-tasks superseded by the direct solution:
     - Assign road class to ALL segments (not just those with explicit markers)
     - Verify: classified segment count should be close to total segment count
 
-  - [ ] **F4.9** Validate full classification against OSM
+  - [x] **F4.9** Validate full classification against OSM
     - Run fbl_validate.py with the improved classification
     - Compare road class distribution with OSM highway tag distribution
     - Report accuracy improvement over the 5-14% baseline
