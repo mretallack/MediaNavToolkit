@@ -154,16 +154,16 @@ All sub-tasks superseded by the direct solution:
 - [x] **F1** Build `fbl_road_class.py` CLI tool ✅
 - [x] **F2** Build `fbl_segments.py` CLI tool ✅
 - [x] **F3** Build `fbl_road_network.py` — complete road network export ✅
-- [ ] **F4** Improve road class coverage — trace inheritance for unclassified segments
+- [x] **F4** Improve road class coverage — SOLVED ✅ (forward-fill gives 97-99%) — trace inheritance for unclassified segments
   - Currently ~5-14% of segments have explicit road class markers (value 92)
   - The remaining ~85-95% inherit road class from context
 
-  - [ ] **F4.1** Analyze the pattern around classified segments
+  - [x] **F4.1** Analyze the pattern around classified segments
     - For each classified segment, check: do neighboring segments share the same class?
     - Check if road class markers appear at the START of a group of segments
     - Hypothesis: one marker classifies all following segments until the next marker
 
-  - [ ] **F4.2** Test the "inherit from previous marker" hypothesis
+  - [x] **F4.2** Test the "inherit from previous marker" hypothesis
     - Assign each segment the road class of the most recent value-92 marker before it
     - Count how many segments get classified this way
     - Cross-reference with OSM to check if the assignments make sense
@@ -193,7 +193,7 @@ All sub-tasks superseded by the direct solution:
     - Hook the 0x8003 handler to capture road class assignments
     - Track which segments get which class (including inherited ones)
 
-  - [ ] **F4.8** Implement the inheritance logic in Python
+  - [x] **F4.8** Implement the inheritance logic in Python
     - Based on findings from F4.1-F4.7
     - Assign road class to ALL segments (not just those with explicit markers)
     - Verify: classified segment count should be close to total segment count
@@ -203,7 +203,7 @@ All sub-tasks superseded by the direct solution:
     - Compare road class distribution with OSM highway tag distribution
     - Report accuracy improvement over the 5-14% baseline
 
-  - [ ] **F4.10** Update fbl_road_class.py to use inheritance
+  - [x] **F4.10** Update fbl_road_class.py to use inheritance
     - Add --inherit flag to enable inheritance logic
     - Default: only explicit markers (current behavior)
     - With --inherit: classify all segments using inheritance
