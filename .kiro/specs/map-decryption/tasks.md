@@ -110,26 +110,26 @@ naturally look random.
   - No per-entry weight difference between A and B (confirmed statistically)
   - HNR↔FBL linking impossible without DLL runtime (opaque compiler IDs)
   - Road classification available via FBL value 92 + DLL lookup table instead
-- [ ] **9.5b** HNR↔FBL segment linking — BLOCKED → REOPENED
+- [ ] **9.5b** HNR↔FBL segment linking — PARTIALLY SOLVED (10 countries linked)
   - **What:** Link HNR routing data (major/minor per segment) to FBL map coordinates
   - **Previous attempts that failed:** Direct ID matching, hash functions, spatial keys
   - **New opportunity:** We now have road class for 99% of FBL segments via forward-fill.
     This enables matching by road class distribution per geographic area.
 
-  - [ ] **9.5b.1** Count FBL segments per road class for ALL 30 countries
+  - [x] **9.5b.1** Count FBL segments per road class for ALL 30 countries
     - Extract the full disk backup, decrypt each FBL file
     - Run fbl_road_class.py --inherit on each
     - Output: country, total_segments, motorway, trunk, primary, ..., pedestrian
 
-  - [ ] **9.5b.2** Count HNR type-A segments per tile
+  - [x] **9.5b.2** Count HNR type-A segments per tile
     - Type A = major roads. Count per tile gives a "major road density" per tile.
     - Output: tile_index, a_count, b_count, a_ratio
 
-  - [ ] **9.5b.3** Estimate FBL "major road" count per country
+  - [x] **9.5b.3** Estimate FBL "major road" count per country
     - From 9.5b.1: count segments with road class 0-3 (motorway/trunk/primary/secondary)
     - These are the "major" roads that should correspond to HNR type A
 
-  - [ ] **9.5b.4** Match HNR tiles to countries by major road count
+  - [x] **9.5b.4** Match HNR tiles to countries by major road count
     - For each country, find the set of HNR tiles whose combined A-count
       matches the country's major road count
     - Small countries (Vatican, Monaco) should match 1-2 tiles
@@ -146,7 +146,7 @@ naturally look random.
     - Compare: FBL segment size distribution for major vs minor roads
       with HNR A vs B block sizes
 
-  - [ ] **9.5b.7** Use geographic bbox to narrow tile candidates
+  - [x] **9.5b.7** Use geographic bbox to narrow tile candidates
     - Each FBL file has a bbox (lon/lat range)
     - HNR tiles cover geographic areas (we know tile size ~0.78°)
     - Compute which tiles COULD contain each country based on bbox overlap
@@ -175,12 +175,12 @@ naturally look random.
     - Find which HNR tile(s) contain Vatican's segments
     - Verify: the 3 HNR entries should match Vatican's 3 FBL segments
 
-  - [ ] **9.5b.12** Validate linking on Monaco (395 segments)
+  - [x] **9.5b.12** Validate linking on Monaco (395 segments)
     - Monaco is small enough to verify manually
     - Check: do the matched HNR entries have the right A/B classification
       for Monaco's road classes?
 
-  - [ ] **9.5b.13** Build `hnr_fbl_link.py` tool
+  - [x] **9.5b.13** Build `hnr_fbl_link.py` tool
     - Input: FBL file + HNR file
     - Output: CSV with lon, lat, fbl_road_class, hnr_block_type (A/B)
     - Test on Vatican, Monaco, Andorra
@@ -190,7 +190,7 @@ naturally look random.
     - The motorway segments should be in HNR type A blocks
     - Verify: linked motorway segments have A classification
 
-  - [ ] **9.5b.15** Document the linking method in mapformat.md
+  - [x] **9.5b.15** Document the linking method in mapformat.md
     - Describe the matching algorithm
     - Report accuracy metrics
     - Mark 9.5b as SOLVED
@@ -292,17 +292,17 @@ road classification). Two problems remain:
 
 ### Phase A: Understand Routing Weights
 
-- [ ] **12.1** Extract routing weights for ALL segments in first 100 HNR tiles
+- [x] **12.1** Extract routing weights for ALL segments in first 100 HNR tiles
   - Parse Economic and Fastest files
   - For each segment: extract byte 0 (base), byte 1 (weight), byte 3 (road ID)
   - Output as CSV for analysis
 
-- [ ] **12.2** Compare Economic vs Fastest weights for the same segments
+- [x] **12.2** Compare Economic vs Fastest weights for the same segments
   - First 1000 aligned records have identical byte 3 (road ID)
   - Compute: weight_diff = Fastest.byte1 - Economic.byte1 per segment
   - Check: does weight_diff correlate with road class (from A/B block type)?
 
-- [ ] **12.3** Check if routing weights correlate with known speed limits
+- [x] **12.3** Check if routing weights correlate with known speed limits
   - European motorways: 130 km/h, trunk: 90-110, residential: 30-50
   - If weight = speed: type A (major) should have higher weights
   - If weight = cost: type A should have LOWER weights
@@ -320,19 +320,19 @@ road classification). Two problems remain:
 
 ### Phase B: Link HNR Road IDs to FBL Segments
 
-- [ ] **12.6** Extract road class markers (value 92) from FBL with byte offsets
+- [x] **12.6** Extract road class markers (value 92) from FBL with byte offsets
   - For each road class marker, record its byte position in the section
   - This gives us: (byte_offset, road_class) pairs for each FBL file
 
-- [ ] **12.7** Extract segment boundaries from FBL with byte offsets
+- [x] **12.7** Extract segment boundaries from FBL with byte offsets
   - Segment markers (values 6, 98-103) with byte positions
   - This gives us: (byte_offset, segment_index) pairs
 
-- [ ] **12.8** Compute segment byte ranges in FBL
+- [x] **12.8** Compute segment byte ranges in FBL
   - Each segment spans from its marker to the next marker
   - Compute: (segment_index, start_byte, end_byte, road_class) per segment
 
-- [ ] **12.9** Check if FBL segment count matches HNR segment count per tile
+- [x] **12.9** Check if FBL segment count matches HNR segment count per tile
   - FBL has per-country segment counts (Monaco=395, Andorra=1440)
   - HNR has per-tile segment counts (192 tiles × 64 segments)
   - Check: does sum of HNR segments for a country's tiles = FBL segment count?
@@ -342,12 +342,12 @@ road classification). Two problems remain:
     they might correspond
   - Use the FBL header offsets (7 pointers into section 15) as region boundaries
 
-- [ ] **12.11** Use the FBL spatial index key format to generate candidate IDs
+- [x] **12.11** Use the FBL spatial index key format to generate candidate IDs
   - FBL key = (tile_index << 23) | sequential_counter
   - Generate all possible keys for a small country (Vatican/Monaco)
   - Check if any transformation of these keys matches HNR road IDs
 
-- [ ] **12.12** Try XOR/hash of FBL key with DLL constants
+- [x] **12.12** Try XOR/hash of FBL key with DLL constants
   - The DLL might XOR or hash the FBL spatial key to produce the HNR road ID
   - Try: HNR_ID = FBL_key XOR constant, HNR_ID = CRC32(FBL_key), etc.
   - Use Vatican's 3 segments as ground truth
@@ -376,7 +376,7 @@ road classification). Two problems remain:
   - Extract routing weights per segment from any HNR file
   - Output CSV: tile, segment, road_class(A/B), weight, road_id
 
-- [ ] **12.18** Build `hnr_fbl_link.py` tool (if linking solved)
+- [x] **12.18** Build `hnr_fbl_link.py` tool (if linking solved)
   - Map HNR road IDs to FBL coordinates
   - Output: lon, lat, road_class, routing_weight per segment
 
