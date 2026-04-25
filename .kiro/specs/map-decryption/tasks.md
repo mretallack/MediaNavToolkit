@@ -63,11 +63,12 @@ naturally look random.
 - [x] **7.4** `tools/maps/poi_to_geojson.py` — extract POI coordinates as GeoJSON
   - Different container from FBL (magic `0xC5676632A`, no SET header)
   - XOR table decryption works, coordinates as uint16 pairs scaled to bbox
-  - Andorra: 1,278 POIs with category names (_Cafe, _Cinema, Hyundai, etc.)
-  - Category name encoding partially decoded (some garbled — needs further work)
+  - Andorra: 1,278 POIs with category names (_Casino, _School, _Stage, etc.)
+  - Category name encoding: byte << 1 (decoded in 9.3)
 - [x] **7.5** Identify what each section contains
   - All sections are packed bitstreams of coordinates
-  - Section roles mapped: 4=main roads, 5=secondary, 8=tertiary, 16=areas, etc.
+  - Sections do NOT correspond to road classifications (verified via OSM cross-reference)
+  - Section roles are rendering layers/zoom levels, not road types
 
 ## Future Work 🔧
 
@@ -77,14 +78,12 @@ naturally look random.
   - Trailing data after section 17 (230MB for UK) is more packed coordinates
   - Updated tool to include trailing data; numpy XOR already implemented
   - UK section 4: 1.3M road points decoded in ~2 min
-- [ ] **9.2** Decode road segment attribute bytes
-  - Road type byte partially observed (0x95, 0x9A, 0xA5) but meaning not mapped
-  - **Only Vatican (11KB) has inline road_type bytes** (raw int32 format in section 4)
-  - Gap area is 100% coordinates (no interleaved attributes)
-  - HNR type A/B split provides binary major/minor road classification
-  - HNR road IDs are hashes (not coordinate-derived) — brute-force matching failed
-  - HNR tiles are routing-variant-specific (not fixed geographic grid)
-  - **Remaining approach:** Trace DLL hash function with Unicorn to link HNR IDs to FBL coords
+- [x] **9.2** Decode road segment attribute bytes — SOLVED ✅
+  - road_type byte = `1CFFF_SSS`: bit7=flag, bit6=sub, bits5-3=FRC, bits2-0=speed
+  - FRC 0=motorway, 1=trunk, 2=primary, 3=secondary, 4=tertiary, 5-7=local
+  - Verified: Vatican 0x95=FRC2(primary), 0x9A=FRC3(secondary), 0xA5=FRC4(tertiary)
+  - Only extractable from Vatican (raw int32 format); larger files have it in packed bitstream
+  - HNR type A/B split provides additional binary major/minor classification
 - [x] **9.7** Decode the gap area (road network index) between section table and section 0
   - **DECODED ✅** — the gap area is a continuous packed bitstream of coordinates
   - Part 1 (fixed header 0x04DE-0x055D): File metadata, sizes, constant fields
