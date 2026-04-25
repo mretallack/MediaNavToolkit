@@ -1273,3 +1273,23 @@ data is a stream of variable-length integers, not fixed-size opcode records.
 
 Segment markers are values 6, 98-103 (0x06, 0x62-0x67) in the decoded stream.
 Road class is encoded within the value sequence but at context-dependent positions.
+
+### Parser Call Chain (Task 11.1)
+
+```
+FUN_102460d0 (graph builder, ~5000 lines)
+  ├── Reads uint32 records from local_68 pointer
+  ├── Dispatches on record type (uVar24 = high 16 bits)
+  ├── Type 0x8003: road class index → reads from local_64+0x2C array
+  ├── Type 0x800E: segment with coordinate data
+  ├── Type 0x8020: junction reference
+  ├── Calls FUN_1024cd70 for sub-record processing
+  └── Calls FUN_1024d030 for attribute extraction
+
+Input: uint32 record array (NOT raw section bytes)
+The raw section bytes must be converted to uint32 records first.
+The converter is the preprocessing step we need to find.
+```
+
+**Key function:** `FUN_102460d0` at RVA 0x2460D0 — the main graph builder.
+Takes 11 parameters including the uint32 record array and config object.
