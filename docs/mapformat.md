@@ -56,24 +56,34 @@ Address lookup/geocoding data, paired with `.fbl` map files.
 
 Routing optimization data — pre-computed route weights based on historical traffic patterns.
 
-**What we know:**
-- Region-level files (not per-country): `EuropeEconomic.hnr`, `EuropeFastest.hnr`, etc.
+**Partially decoded ✅:**
+- Magic: **`HNRF`** (0x48 4E 52 46) after XOR decryption — NOT a SET container
+- XOR table decryption works (same table as FBL/FPA)
+- Header: magic(4) + version(4) + hash(4) + flags(4) + metadata_length(4)
+- Metadata: same NNG format `[nng]#COUNTRY# 2025.09`, routing type identifier
+  (e.g., `~FEU|2025.09||Economical|`)
+- After metadata (~0x0118): routing parameters — speed values, thresholds, bbox
+- At ~0x0208: size table — pairs of uint32 values (data block sizes per region/segment)
+- At ~0x1000: high-entropy packed data (routing weights)
+- Region-level files: `EuropeEconomic.hnr`, `EuropeFastest.hnr`, `EuropeShortest.hnr`
 - Named by region + routing strategy: `Fastest`, `Shortest`, `Economic`
-- Sizes: 17–62 MB each
-- Different magic bytes from FBL/FPA: **`e2 66 4c 50 34 c2 7f ce`**
-- Also encrypted (high entropy)
+- Sizes: 59–65 MB each
 
-**Speculation:**
-- Likely contains time-of-day traffic speed profiles for road segments
-- Used by the routing engine to prefer historically faster routes
-- May be optional — navigation works without them but with less optimal routing
+**Encrypted magic bytes** (before XOR decryption): `e2 66 4c 50 34 c2 7f ce`
 
 ### POI — Points of Interest (Confirmed)
 
-**What we know:**
+**Partially decoded ✅:**
 - Country-level files (one `.poi` per country)
 - Sizes: 0.06 MB (Vatican) to 327 MB total
-- Contains restaurant, fuel station, parking, etc. locations
+- XOR table decryption works, coordinates as uint16 pairs scaled to bbox
+- **Category name encoding:** each byte is ASCII value × 2 (shift left 1 bit).
+  Decoding: `chr(byte >> 1)` for bytes ≥ 0x80.
+  Example: `0xBE 0x86 0xC2 0xE6 0xD2 0xDC 0xDE` = `_Casino`
+- Categories found: `_Casino`, `_Government_Office`, `_School`, `_Stage`,
+  `_Camping`, `_Business_Facility`, `_Travel`, `_Cafe_or_Bar`, `_Finance`,
+  `_Prison_or_Correctional_Facility`
+- Individual POI names (e.g., `Novotel`) use the same encoding
 - Different `header_id` from maps (3311887914 vs 117863961)
 
 ### SPC — Speed Cameras (Confirmed)

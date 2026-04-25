@@ -104,10 +104,15 @@ naturally look random.
   - The earlier "high entropy" finding was about trailing data after the section table,
     which is actually packed coordinate data (decoded in 9.7)
   - No compression or encryption to investigate
-- [ ] **9.5** Parse HNR (historical navigation routing) files
-  - Different magic bytes (`e2 66 4c 50 34 c2 7f ce`), structure unknown beyond encryption
+- [ ] **9.5** Parse HNR (historical navigation routing) files — PARTIALLY DECODED
+  - Magic: `HNRF` (not SET container), XOR table decryption works
+  - Header: magic(4) + version(4) + hash(4) + flags(4) + metadata_len(4)
+  - Metadata: same NNG format `[nng]#COUNTRY# 2025.09`, routing type (Economic/Fastest/Shortest)
+  - After metadata (0x0118): routing parameters (speed values, bbox, thresholds)
+  - At 0x0208: size table — pairs of uint32 values (block sizes for road segments/regions)
+  - At ~0x1000: high-entropy data begins (packed routing weights)
   - Region-level files (e.g. EuropeEconomic.hnr, EuropeFastest.hnr)
-  - Likely contains time-of-day traffic speed profiles for road segments
+  - Contains time-of-day traffic speed profiles for road segments
 - [ ] **9.6** Parse TMC (traffic message channel) files
   - Provider-specific files (e.g. France-V-Trafic.tmc, Germany_HERE.tmc)
   - Very small (<0.1 MB total), not yet investigated
