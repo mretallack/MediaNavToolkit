@@ -135,7 +135,7 @@ naturally look random.
     - Small countries (Vatican, Monaco) should match 1-2 tiles
     - Large countries (France, Germany) should match many tiles
 
-  - [ ] **9.5b.5** Verify matching using total segment counts
+  - [x] **9.5b.5** Verify matching using total segment counts
     - For matched tiles: total HNR segments (A+B) × 64 should approximate
       total FBL segments × some ratio
     - The ratio should be consistent across countries
@@ -170,7 +170,7 @@ naturally look random.
       - Match: FBL minor road segments ↔ HNR type B entries
     - Verify by checking if matched segments have consistent properties
 
-  - [ ] **9.5b.11** Validate linking on Vatican (3 segments)
+  - [x] **9.5b.11** Validate linking on Vatican (3 segments)
     - Vatican is the simplest case — only 3 road segments
     - Find which HNR tile(s) contain Vatican's segments
     - Verify: the 3 HNR entries should match Vatican's 3 FBL segments
@@ -185,7 +185,7 @@ naturally look random.
     - Output: CSV with lon, lat, fbl_road_class, hnr_block_type (A/B)
     - Test on Vatican, Monaco, Andorra
 
-  - [ ] **9.5b.14** Validate on Andorra (motorway CG-1)
+  - [x] **9.5b.14** Validate on Andorra (motorway CG-1)
     - Andorra has a known motorway (CG-1)
     - The motorway segments should be in HNR type A blocks
     - Verify: linked motorway segments have A classification
@@ -380,7 +380,7 @@ road classification). Two problems remain:
   - Map HNR road IDs to FBL coordinates
   - Output: lon, lat, road_class, routing_weight per segment
 
-- [ ] **12.19** Cross-validate routing weights against OSM speed limits
+- [x] **12.19** Cross-validate routing weights against OSM speed limits
   - For linked segments, compare HNR weight with OSM maxspeed tag
   - Determine the weight → speed mapping function
 
