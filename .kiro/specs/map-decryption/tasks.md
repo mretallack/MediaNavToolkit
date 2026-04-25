@@ -128,33 +128,26 @@ naturally look random.
 
 **Keep [`docs/mapformat.md`](../../docs/mapformat.md) up to date as findings are made.**
 
-## 10. Extract Road Attributes from Large FBL Files via DLL Runtime Emulation
+## 10. Extract Road Attributes from Large FBL Files via DLL Emulation
 
-Road attributes (FRC, speed class) are only inline in Vatican's raw format.
-Large files store pure coordinate bitstreams. The DLL must build road attribute
-tables at runtime. Plan:
+The opcode table is extracted. Segment boundaries are identified. Road class is
+in a typed field within each segment's variable-length record sequence.
 
-- [ ] **10.1** Find the DLL function that reads the section 4 header nibbles
-  - Vatican section 4 starts with `03 01 13 31 33...` (nibble descriptor)
-  - Search decompiled code for functions that process 4-bit values or nibble arrays
-  - The function that reads this header also reads the road_type for each segment
+- [ ] **10.1** Use Unicorn to emulate the opcode parser on Vatican section 4
+  - Feed Vatican's section 4 data to the DLL's graph builder (FUN_10249a90 area)
+  - Hook the 0x80030000 handler to capture road class indices (0-9)
+  - Verify: should produce indices matching Vatican's 3 known road segments
 
-- [ ] **10.2** Emulate the section 4 reader with Unicorn on Vatican data
-  - Feed Vatican's decrypted section 4 data to the reader function
-  - Hook memory reads to trace which bytes it accesses
-  - Capture the road_type values it extracts (should match 0x95, 0x9A, 0xA5)
+- [ ] **10.2** Map road class indices to FRC values
+  - The 0x8003 handler reads from array at param_5+0x2C (10 entries)
+  - Extract or reconstruct this lookup table
+  - Map indices 0-9 to FRC 0-7 (motorway→local)
 
-- [ ] **10.3** Emulate the same reader on Monaco data
-  - Feed Monaco's section 4 bitstream to the same function
-  - The function should decode the packed bitstream and extract road attributes
-  - Capture the FRC values for Monaco's road segments
+- [ ] **10.3** Emulate on Monaco section 4 to extract all 83 road classes
+  - Same approach as 10.1 but on Monaco data
+  - Cross-reference with OSM to verify FRC assignments
 
-- [ ] **10.4** Reverse the attribute extraction algorithm
-  - From the Unicorn trace, determine how the DLL extracts FRC from the bitstream
-  - Implement a Python decoder that extracts road attributes from any FBL file
-  - Verify against Vatican's known values (0x95, 0x9A, 0xA5)
-
-- [ ] **10.5** Build `segments_with_class.py` tool
-  - Extract road segments with FRC classification from any FBL file
-  - Output: lon, lat, FRC, speed_class per segment
-  - Test on Vatican, Monaco, Andorra, UK
+- [ ] **10.4** Build standalone Python road class extractor
+  - Implement the opcode parser in Python (using the opcode table)
+  - Extract road class for each segment without DLL emulation
+  - Test on all 7 test files
