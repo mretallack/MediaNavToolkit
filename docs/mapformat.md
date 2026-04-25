@@ -1103,20 +1103,12 @@ This is the FBL's internal spatial index format. The HNR uses a **different** 32
 ID scheme (uniformly distributed, not tile-based). The two ID spaces are linked only
 at runtime through the navigation engine's internal data structures.
 
-### Road Type Byte — Record Type Opcode
+### Road Type Byte — Superseded
 
-The `road_type` byte in Vatican's 12-byte segment metadata (0x95, 0x9A, 0xA5)
-is actually a **record type opcode** in the NNG bitstream format, not a road
-classification code. The opcode determines the record structure that follows.
-
-From the DLL opcode table:
-- 0x95: 1-byte record
-- 0x9A: 3-byte record
-- 0xA5: 0-byte record
-
-The earlier FRC interpretation (bits 3-5 = road class) was coincidental.
-Road classification in larger files is encoded within the payload of large
-opcode records (32-160 bytes), not as standalone bytes.
+The Vatican "road_type" values (0x95, 0x9A, 0xA5) in the inline metadata were
+intermediate findings. The actual road class extraction uses value 92 (backslash)
+in the varint stream followed by a letter code looked up in `DAT_102e3480`.
+See "Road Class Extraction — SOLVED" section below for the complete solution.
 
 ### Road Attributes in Large FBL Files — In Opcode Records
 
