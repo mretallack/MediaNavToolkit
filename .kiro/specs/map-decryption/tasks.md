@@ -69,6 +69,14 @@ naturally look random.
   - All sections are packed bitstreams of coordinates
   - Section roles mapped: 4=main roads, 5=secondary, 8=tertiary, 16=areas, etc.
 
+## Future Work 🔧
+
+- [ ] **9.1** Update `fbl_to_geojson.py` to handle multi-region files and large file sizes
+  - Large country files (e.g. UK 254MB) have multiple region blocks (GBR bbox only covers Scotland)
+  - Byte-by-byte XOR is too slow for 254MB — needs numpy or C extension
+  - Need to discover and iterate all region blocks within a single FBL file
+  - Verified: UK section 4 decodes at 81% valid with 27+26 bits
+
 ## Documentation Rule
 
 **Keep [`docs/mapformat.md`](../../docs/mapformat.md) up to date as findings are made.**

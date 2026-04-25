@@ -27,13 +27,19 @@ RECORD_HEADER = b"\x24\x8b\x18"
 
 
 def decrypt(data: bytes, xor_table: bytes) -> bytes:
-    return bytes(data[i] ^ xor_table[i % len(xor_table)] for i in range(len(data)))
+    try:
+        import numpy as np
+        d = np.frombuffer(data, dtype=np.uint8)
+        t = np.frombuffer(xor_table, dtype=np.uint8)
+        return bytes(d ^ np.tile(t, (len(d) // len(t)) + 1)[: len(d)])
+    except ImportError:
+        return bytes(data[i] ^ xor_table[i % len(xor_table)] for i in range(len(data)))
 
 
 def get_bbox_raw(dec: bytes):
     """Return (lon_min, lat_min, lon_max, lat_max) as raw int32 values."""
     for off in range(0x440, min(0x600, len(dec) - 20)):
-        if dec[off : off + 3].isalpha() and dec[off + 3] in (0x40, 0x48):
+        if dec[off : off + 3].isalpha() and dec[off + 3] in (0x40, 0x48, 0x4B):
             vals = struct.unpack_from("<4i", dec, off + 8)
             return vals[0], vals[3], vals[2], vals[1]  # lon_min, lat_min, lon_max, lat_max
     return None
@@ -41,7 +47,7 @@ def get_bbox_raw(dec: bytes):
 
 def get_country(dec: bytes) -> str:
     for off in range(0x440, min(0x600, len(dec) - 20)):
-        if dec[off : off + 3].isalpha() and dec[off + 3] in (0x40, 0x48):
+        if dec[off : off + 3].isalpha() and dec[off + 3] in (0x40, 0x48, 0x4B):
             return dec[off : off + 3].decode()
     return "UNK"
 
@@ -49,7 +55,7 @@ def get_country(dec: bytes) -> str:
 def get_section1(dec: bytes) -> bytes | None:
     """Extract section 1 data using the offset table."""
     for off in range(0x440, min(0x600, len(dec) - 20)):
-        if dec[off : off + 3].isalpha() and dec[off + 3] in (0x40, 0x48):
+        if dec[off : off + 3].isalpha() and dec[off + 3] in (0x40, 0x48, 0x4B):
             table_start = off + 24
             sec1_off = struct.unpack_from("<I", dec, table_start + 4)[0]
             sec2_off = struct.unpack_from("<I", dec, table_start + 8)[0]

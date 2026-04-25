@@ -25,7 +25,7 @@ def decrypt(data: bytes, xor_table: bytes) -> bytes:
 def get_bbox(dec: bytes) -> tuple[float, float, float, float] | None:
     """Extract bounding box from the country block."""
     for off in range(0x440, min(0x600, len(dec) - 20)):
-        if dec[off : off + 3].isalpha() and dec[off + 3] in (0x40, 0x48):
+        if dec[off : off + 3].isalpha() and dec[off + 3] in (0x40, 0x48, 0x4B):
             vals = struct.unpack_from("<4i", dec, off + 8)
             return (
                 vals[0] / SCALE,  # lon_min
@@ -39,7 +39,7 @@ def get_bbox(dec: bytes) -> tuple[float, float, float, float] | None:
 def get_country(dec: bytes) -> str:
     """Extract country code."""
     for off in range(0x440, min(0x600, len(dec) - 4)):
-        if dec[off : off + 3].isalpha() and dec[off + 3] in (0x40, 0x48):
+        if dec[off : off + 3].isalpha() and dec[off + 3] in (0x40, 0x48, 0x4B):
             return dec[off : off + 3].decode()
     return "UNK"
 

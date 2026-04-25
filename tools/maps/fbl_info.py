@@ -82,7 +82,7 @@ def show_info(path: Path, xor_table: bytes):
 
         # Bounding box — search for country code block
         for off in range(0x440, min(0x600, len(dec) - 20)):
-            if dec[off : off + 3].isalpha() and dec[off + 3] in (0x40, 0x48):
+            if dec[off : off + 3].isalpha() and dec[off + 3] in (0x40, 0x48, 0x4B):
                 vals = struct.unpack_from("<4i", dec, off + 8)
                 lon_min = vals[0] / SCALE
                 lat_max = vals[1] / SCALE
