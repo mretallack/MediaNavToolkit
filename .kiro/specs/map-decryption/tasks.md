@@ -142,3 +142,120 @@ All sub-tasks superseded by the direct solution:
 - [x] Extracted road classes from all 7 test files
 - [x] FBL uses UTF-8-like variable-length integer encoding
 - [x] Section data is a pattern language compiled by the DLL
+
+
+## Future Tasks
+
+- [ ] **F1** Build `fbl_road_class.py` CLI tool (CSV output: segment, road class, letter code)
+- [ ] **F2** Improve road class coverage — trace inheritance logic for unclassified segments
+- [ ] **F3** Build map visualizer — colored GeoJSON with road classes (motorway=red, etc.)
+- [ ] **F4** Publish mapformat.md as standalone format documentation
+- [ ] **F5** Build complete FBL parser library with tests (nng_varint + road class + coords)
+- [ ] **F6** Package tools as installable Python package
+
+## 12. HNR Routing Weight Semantics and HNR↔FBL Linking
+
+The HNR format is structurally decoded (256-byte tiles, bit-level layout, A/B
+road classification). Two problems remain:
+1. What do the routing weight values (byte 1, 0-255) mean?
+2. How do HNR road IDs map to FBL road segments?
+
+### Phase A: Understand Routing Weights
+
+- [ ] **12.1** Extract routing weights for ALL segments in first 100 HNR tiles
+  - Parse Economic and Fastest files
+  - For each segment: extract byte 0 (base), byte 1 (weight), byte 3 (road ID)
+  - Output as CSV for analysis
+
+- [ ] **12.2** Compare Economic vs Fastest weights for the same segments
+  - First 1000 aligned records have identical byte 3 (road ID)
+  - Compute: weight_diff = Fastest.byte1 - Economic.byte1 per segment
+  - Check: does weight_diff correlate with road class (from A/B block type)?
+
+- [ ] **12.3** Check if routing weights correlate with known speed limits
+  - European motorways: 130 km/h, trunk: 90-110, residential: 30-50
+  - If weight = speed: type A (major) should have higher weights
+  - If weight = cost: type A should have LOWER weights
+  - Statistical test: mean weight for type A vs type B
+
+- [ ] **12.4** Check if weights have temporal patterns
+  - If HNR encodes time-of-day profiles, consecutive segments in same tile
+    might have correlated weights (rush hour vs off-peak)
+  - Autocorrelation analysis within tiles
+
+- [ ] **12.5** Extract the Shortest variant's format
+  - Shortest uses different encoding (counts don't fit >>8 pattern)
+  - Decode the Shortest header and count table
+  - Compare record structure with Economic/Fastest
+
+### Phase B: Link HNR Road IDs to FBL Segments
+
+- [ ] **12.6** Extract road class markers (value 92) from FBL with byte offsets
+  - For each road class marker, record its byte position in the section
+  - This gives us: (byte_offset, road_class) pairs for each FBL file
+
+- [ ] **12.7** Extract segment boundaries from FBL with byte offsets
+  - Segment markers (values 6, 98-103) with byte positions
+  - This gives us: (byte_offset, segment_index) pairs
+
+- [ ] **12.8** Compute segment byte ranges in FBL
+  - Each segment spans from its marker to the next marker
+  - Compute: (segment_index, start_byte, end_byte, road_class) per segment
+
+- [ ] **12.9** Check if FBL segment count matches HNR segment count per tile
+  - FBL has per-country segment counts (Monaco=395, Andorra=1440)
+  - HNR has per-tile segment counts (192 tiles × 64 segments)
+  - Check: does sum of HNR segments for a country's tiles = FBL segment count?
+
+- [ ] **12.10** Try matching by segment COUNT per region
+  - If HNR tile X has N segments and FBL country Y has N segments in a region,
+    they might correspond
+  - Use the FBL header offsets (7 pointers into section 15) as region boundaries
+
+- [ ] **12.11** Use the FBL spatial index key format to generate candidate IDs
+  - FBL key = (tile_index << 23) | sequential_counter
+  - Generate all possible keys for a small country (Vatican/Monaco)
+  - Check if any transformation of these keys matches HNR road IDs
+
+- [ ] **12.12** Try XOR/hash of FBL key with DLL constants
+  - The DLL might XOR or hash the FBL spatial key to produce the HNR road ID
+  - Try: HNR_ID = FBL_key XOR constant, HNR_ID = CRC32(FBL_key), etc.
+  - Use Vatican's 3 segments as ground truth
+
+### Phase C: Unicorn Emulation of HNR Loader
+
+- [ ] **12.13** Find the DLL function that loads HNR files
+  - Search for "HNRF" magic check or HNR-related string references
+  - Map the HNR loading call chain
+
+- [ ] **12.14** Find the function that maps HNR road IDs to FBL segments
+  - The navigation engine must have a lookup function
+  - Search for functions that take a road ID and return coordinates
+
+- [ ] **12.15** Emulate the HNR loader on a small tile
+  - Feed one HNR tile (256 bytes) to the loader
+  - Capture the road ID → segment mapping it produces
+
+- [ ] **12.16** Emulate on Vatican's HNR data
+  - Vatican has 3 road segments — the mapping should be trivial
+  - Verify: HNR road IDs map to Vatican's 3 FBL segments
+
+### Phase D: Build Complete Routing Data Extractor
+
+- [ ] **12.17** Build `hnr_weights.py` tool
+  - Extract routing weights per segment from any HNR file
+  - Output CSV: tile, segment, road_class(A/B), weight, road_id
+
+- [ ] **12.18** Build `hnr_fbl_link.py` tool (if linking solved)
+  - Map HNR road IDs to FBL coordinates
+  - Output: lon, lat, road_class, routing_weight per segment
+
+- [ ] **12.19** Cross-validate routing weights against OSM speed limits
+  - For linked segments, compare HNR weight with OSM maxspeed tag
+  - Determine the weight → speed mapping function
+
+- [ ] **12.20** Document complete HNR format in mapformat.md
+  - Routing weight semantics
+  - HNR↔FBL linking method (if solved)
+  - Complete tile structure
+  - Mark task 9.5 as SOLVED
