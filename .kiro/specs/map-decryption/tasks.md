@@ -79,12 +79,12 @@ naturally look random.
   - UK section 4: 1.3M road points decoded in ~2 min
 - [ ] **9.2** Decode road segment attribute bytes
   - Road type byte partially observed (0x95, 0x9A, 0xA5) but meaning not mapped
-  - Need to identify: motorway vs trunk vs residential, speed class, one-way flags
-  - **Only Vatican (11KB) has inline road_type bytes** (raw int32 format in section 4).
-  - Gap area is 100% coordinates (invalid points are just near-border roads, max 0.17° off).
-  - Road attributes for larger files may be: in the fixed header (0x04DE-0x0565),
-    in the .hnr file, or computed at runtime from geometry.
-  - **Approach:** Compare Vatican's 3 road_type values with OSM; check .hnr files.
+  - **Only Vatican (11KB) has inline road_type bytes** (raw int32 format in section 4)
+  - Gap area is 100% coordinates (no interleaved attributes)
+  - HNR type A/B split provides binary major/minor road classification
+  - HNR road IDs are hashes (not coordinate-derived) — brute-force matching failed
+  - HNR tiles are routing-variant-specific (not fixed geographic grid)
+  - **Remaining approach:** Trace DLL hash function with Unicorn to link HNR IDs to FBL coords
 - [x] **9.7** Decode the gap area (road network index) between section table and section 0
   - **DECODED ✅** — the gap area is a continuous packed bitstream of coordinates
   - Part 1 (fixed header 0x04DE-0x055D): File metadata, sizes, constant fields
