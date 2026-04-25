@@ -1346,3 +1346,27 @@ The graph builder processes uint32 records with type in high 16 bits:
 | 0x8028 | lanes | Lane information |
 | 0x802A | restriction | Turn restriction |
 | 0x8030-0x803B | range | Range/area data |
+
+### Road Class Lookup Table (Task 11.4)
+
+The graph builder uses type 0x8003 records where the low 16 bits (0-9) index
+into a 10-entry lookup table at context+0x2C. The table contains OFFSETS into
+road data, but the INDEX itself IS the road class:
+
+| Index | Road Class | FRC |
+|-------|-----------|-----|
+| 0 | Motorway | 0 |
+| 1 | Trunk / Major highway | 1 |
+| 2 | Primary road | 2 |
+| 3 | Secondary road | 3 |
+| 4 | Tertiary / Local connecting | 4 |
+| 5 | Local road (high importance) | 5 |
+| 6 | Local road (medium importance) | 6 |
+| 7 | Local road (low importance) | 7 |
+| 8 | Pedestrian / Footway | — |
+| 9 | Other / Unclassified | — |
+
+To extract road class from any FBL file:
+1. Convert raw section bytes to uint32 records (FUN_1024a720)
+2. Find records with type 0x80030000
+3. Low 16 bits = road class index (0-9)
