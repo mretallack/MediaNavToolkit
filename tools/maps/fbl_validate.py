@@ -7,29 +7,45 @@ the road class distribution.
 Usage:
     python tools/maps/fbl_validate.py tools/maps/testdata/Andorra_osm.fbl
 """
+
 import json
 import math
 import struct
 import subprocess
 import sys
+from pathlib import Path as _P
+
+sys.path.insert(0, str(_P(__file__).resolve().parent.parent.parent))
 from pathlib import Path
 
 import numpy as np
 
-from tools.maps.fbl_road_class import decrypt, extract_road_classes, RC_NAMES
+from tools.maps.fbl_road_class import RC_NAMES, decrypt, extract_road_classes
 
 XOR_TABLE_PATH = Path(__file__).parent.parent.parent / "analysis" / "xor_table_normal.bin"
-SCALE = 2 ** 23
+SCALE = 2**23
 
 OSM_TO_RC = {
-    "motorway": 0, "motorway_link": 0,
-    "trunk": 2, "trunk_link": 2,
-    "primary": 3, "primary_link": 3,
-    "secondary": 4, "secondary_link": 4,
-    "tertiary": 4, "tertiary_link": 4,
-    "unclassified": 5, "residential": 6, "living_street": 7,
-    "service": 7, "pedestrian": 8, "footway": 8, "path": 9,
-    "steps": 8, "track": 9, "cycleway": 9,
+    "motorway": 0,
+    "motorway_link": 0,
+    "trunk": 2,
+    "trunk_link": 2,
+    "primary": 3,
+    "primary_link": 3,
+    "secondary": 4,
+    "secondary_link": 4,
+    "tertiary": 4,
+    "tertiary_link": 4,
+    "unclassified": 5,
+    "residential": 6,
+    "living_street": 7,
+    "service": 7,
+    "pedestrian": 8,
+    "footway": 8,
+    "path": 9,
+    "steps": 8,
+    "track": 9,
+    "cycleway": 9,
 }
 
 
@@ -45,8 +61,8 @@ def main():
 
     # Get bbox
     for off in range(0x440, min(0x600, len(dec) - 20)):
-        if dec[off:off + 3].isalpha() and dec[off + 3] in (0x40, 0x48, 0x4B):
-            country = dec[off:off + 3].decode()
+        if dec[off : off + 3].isalpha() and dec[off + 3] in (0x40, 0x48, 0x4B):
+            country = dec[off : off + 3].decode()
             vals = struct.unpack_from("<4i", dec, off + 8)
             bbox = (vals[0] / SCALE, vals[3] / SCALE, vals[2] / SCALE, vals[1] / SCALE)
             break
@@ -61,11 +77,15 @@ def main():
             fbl_classes[rc] = fbl_classes.get(rc, 0) + 1
 
     # Query OSM
-    print(f"{country} bbox: ({bbox[0]:.2f},{bbox[1]:.2f})-({bbox[2]:.2f},{bbox[3]:.2f})", file=sys.stderr)
+    print(
+        f"{country} bbox: ({bbox[0]:.2f},{bbox[1]:.2f})-({bbox[2]:.2f},{bbox[3]:.2f})",
+        file=sys.stderr,
+    )
     query = f'[out:json][timeout:30];(way["highway"]({bbox[1]:.4f},{bbox[0]:.4f},{bbox[3]:.4f},{bbox[2]:.4f}););out tags;'
     result = subprocess.run(
         ["curl", "-s", "https://overpass-api.de/api/interpreter", "-d", f"data={query}"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     try:
         osm = json.loads(result.stdout)

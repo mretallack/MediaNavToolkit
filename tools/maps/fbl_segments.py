@@ -5,14 +5,18 @@ Usage:
     python tools/maps/fbl_segments.py tools/maps/testdata/Monaco_osm.fbl
     python tools/maps/fbl_segments.py tools/maps/testdata/Malta_osm.fbl -o malta_segs.csv
 """
+
 import csv
 import struct
 import sys
+from pathlib import Path as _P
+
+sys.path.insert(0, str(_P(__file__).resolve().parent.parent.parent))
 from pathlib import Path
 
 import numpy as np
 
-from tools.maps.nng_varint import decode_varint, SEGMENT_MARKERS
+from tools.maps.nng_varint import SEGMENT_MARKERS, decode_varint
 
 XOR_TABLE_PATH = Path(__file__).parent.parent.parent / "analysis" / "xor_table_normal.bin"
 
@@ -41,7 +45,9 @@ def extract_segments(sec4_data):
             seg_marker = val
         pos = new_pos
     if seg_start is not None:
-        segments.append((seg_idx, seg_start, len(sec4_data), len(sec4_data) - seg_start, seg_marker))
+        segments.append(
+            (seg_idx, seg_start, len(sec4_data), len(sec4_data) - seg_start, seg_marker)
+        )
     return segments
 
 
@@ -64,8 +70,11 @@ def main():
 
     segments = extract_segments(sec4)
     sizes = [s[3] for s in segments]
-    print(f"{input_path.name}: {len(segments)} segments, "
-          f"mean={np.mean(sizes):.0f}B, max={max(sizes)}B", file=sys.stderr)
+    print(
+        f"{input_path.name}: {len(segments)} segments, "
+        f"mean={np.mean(sizes):.0f}B, max={max(sizes)}B",
+        file=sys.stderr,
+    )
 
     out = open(output_path, "w", newline="") if output_path else sys.stdout
     w = csv.writer(out)

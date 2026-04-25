@@ -1,9 +1,14 @@
 """Tests for NNG map format tools."""
+
 import struct
+import sys
 from pathlib import Path
 
 import numpy as np
 import pytest
+
+# Add project root to path so tools.maps imports work
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Paths
 TEST_DATA = Path(__file__).parent / "data"
@@ -31,23 +36,27 @@ def _get_sec4(dec):
 class TestVarintDecoder:
     def test_single_byte(self):
         from tools.maps.nng_varint import decode_varint
+
         assert decode_varint(b"\x00", 0) == (0, 1)
         assert decode_varint(b"\x7f", 0) == (127, 1)
 
     def test_two_byte(self):
         from tools.maps.nng_varint import decode_varint
+
         v, p = decode_varint(b"\xc2\x80", 0)
         assert v == 128
         assert p == 2
 
     def test_three_byte(self):
         from tools.maps.nng_varint import decode_varint
+
         v, p = decode_varint(b"\xe0\xa0\x80", 0)
         assert v == 2048
         assert p == 3
 
     def test_decode_all(self):
         from tools.maps.nng_varint import decode_all_varints
+
         vals = decode_all_varints(b"\x00\x7f\xc2\x80")
         assert vals == [0, 127, 128]
 
@@ -55,6 +64,7 @@ class TestVarintDecoder:
         if not TESTDATA_MAPS.exists():
             pytest.skip("test data not available")
         from tools.maps.nng_varint import count_segments
+
         dec = _decrypt(TESTDATA_MAPS / "Vatican_osm.fbl")
         sec4 = _get_sec4(dec)
         assert count_segments(sec4) == 81
@@ -74,6 +84,7 @@ class TestRoadClass:
         if not TESTDATA_MAPS.exists():
             pytest.skip("test data not available")
         from tools.maps.fbl_road_class import extract_road_classes
+
         dec = _decrypt(TESTDATA_MAPS / "Vatican_osm.fbl")
         sec4 = _get_sec4(dec)
         results = extract_road_classes(sec4)
@@ -84,6 +95,7 @@ class TestRoadClass:
         if not TESTDATA_MAPS.exists():
             pytest.skip("test data not available")
         from tools.maps.fbl_road_class import extract_road_classes
+
         dec = _decrypt(TESTDATA_MAPS / "Monaco_osm.fbl")
         sec4 = _get_sec4(dec)
         results = extract_road_classes(sec4)
@@ -94,6 +106,7 @@ class TestRoadClass:
         if not TESTDATA_MAPS.exists():
             pytest.skip("test data not available")
         from tools.maps.fbl_road_class import extract_road_classes
+
         dec = _decrypt(TESTDATA_MAPS / "Malta_osm.fbl")
         sec4 = _get_sec4(dec)
         results = extract_road_classes(sec4)
@@ -109,6 +122,7 @@ class TestSegments:
         if not TESTDATA_MAPS.exists():
             pytest.skip("test data not available")
         from tools.maps.fbl_segments import extract_segments
+
         dec = _decrypt(TESTDATA_MAPS / "Vatican_osm.fbl")
         sec4 = _get_sec4(dec)
         segs = extract_segments(sec4)
@@ -118,6 +132,7 @@ class TestSegments:
         if not TESTDATA_MAPS.exists():
             pytest.skip("test data not available")
         from tools.maps.fbl_segments import extract_segments
+
         dec = _decrypt(TESTDATA_MAPS / "Monaco_osm.fbl")
         sec4 = _get_sec4(dec)
         segs = extract_segments(sec4)

@@ -7,24 +7,35 @@ a GeoJSON file where each point has a road_class property.
 Usage:
     python tools/maps/fbl_road_network.py tools/maps/testdata/Monaco_osm.fbl -o monaco.geojson
 """
+
 import json
 import math
 import struct
 import sys
+from pathlib import Path as _P
+
+sys.path.insert(0, str(_P(__file__).resolve().parent.parent.parent))
 from pathlib import Path
 
 import numpy as np
 
-from tools.maps.nng_varint import decode_varint, SEGMENT_MARKERS
-from tools.maps.fbl_road_class import decrypt, extract_road_classes, RC_NAMES
+from tools.maps.fbl_road_class import RC_NAMES, decrypt, extract_road_classes
+from tools.maps.nng_varint import SEGMENT_MARKERS, decode_varint
 
 XOR_TABLE_PATH = Path(__file__).parent.parent.parent / "analysis" / "xor_table_normal.bin"
-SCALE = 2 ** 23
+SCALE = 2**23
 
 RC_COLORS = {
-    0: "#e31a1c", 1: "#999999", 2: "#ff7f00", 3: "#fdbf6f",
-    4: "#b2df8a", 5: "#cccccc", 6: "#dddddd", 7: "#eeeeee",
-    8: "#6a3d9a", 9: "#aaaaaa",
+    0: "#e31a1c",
+    1: "#999999",
+    2: "#ff7f00",
+    3: "#fdbf6f",
+    4: "#b2df8a",
+    5: "#cccccc",
+    6: "#dddddd",
+    7: "#eeeeee",
+    8: "#6a3d9a",
+    9: "#aaaaaa",
 }
 
 
@@ -44,8 +55,8 @@ def main():
 
     # Get bbox
     for off in range(0x440, min(0x600, len(dec) - 20)):
-        if dec[off:off + 3].isalpha() and dec[off + 3] in (0x40, 0x48, 0x4B):
-            country = dec[off:off + 3].decode()
+        if dec[off : off + 3].isalpha() and dec[off + 3] in (0x40, 0x48, 0x4B):
+            country = dec[off : off + 3].decode()
             vals = struct.unpack_from("<4i", dec, off + 8)
             lon_min, lat_max, lon_max, lat_min = vals
             break
@@ -84,17 +95,19 @@ def main():
     for i in range(n_pts):
         seg_idx = min(i // max(pts_per_seg, 1), n_segs - 1) + 1
         rc, rc_name = rc_map.get(seg_idx, (None, "unclassified"))
-        features.append({
-            "type": "Feature",
-            "geometry": {"type": "Point", "coordinates": [float(lons[i]), float(lats[i])]},
-            "properties": {
-                "country": country,
-                "segment": int(seg_idx),
-                "road_class": rc,
-                "road_class_name": rc_name,
-                "color": RC_COLORS.get(rc, "#999999"),
-            },
-        })
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {"type": "Point", "coordinates": [float(lons[i]), float(lats[i])]},
+                "properties": {
+                    "country": country,
+                    "segment": int(seg_idx),
+                    "road_class": rc,
+                    "road_class_name": rc_name,
+                    "color": RC_COLORS.get(rc, "#999999"),
+                },
+            }
+        )
 
     geojson = {"type": "FeatureCollection", "features": features}
 

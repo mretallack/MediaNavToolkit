@@ -8,26 +8,39 @@ Usage:
     python tools/maps/fbl_road_class.py tools/maps/testdata/Monaco_osm.fbl
     python tools/maps/fbl_road_class.py tools/maps/testdata/Malta_osm.fbl -o malta_classes.csv
 """
+
 import csv
 import struct
 import sys
+from pathlib import Path as _P
+
+sys.path.insert(0, str(_P(__file__).resolve().parent.parent.parent))
 from pathlib import Path
 
 import numpy as np
 
-from tools.maps.nng_varint import decode_varint, SEGMENT_MARKERS
+from tools.maps.nng_varint import SEGMENT_MARKERS, decode_varint
 
 XOR_TABLE_PATH = Path(__file__).parent.parent.parent / "analysis" / "xor_table_normal.bin"
 DLL_PATH = Path(__file__).parent.parent.parent / "analysis" / "extracted" / "nngine.dll"
 
 RC_NAMES = {
-    0: "motorway", 1: "generic", 2: "trunk", 3: "primary", 4: "tertiary",
-    5: "local_hi", 6: "local_med", 7: "local_lo", 8: "pedestrian", 9: "other",
+    0: "motorway",
+    1: "generic",
+    2: "trunk",
+    3: "primary",
+    4: "tertiary",
+    5: "local_hi",
+    6: "local_med",
+    7: "local_lo",
+    8: "pedestrian",
+    9: "other",
 }
 
 
 def _load_rc_table():
     import pefile
+
     pe = pefile.PE(str(DLL_PATH))
     dll = DLL_PATH.read_bytes()
     rva = 0x2E3480
@@ -74,8 +87,18 @@ def extract_road_classes(sec4_data):
             break
         if val in SEGMENT_MARKERS:
             if seg_idx > 0 or current_rc is not None:
-                results.append((seg_idx, seg_start, current_rc,
-                                RC_NAMES.get(current_rc, f"class_{current_rc}") if current_rc is not None else "unclassified"))
+                results.append(
+                    (
+                        seg_idx,
+                        seg_start,
+                        current_rc,
+                        (
+                            RC_NAMES.get(current_rc, f"class_{current_rc}")
+                            if current_rc is not None
+                            else "unclassified"
+                        ),
+                    )
+                )
             seg_idx += 1
             seg_start = pos
             current_rc = None
@@ -89,8 +112,18 @@ def extract_road_classes(sec4_data):
         pos = new_pos
 
     if seg_idx > 0:
-        results.append((seg_idx, seg_start, current_rc,
-                        RC_NAMES.get(current_rc, f"class_{current_rc}") if current_rc is not None else "unclassified"))
+        results.append(
+            (
+                seg_idx,
+                seg_start,
+                current_rc,
+                (
+                    RC_NAMES.get(current_rc, f"class_{current_rc}")
+                    if current_rc is not None
+                    else "unclassified"
+                ),
+            )
+        )
     return results
 
 
