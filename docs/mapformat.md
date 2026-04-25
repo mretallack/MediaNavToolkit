@@ -975,24 +975,31 @@ encoding used in the numbered sections.
 
 #### Part 1: Fixed Header (0x04DE to 0x055D)
 
+The header contains file metadata and **7 uint24 LE file offsets** that all point
+into section 15 (label/name data). The offsets are increasing (A < B < C < D < E ≤ F = G).
+
 | Offset | Size | Value | Meaning |
 |--------|------|-------|---------|
-| 0x04DE | 4 | varies | Total size field (same value repeated at 0x04E2) |
-| 0x04E2 | 4 | varies | Total size field (duplicate) |
-| 0x04E6 | 23 | zeros | Padding |
-| 0x04FD | 4 | varies | Sub-header field |
-| 0x052E | 16 | constant | `00 02 00 00 00 04 00 01 40 02 03 00 80 10 00 00` (identical across all files) |
-| 0x053E | 4 | `D8 00 00 00` | Constant (216) across all files |
-| 0x055E | 4 | `01 00 00 00` | Always 1 |
-| 0x0562 | 1 | `00` | Always zero |
+| 0x04DE | 4 | varies | Total size field (repeated at 0x04E2) |
+| 0x04FD | 1 | 199-243 | File-specific byte |
+| 0x04FE | 4 | 4 (small) / 2211 (UK) | Tile or junction count |
+| 0x0507 | 3 | uint24 LE | Section 15 offset A |
+| 0x050F | 3 | uint24 LE | Section 15 offset B |
+| 0x051D | 1 | 73-77 | File-specific byte |
+| 0x0521 | 3 | uint24 LE | Section 15 offset C |
+| 0x052B | 3 | uint24 LE | Section 15 offset D |
+| 0x052E | 16 | constant | `00 02 00 00 00 04 00 01 40 02 03 00 80 10 00 00` |
+| 0x053E | 4 | 216 | Constant |
+| 0x0546 | 3 | uint24 LE | Section 15 offset E |
+| 0x054A | 4 | 15 | Constant (entries between E and F) |
+| 0x054E | 3 | uint24 LE | Section 15 offset F |
+| 0x0556 | 3 | uint24 LE | Section 15 offset G (= F) |
+| 0x055A | 4 | 4 | Constant |
+| 0x055E | 4 | 1 | Constant |
 | 0x0563 | 2 | 359-407 | Bit count for coordinate bitstream (Part 2) |
 
-The header is part of the NNG map data format within a single SET section
-(the SET container has section_count=1). The "sections" 0-17 referenced by
-the offset table at 0x048E are sub-sections within the map data, not SET sections.
-
-The header has **mixed field sizes** (uint32, uint16, uint8) with zero padding
-between fields. Some fields reference file offsets into section data (e.g.,
+The SET container has section_count=1. The "sections" 0-17 referenced by
+the offset table at 0x048E are sub-sections within the map data.
 0x0546 points into section 15).
 
 #### Part 2: Coordinate Bitstream (0x0565 onwards) — DECODED ✅
