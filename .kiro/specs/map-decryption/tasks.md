@@ -110,6 +110,19 @@ naturally look random.
   - No per-entry weight difference between A and B (confirmed statistically)
   - HNR↔FBL linking impossible without DLL runtime (opaque compiler IDs)
   - Road classification available via FBL value 92 + DLL lookup table instead
+- [ ] **9.5b** HNR↔FBL segment linking — BLOCKED
+  - **What:** Link HNR routing data (major/minor) to FBL map coordinates per road segment
+  - **Why blocked:** HNR road IDs are opaque 32-bit values assigned by the NNG map compiler.
+    They cannot be derived from FBL coordinates, spatial keys, or any hash function.
+    Tested: FBL key transformation (0 matches), MD5 (0 matches), CRC32 (0 matches),
+    8 hash functions on coordinates (all random-level matches).
+  - **Impact:** Cannot color individual roads on a map using HNR major/minor classification.
+    The HNR says "segment #X is major" but we can't find #X on the FBL map.
+  - **Workaround:** FBL road class extraction (value 92 + lookup table) provides BETTER
+    classification (motorway/trunk/primary/etc.) for ~5-14% of segments directly from FBL.
+  - **To unblock:** Emulate the full DLL map loading pipeline (NngineStart → NngineAttachConfig
+    → file loading) to capture the runtime ID↔coordinate mapping table. This is a major
+    engineering effort requiring the complete DLL execution environment.
 - [ ] **9.6** Parse TMC (traffic message channel) files
   - Only `.stm` shadow files available on USB (actual TMC data on head unit internal storage)
   - Provider-specific files (e.g. France-V-Trafic.tmc, Germany_HERE.tmc)
