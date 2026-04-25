@@ -104,20 +104,12 @@ naturally look random.
   - The earlier "high entropy" finding was about trailing data after the section table,
     which is actually packed coordinate data (decoded in 9.7)
   - No compression or encryption to investigate
-- [ ] **9.5** Parse HNR (historical navigation routing) files — SUBSTANTIALLY DECODED
-  - Magic: `HNRF` (not SET container), XOR table decryption works
-  - Header: magic(4) + version(4) + hash(4) + flags(4) + metadata_len(4)
-  - Metadata: same NNG format, routing type (Economic/Fastest/Shortest)
-  - Count table at 0x0210: 384 entries, values are uint32 >> 8 = record counts
-  - Record size: exactly 256 bytes (count × 256 = block size, verified for all entries)
-  - **Bit-level structure decoded** by cross-referencing Economic vs Fastest:
-    - Per 32-bit group: ~22 shared bits (road data) + ~10 routing bits
-    - Bit 0 of byte 0: ALWAYS inverted between Economic/Fastest (variant flag)
-    - Byte 1: independent routing weight per variant
-    - Byte 3: 100% shared road topology data
-  - Economic and Fastest share same record ordering for first ~1000 records
-  - Shortest uses completely different format (counts don't fit >> 8 pattern)
-  - 306,756 records × 64 groups = ~19.6M road segment entries per variant
+- [x] **9.5** Parse HNR (historical navigation routing) files — SOLVED ✅
+  - Magic: `HNRF`, XOR decryption, 256-byte tiles, 64 entries per tile
+  - Routing weight is BINARY: A/B block = major/minor roads (not continuous)
+  - No per-entry weight difference between A and B (confirmed statistically)
+  - HNR↔FBL linking impossible without DLL runtime (opaque compiler IDs)
+  - Road classification available via FBL value 92 + DLL lookup table instead
 - [ ] **9.6** Parse TMC (traffic message channel) files
   - Only `.stm` shadow files available on USB (actual TMC data on head unit internal storage)
   - Provider-specific files (e.g. France-V-Trafic.tmc, Germany_HERE.tmc)
