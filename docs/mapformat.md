@@ -1293,3 +1293,30 @@ The converter is the preprocessing step we need to find.
 
 **Key function:** `FUN_102460d0` at RVA 0x2460D0 — the main graph builder.
 Takes 11 parameters including the uint32 record array and config object.
+
+### Byte-to-Record Converter (Task 11.2)
+
+**FUN_1024a720** (RVA 0x24A720) converts raw section bytes to uint32 records:
+
+```
+Input:  param_1 = raw section byte pointer
+        param_2 = flags
+        param_3 = output record array pointer
+        param_4 = context object (with lookup tables)
+
+Process:
+  1. Read byte from param_1
+  2. If byte > 0xBF: decode as varint (2-5 bytes)
+  3. Process decoded value to build uint32 record
+  4. Write record to output array via param_3
+  5. Advance param_1, repeat
+
+The varint decoding matches UTF-8:
+  byte & 0x20 == 0: 2-byte (11 bits)
+  byte & 0x10 == 0: 3-byte (16 bits)
+  byte & 0x08 == 0: 4-byte (21 bits)
+  else: 5-byte (26 bits)
+```
+
+This function is the key preprocessing step. It reads the raw FBL section
+bytes and produces the uint32 record array that FUN_102460d0 processes.
