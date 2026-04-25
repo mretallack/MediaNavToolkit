@@ -78,12 +78,13 @@ naturally look random.
   - Trailing data after section 17 (230MB for UK) is more packed coordinates
   - Updated tool to include trailing data; numpy XOR already implemented
   - UK section 4: 1.3M road points decoded in ~2 min
-- [x] **9.2** Decode road segment attribute bytes — SOLVED ✅
-  - road_type byte = `1CFFF_SSS`: bit7=flag, bit6=sub, bits5-3=FRC, bits2-0=speed
-  - FRC 0=motorway, 1=trunk, 2=primary, 3=secondary, 4=tertiary, 5-7=local
-  - Verified: Vatican 0x95=FRC2(primary), 0x9A=FRC3(secondary), 0xA5=FRC4(tertiary)
-  - Only extractable from Vatican (raw int32 format); larger files have it in packed bitstream
-  - HNR type A/B split provides additional binary major/minor classification
+- [ ] **9.2** Decode road segment attribute bytes — PARTIALLY SOLVED
+  - Vatican "road_type" values (0x95, 0x9A, 0xA5) are **record type opcodes**, not road classes
+  - Complete 256-entry opcode→size table extracted from DLL at RVA 0x2E58A0
+  - FBL sections are opcode-structured records (NOT flat coordinate bitstreams)
+  - Road attributes in large files are within large opcode records (32-160 bytes)
+  - Need to decode internal field layout of large record types (0xA4, 0xC0, 0xD0, etc.)
+  - HNR type A/B split still provides binary major/minor classification
 - [x] **9.7** Decode the gap area (road network index) between section table and section 0
   - **DECODED ✅** — the gap area is a continuous packed bitstream of coordinates
   - Part 1 (fixed header 0x04DE-0x055D): File metadata, sizes, constant fields

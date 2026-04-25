@@ -1103,52 +1103,43 @@ This is the FBL's internal spatial index format. The HNR uses a **different** 32
 ID scheme (uniformly distributed, not tile-based). The two ID spaces are linked only
 at runtime through the navigation engine's internal data structures.
 
-### Road Type Byte — DECODED ✅
+### Road Type Byte — Record Type Opcode
 
-The `road_type` byte in the 12-byte segment metadata encodes a **Functional Road
-Class (FRC)** and speed modifier:
+The `road_type` byte in Vatican's 12-byte segment metadata (0x95, 0x9A, 0xA5)
+is actually a **record type opcode** in the NNG bitstream format, not a road
+classification code. The opcode determines the record structure that follows.
 
-```
-road_type = 1CFFF SSS (binary)
-  Bit 7:     Always 1 (road segment flag)
-  Bit 6:     Sub-flag (0 for all Vatican roads)
-  Bits 5-3:  FRC (Functional Road Class, 0-7)
-  Bits 2-0:  Speed/sub-class modifier (0-7)
-```
+From the DLL opcode table:
+- 0x95: 1-byte record
+- 0x9A: 3-byte record
+- 0xA5: 0-byte record
 
-| FRC | road_type range | Road class |
-|-----|----------------|------------|
-| 0 | 0x80-0x87 | Motorway |
-| 1 | 0x88-0x8F | Trunk / Major highway |
-| 2 | 0x90-0x97 | Primary / Other major road |
-| 3 | 0x98-0x9F | Secondary |
-| 4 | 0xA0-0xA7 | Tertiary / Local connecting |
-| 5 | 0xA8-0xAF | Local road (high importance) |
-| 6 | 0xB0-0xB7 | Local road (medium importance) |
-| 7 | 0xB8-0xBF | Local road (low importance) |
+The earlier FRC interpretation (bits 3-5 = road class) was coincidental.
+Road classification in larger files is encoded within the payload of large
+opcode records (32-160 bytes), not as standalone bytes.
 
-**Verified against Vatican OSM data:**
-- 0x95 = FRC 2, speed 5 → OSM: footway (minor road in Vatican)
-- 0x9A = FRC 3, speed 2 → OSM: footway
-- 0xA5 = FRC 4, speed 5 → OSM: pedestrian (Piazza Santa Marta)
+### Road Attributes in Large FBL Files — In Opcode Records
 
-### Road Attributes in Large FBL Files — Not Present
+Road attributes are embedded within **large opcode records** (32-160 bytes each).
+The FBL sections use an opcode-based record format, NOT flat coordinate bitstreams.
 
-Exhaustive analysis confirms that **road attributes (FRC, speed class) are NOT stored
-in the coordinate bitstreams** of larger FBL files:
+**Opcode record types containing road data (from Monaco section 4):**
 
-1. Section 4 bitstream decodes as 100% valid coordinates at exactly N+M bits per point.
-   Adding any extra attribute bits (K=1 to K=8) produces maximum-entropy "attributes"
-   (uniform distribution) — confirming no interleaved data.
-2. Gap area coordinates are 95-100% valid; the 5% "invalid" points are near-border
-   roads, not attribute data.
-3. Section 15 size doesn't scale linearly with road count (0.07-0.67 B/point).
-4. No other sections contain structured attribute data.
+| Opcode | Size | Count | Likely content |
+|--------|------|-------|----------------|
+| 0xD4 | 128B | 13 | Full road segment (coords + attributes) |
+| 0xC0 | 123B | 10 | Full road segment |
+| 0xA4 | 96B | 13 | Road segment |
+| 0xB0 | 94B | 13 | Road segment |
+| 0xB4 | 37B | 14 | Segment metadata |
+| 0xAC | 34B | 14 | Segment metadata |
+| 0xB8 | 35B | 13 | Segment metadata |
+| 0xFD | 32B | 20 | Data block |
+| 0xE5 | 32B | 18 | Data block |
 
-**Road classification sources:**
-- **Vatican only:** Inline road_type byte in section 4 raw format (FRC in bits 3-5)
-- **All files:** HNR type A/B block split (major ~19% vs minor ~81%)
-- **Not available:** Per-segment FRC for files larger than Vatican without DLL runtime
+The road_type/FRC values are packed within these records alongside coordinates
+and other attributes. Decoding the internal field layout of each record type
+requires tracing the DLL's record reader functions.
 
 ### NNG Opcode Table — Extracted from DLL ✅
 
