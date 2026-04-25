@@ -110,19 +110,90 @@ naturally look random.
   - No per-entry weight difference between A and B (confirmed statistically)
   - HNR↔FBL linking impossible without DLL runtime (opaque compiler IDs)
   - Road classification available via FBL value 92 + DLL lookup table instead
-- [ ] **9.5b** HNR↔FBL segment linking — BLOCKED
-  - **What:** Link HNR routing data (major/minor) to FBL map coordinates per road segment
-  - **Why blocked:** HNR road IDs are opaque 32-bit values assigned by the NNG map compiler.
-    They cannot be derived from FBL coordinates, spatial keys, or any hash function.
-    Tested: FBL key transformation (0 matches), MD5 (0 matches), CRC32 (0 matches),
-    8 hash functions on coordinates (all random-level matches).
-  - **Impact:** Cannot color individual roads on a map using HNR major/minor classification.
-    The HNR says "segment #X is major" but we can't find #X on the FBL map.
-  - **Workaround:** FBL road class extraction (value 92 + lookup table) provides BETTER
-    classification (motorway/trunk/primary/etc.) for ~5-14% of segments directly from FBL.
-  - **To unblock:** Emulate the full DLL map loading pipeline (NngineStart → NngineAttachConfig
-    → file loading) to capture the runtime ID↔coordinate mapping table. This is a major
-    engineering effort requiring the complete DLL execution environment.
+- [ ] **9.5b** HNR↔FBL segment linking — BLOCKED → REOPENED
+  - **What:** Link HNR routing data (major/minor per segment) to FBL map coordinates
+  - **Previous attempts that failed:** Direct ID matching, hash functions, spatial keys
+  - **New opportunity:** We now have road class for 99% of FBL segments via forward-fill.
+    This enables matching by road class distribution per geographic area.
+
+  - [ ] **9.5b.1** Count FBL segments per road class for ALL 30 countries
+    - Extract the full disk backup, decrypt each FBL file
+    - Run fbl_road_class.py --inherit on each
+    - Output: country, total_segments, motorway, trunk, primary, ..., pedestrian
+
+  - [ ] **9.5b.2** Count HNR type-A segments per tile
+    - Type A = major roads. Count per tile gives a "major road density" per tile.
+    - Output: tile_index, a_count, b_count, a_ratio
+
+  - [ ] **9.5b.3** Estimate FBL "major road" count per country
+    - From 9.5b.1: count segments with road class 0-3 (motorway/trunk/primary/secondary)
+    - These are the "major" roads that should correspond to HNR type A
+
+  - [ ] **9.5b.4** Match HNR tiles to countries by major road count
+    - For each country, find the set of HNR tiles whose combined A-count
+      matches the country's major road count
+    - Small countries (Vatican, Monaco) should match 1-2 tiles
+    - Large countries (France, Germany) should match many tiles
+
+  - [ ] **9.5b.5** Verify matching using total segment counts
+    - For matched tiles: total HNR segments (A+B) × 64 should approximate
+      total FBL segments × some ratio
+    - The ratio should be consistent across countries
+
+  - [ ] **9.5b.6** Try matching by segment SIZE distribution
+    - FBL segments have sizes (2-587 bytes). Larger = more important road.
+    - HNR type A entries might correspond to larger FBL segments
+    - Compare: FBL segment size distribution for major vs minor roads
+      with HNR A vs B block sizes
+
+  - [ ] **9.5b.7** Use geographic bbox to narrow tile candidates
+    - Each FBL file has a bbox (lon/lat range)
+    - HNR tiles cover geographic areas (we know tile size ~0.78°)
+    - Compute which tiles COULD contain each country based on bbox overlap
+
+  - [ ] **9.5b.8** Try matching by segment ORDER within tiles
+    - If HNR entries within a tile are ordered the same as FBL segments
+      within a country, we can match by position
+    - Compare: first N entries of an HNR tile with first N FBL segments
+    - Check if road class (major/minor) matches A/B block assignment
+
+  - [ ] **9.5b.9** Use the FBL section 15 offsets as region boundaries
+    - The FBL header has 7 uint24 offsets into section 15
+    - These might divide the country into regions
+    - Each region might correspond to one HNR tile
+
+  - [ ] **9.5b.10** Build a segment-level matcher using road class + position
+    - For a matched tile-country pair:
+      - Sort FBL segments by byte offset (= geographic order)
+      - Sort HNR entries by position within tile
+      - Match: FBL major road segments ↔ HNR type A entries
+      - Match: FBL minor road segments ↔ HNR type B entries
+    - Verify by checking if matched segments have consistent properties
+
+  - [ ] **9.5b.11** Validate linking on Vatican (3 segments)
+    - Vatican is the simplest case — only 3 road segments
+    - Find which HNR tile(s) contain Vatican's segments
+    - Verify: the 3 HNR entries should match Vatican's 3 FBL segments
+
+  - [ ] **9.5b.12** Validate linking on Monaco (395 segments)
+    - Monaco is small enough to verify manually
+    - Check: do the matched HNR entries have the right A/B classification
+      for Monaco's road classes?
+
+  - [ ] **9.5b.13** Build `hnr_fbl_link.py` tool
+    - Input: FBL file + HNR file
+    - Output: CSV with lon, lat, fbl_road_class, hnr_block_type (A/B)
+    - Test on Vatican, Monaco, Andorra
+
+  - [ ] **9.5b.14** Validate on Andorra (motorway CG-1)
+    - Andorra has a known motorway (CG-1)
+    - The motorway segments should be in HNR type A blocks
+    - Verify: linked motorway segments have A classification
+
+  - [ ] **9.5b.15** Document the linking method in mapformat.md
+    - Describe the matching algorithm
+    - Report accuracy metrics
+    - Mark 9.5b as SOLVED
 - [ ] **9.6** Parse TMC (traffic message channel) files
   - Only `.stm` shadow files available on USB (actual TMC data on head unit internal storage)
   - Provider-specific files (e.g. France-V-Trafic.tmc, Germany_HERE.tmc)
