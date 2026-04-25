@@ -155,8 +155,58 @@ All sub-tasks superseded by the direct solution:
 - [x] **F2** Build `fbl_segments.py` CLI tool ✅
 - [x] **F3** Build `fbl_road_network.py` — complete road network export ✅
 - [ ] **F4** Improve road class coverage — trace inheritance for unclassified segments
-  - Currently ~5-14% of segments have explicit road class markers
-  - Requires tracing the DLL's inheritance logic
+  - Currently ~5-14% of segments have explicit road class markers (value 92)
+  - The remaining ~85-95% inherit road class from context
+
+  - [ ] **F4.1** Analyze the pattern around classified segments
+    - For each classified segment, check: do neighboring segments share the same class?
+    - Check if road class markers appear at the START of a group of segments
+    - Hypothesis: one marker classifies all following segments until the next marker
+
+  - [ ] **F4.2** Test the "inherit from previous marker" hypothesis
+    - Assign each segment the road class of the most recent value-92 marker before it
+    - Count how many segments get classified this way
+    - Cross-reference with OSM to check if the assignments make sense
+
+  - [ ] **F4.3** Check if segment size correlates with inherited road class
+    - Large segments (>200B) should be major roads
+    - Small segments (<20B) should be local roads
+    - If inherited class matches size pattern, the inheritance is correct
+
+  - [ ] **F4.4** Check the DLL's graph builder for inheritance logic
+    - In FUN_102460d0, `local_b0` holds the current road class value
+    - It's set by 0x8003 records and persists across segments
+    - Trace: does `local_b0` reset between segments or carry forward?
+
+  - [ ] **F4.5** Check if the varint value AFTER the segment marker encodes class
+    - Segment markers (6, 98-103) have a payload value
+    - The payload might be a road class index or a reference to a class table
+    - Compare payload values with known road classes from value-92 markers
+
+  - [ ] **F4.6** Check if the section number implies road class
+    - Sections 4, 5, 8 might correspond to different road importance levels
+    - Extract segments from sections 5 and 8 separately
+    - Compare road class distribution across sections
+
+  - [ ] **F4.7** Use Unicorn to emulate the graph builder on a small section
+    - Feed Monaco section 4 (first 1000 bytes) to FUN_102460d0
+    - Hook the 0x8003 handler to capture road class assignments
+    - Track which segments get which class (including inherited ones)
+
+  - [ ] **F4.8** Implement the inheritance logic in Python
+    - Based on findings from F4.1-F4.7
+    - Assign road class to ALL segments (not just those with explicit markers)
+    - Verify: classified segment count should be close to total segment count
+
+  - [ ] **F4.9** Validate full classification against OSM
+    - Run fbl_validate.py with the improved classification
+    - Compare road class distribution with OSM highway tag distribution
+    - Report accuracy improvement over the 5-14% baseline
+
+  - [ ] **F4.10** Update fbl_road_class.py to use inheritance
+    - Add --inherit flag to enable inheritance logic
+    - Default: only explicit markers (current behavior)
+    - With --inherit: classify all segments using inheritance
 - [x] **F5** Build HNR CSV export (added --csv to hnr_info.py) ✅
 - [x] **F6** Publish mapformat.md as standalone format documentation ✅
 - [x] **F7** Build test suite for map tools (10 tests, 301 total) ✅
