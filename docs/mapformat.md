@@ -93,26 +93,28 @@ Routing optimization data — pre-computed route weights based on historical tra
 are all multiples of 256; the actual counts are `value >> 8`. Total count:
 306,756 records. With 62MB of data starting at 0x1000, each record is ~202 bytes.
 
-**Record format:** 256-byte records, each containing **64 road segment entries of 4 bytes**:
+**Record format:** 256-byte records containing a **packed bitstream** with 64 groups
+of 32 bits each. Within each 32-bit group, certain bit positions encode shared road
+data and others encode routing-variant-specific weights:
 
 ```
-[base_speed] [routing_weight] [road_char] [segment_id]
+Per 32-bit group (4 bytes):
+  Byte 0, bits 7-1 (7 bits): Road segment data (99% shared between variants)
+  Byte 0, bit 0    (1 bit):  Variant flag (ALWAYS inverted between Economic/Fastest)
+  Byte 1           (8 bits): Routing weight (independent per variant, ~50% shared)
+  Byte 2, bits 7-1 (7 bits): Road segment data (88-100% shared)
+  Byte 2, bit 0    (1 bit):  Mixed (47% shared)
+  Byte 3           (8 bits): Road segment data (100% shared)
 ```
 
-| Byte | Name | Description |
-|------|------|-------------|
-| 0 | base_speed | Base speed/weight (0.951 correlation between Economic/Fastest) |
-| 1 | routing_weight | Routing-variant-specific weight (independent between variants) |
-| 2 | road_char | Road characteristics (mostly shared, small diffs between variants) |
-| 3 | segment_id | Road segment identifier (100% identical across all routing variants) |
+**Key findings from cross-referencing Economic vs Fastest:**
+- Bit 0 of byte 0 is **always the exact opposite** between variants (XOR = 1 for all
+  64 groups across all 100 tested records). This is a variant identifier or parity bit.
+- Byte 1 is completely independent between variants (~50% bit-level sharing = random).
+- Byte 3 is 100% identical between variants — pure road topology data.
+- ~22 bits per group are shared (road data), ~10 bits are routing-specific.
 
-**Verified by cross-referencing Economic vs Fastest files:**
-- Byte 3 (segment_id): 100% shared across 100 records
-- Byte 0 (base_speed): 0% shared but r=0.951 correlation (nearly same values)
-- Byte 1 (routing_weight): 0% shared, r=-0.03 (completely independent)
-- Byte 2 (road_char): 24% shared, small differences when different
-
-Each record is a **tile** of 64 road segments. With 306,756 records × 64 segments
+Each record is a **tile** of 64 road segment entries. With 306,756 records × 64 segments
 = ~19.6 million road segment entries for the Economic routing variant.
 
 ### POI — Points of Interest (Confirmed)
