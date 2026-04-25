@@ -76,6 +76,25 @@ naturally look random.
   - Byte-by-byte XOR is too slow for 254MB — needs numpy or C extension
   - Need to discover and iterate all region blocks within a single FBL file
   - Verified: UK section 4 decodes at 81% valid with 27+26 bits
+- [ ] **9.2** Decode road segment attribute bytes
+  - Road type byte partially observed (0x95, 0x9A, 0xA5) but meaning not mapped
+  - Need to identify: motorway vs trunk vs residential, speed class, one-way flags
+  - Cross-reference with OSM road classifications for known segments
+- [ ] **9.3** Fix POI category name encoding
+  - `poi_to_geojson.py` extracts names but some are garbled
+  - Encoding scheme partially decoded — needs further investigation
+- [ ] **9.4** Investigate section 16 data
+  - Entropy 7.97 — either compressed or encrypted with external key
+  - Likely contains supplementary rendering data (area fills, building outlines, coastlines)
+  - Exhaustive Blowfish key search from file content failed (best entropy 6.29)
+- [ ] **9.5** Parse HNR (historical navigation routing) files
+  - Different magic bytes (`e2 66 4c 50 34 c2 7f ce`), structure unknown beyond encryption
+  - Region-level files (e.g. EuropeEconomic.hnr, EuropeFastest.hnr)
+  - Likely contains time-of-day traffic speed profiles for road segments
+- [ ] **9.6** Parse TMC (traffic message channel) files
+  - Provider-specific files (e.g. France-V-Trafic.tmc, Germany_HERE.tmc)
+  - Very small (<0.1 MB total), not yet investigated
+  - Maps TMC location codes to road segments for real-time traffic
 
 ## Documentation Rule
 
