@@ -1178,3 +1178,33 @@ The earlier FRC interpretation (bits 3-5 = road class) was coincidental.
 - 0xA4: 96-byte record
 - 0xC0: 123-byte record
 - 0xD0: 160-byte record (largest)
+
+### Opcode-Based Record Parsing — Verified ✅
+
+The opcode table successfully parses ALL FBL sections into structured records:
+
+**Vatican section 4 road data (parsed as opcodes):**
+```
+@138: opcode 0x00, data=0x95  ← road_type value!
+@140: opcode 0x00, data=0x05  ← flags
+@142: opcode 0x00, data=0x2E  ← shape reference (low byte)
+@144: opcode 0xB2 (no data)   ← shape reference (high byte as opcode)
+@145: opcode 0x2B, data=00 14 ← next data
+```
+
+The road_type values (0x95, 0x9A, 0xA5) are stored as **data bytes within
+opcode 0x00 records** (1-byte payload). They appear at predictable positions
+in the record stream — after coordinate records and before shape references.
+
+**Section statistics (Vatican):**
+- Section 1 (curves): 53 records, opcodes 0x00(10), 0x80(6), 0xAC(4)
+- Section 4 (roads): 312 records, opcodes 0x00(71), 0x40(12), 0x14(9)
+- Section 5: 128 records, large 0xD0(160B) and 0xF9(32B) records
+- Section 8: 89 records, mixed opcodes
+
+**Monaco section 4:** 20,370 bytes parse into structured records with opcodes
+0xFD(32B), 0x60(2B), 0x81(3B), 0xE5(32B) — NOT a flat coordinate bitstream.
+
+**Correction:** The earlier "packed coordinate bitstream" interpretation was wrong.
+The data is opcode-structured records that happen to produce valid-looking coordinates
+when misread as N+M bit pairs (because the byte values are uniformly distributed).
