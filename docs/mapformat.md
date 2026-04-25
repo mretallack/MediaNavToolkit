@@ -1639,3 +1639,26 @@ reconstruct the non-coordinate data.
 **Next step for full OSM-to-FBL:** Extract the DLL's pattern data tables
 and implement the pattern compiler in Python. This requires deeper
 emulation of the map loading pipeline.
+
+
+### CORRECTION: Packed Coordinate Pairs Are False Positives
+
+**Previous claim:** Large varint values encode packed coordinate pairs
+as `(lon_off << lat_bits) | lat_off`.
+
+**Correction:** Analysis of the decoded "coordinates" shows ALL longitudes
+cluster at 7.4094-7.4095 (the bbox minimum). The `value >> lat_bits` gives
+only 0-1018, not meaningful longitude offsets. These are NOT coordinate pairs.
+
+The large varint values are part of the compressed road network structure.
+Their interpretation as coordinates was a false positive caused by the
+lat_offset portion (low 21 bits) happening to fall in the valid latitude range.
+
+**Real coordinates** are extracted by the packed bitstream approach
+(N+M bits per point, as used by `fbl_to_geojson.py`). The bitstream
+coordinates are scattered (not sequential road geometry) because the
+bitstream contains interleaved coordinate and non-coordinate data.
+
+The varint stream is a compressed representation where coordinates,
+attributes, and structure are all encoded together. Extracting individual
+components requires the full pattern matching grammar.
