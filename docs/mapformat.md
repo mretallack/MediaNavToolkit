@@ -1242,3 +1242,34 @@ fixed — it depends on the segment's attributes.
 
 The variable-length extension mechanism (bytes 0xC0-0xFF at record end) adds
 1-5 extra bytes per the second lookup table at `DAT_102e5860`.
+
+### Variable-Length Integer Encoding — DECODED ✅
+
+FBL section data uses a **UTF-8-like variable-length integer encoding**:
+
+| Prefix | Bytes | Value range | Mask |
+|--------|-------|-------------|------|
+| 0x00-0x7F | 1 | 0-127 | 7 bits |
+| 0xC0-0xDF | 2 | 128-2,047 | 11 bits |
+| 0xE0-0xEF | 3 | 2,048-65,535 | 16 bits |
+| 0xF0-0xF7 | 4 | 65,536-2,097,151 | 21 bits |
+| 0xF8-0xFB | 5 | 2,097,152-67,108,863 | 26 bits |
+| 0xFC-0xFD | 6 | 67,108,864-2,147,483,647 | 31 bits |
+
+Continuation bytes have prefix 0x80 (same as UTF-8).
+
+**Corrects the "opcode table" interpretation:** The 256-entry table at `DAT_102e58a0`
+is NOT an opcode→size table — it's the varint prefix→byte-count table. The section
+data is a stream of variable-length integers, not fixed-size opcode records.
+
+**Segment counts (varint-decoded):**
+
+| Country | Segments | Values |
+|---------|----------|--------|
+| Vatican | 81 | 1,517 |
+| Monaco | 395 | 14,086 |
+| Andorra | 1,440 | 52,955 |
+| Malta | 8,096 | 294,053 |
+
+Segment markers are values 6, 98-103 (0x06, 0x62-0x67) in the decoded stream.
+Road class is encoded within the value sequence but at context-dependent positions.
