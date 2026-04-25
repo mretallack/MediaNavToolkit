@@ -1220,3 +1220,25 @@ The DLL's counter function (`FUN_1025e228`) increments a segment counter at thes
 The segment opcodes (0x62-0x67) are uniformly distributed (~13-16% each) and their
 payload bytes are also uniform — they do NOT encode road class directly. Road class
 is encoded within the variable-length record data between segment boundaries.
+
+### Opcode Type Codes — ASCII Data Types
+
+The segment boundary opcodes (0x62-0x67) are **ASCII data type indicators**:
+
+| Opcode | ASCII | Type |
+|--------|-------|------|
+| 0x62 | 'b' | Boolean |
+| 0x63 | 'c' | Char |
+| 0x64 | 'd' | Double/Date |
+| 0x65 | 'e' | Enum |
+| 0x66 | 'f' | Float |
+| 0x67 | 'g' | Geographic coordinate |
+| 0x06 | — | Generic/untyped |
+
+Each road segment consists of multiple typed fields. The field sequence varies
+per segment (no fixed schema). Road class is encoded as the value of a specific
+typed field within the segment's record sequence, but the field position is not
+fixed — it depends on the segment's attributes.
+
+The variable-length extension mechanism (bytes 0xC0-0xFF at record end) adds
+1-5 extra bytes per the second lookup table at `DAT_102e5860`.
