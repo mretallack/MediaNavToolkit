@@ -2,11 +2,13 @@
 
 > What we know (and don't know) about the iGO/NNG map file formats used on MediaNav.
 
-## Status: Mostly Unknown
+## Status: Substantially Decoded ✅
 
-The iGO map format is **proprietary to NNG** and not publicly documented. This document
-collects what we've observed from the USB shadow files, community knowledge, and the
-NaviExtras update protocol. Much of this is inference — clearly marked where uncertain.
+The iGO map format is **proprietary to NNG** and not publicly documented. Through
+reverse engineering of the USB shadow files, `nngine.dll`, and the NaviExtras update
+protocol, we have decoded the encryption, container format, coordinate encoding,
+and most of the internal structure. This is the **first public documentation** of
+the NNG map format.
 
 ## File Types
 
@@ -449,26 +451,34 @@ as `device.nng`.
 1. ~~Access to actual `.fbl` files~~ — **DONE** ✅
 2. ~~Hex analysis of the file header~~ — **DONE** ✅ (SET format, magic bytes, sections)
 3. ~~The decryption key or algorithm~~ — **DONE** ✅ (XOR table, curve data is NOT encrypted)
-4. **Decode the NNG bitstream codec** — **NEXT** (section 1 variable-length coordinate deltas)
-5. Cross-reference decoded curves with OSM data to verify correctness
-6. ~~Analysis of `nngine.dll` map loading/decryption functions~~ — **DONE** ✅ (Blowfish is for license keys only)
+4. ~~Decode the NNG bitstream codec~~ — **DONE** ✅ (packed N+M bit coordinate pairs)
+5. ~~Cross-reference decoded curves with OSM data~~ — **DONE** ✅ (17-50m accuracy)
+6. ~~Analysis of `nngine.dll` map loading/decryption functions~~ — **DONE** ✅
+7. **Road segment attributes** — PARTIALLY DONE (3 values from Vatican, A/B classification from HNR)
+8. **HNR road ID to FBL coordinate mapping** — NOT DONE (IDs are hashes, not coordinate-derived)
 
 ## Prior Art — Has Anyone Reversed This?
 
-**No public tools exist**, but we've made significant progress:
+**No public tools or documentation exist** for the NNG/iGO map format. Searches of
+GitHub, GPSPower forums, and general web (April 2025) found no prior reverse
+engineering of FBL, HNR, SET container, or the XOR table encryption.
 
+The closest related work is the Bosch headunit root project
+(github.com/ea/bosch_headunit_root) which has a different NNG variant (CRYPTNAV)
+but hasn't decoded the map data structure.
+
+**What we've decoded (first public documentation):**
 - **XOR table decryption** — SOLVED ✅ (same table as `device.nng`)
 - **SET container format** — SOLVED ✅ (header, metadata, section offsets)
-- **Junction coordinates** — SOLVED ✅ (int32 / 2^23 WGS84)
-- **Road segment metadata** — SOLVED ✅ (road type, shape count/offset)
-- **Curve data** — ACCESSIBLE ✅ (bitstream-encoded, not encrypted)
+- **Coordinate encoding** — SOLVED ✅ (packed N+M bit bitstreams, int32/2^23 WGS84)
+- **Junction coordinates** — SOLVED ✅
+- **Road segment metadata** — PARTIAL (3 values from Vatican)
 - **Speed cameras** — FULLY PARSED ✅ (12-byte records with GPS + speed)
-- **Bitstream codec** — NOT YET DECODED (next step)
-
-Community status (unchanged):
-- **No public decryption tools** for NNG FBL files on GitHub, GPSPower, or XDA
-- **Older iGO 8** used **unencrypted** `.fbl` files; NNG added encryption in Primo/NextGen
-- **Maps are device-locked** via `.lyc` licenses (RSA + XOR-CBC, which we've also cracked)
+- **POI extraction + names** — SOLVED ✅ (byte×2 category encoding)
+- **License decryption** — SOLVED ✅ (RSA + XOR-CBC)
+- **HNR routing format** — SUBSTANTIALLY DECODED ✅ (256-byte tiles, bit-level structure)
+- **Road classification** — SOLVED ✅ (HNR type A/B = major/minor roads)
+- **Large file support** — SOLVED ✅ (UK 254MB, 76M points)
 
 
 ## Custom POI Format (Dealership POI / Userdata POI)
@@ -595,45 +605,39 @@ documents the import process.
 - [x] **T9.** Implement the decryption in Python — `tools/maps/decrypt_fbl.py`
 - [x] **T10.** Verify decryption against multiple files (Vatican, Andorra, Monaco)
 
-### Phase 4: Understand the Decrypted Format — IN PROGRESS
+### Phase 4: Understand the Decrypted Format — COMPLETE ✅
 
 - [x] **T11.** Identify the internal structure of decrypted `.fbl`
-  - SET header, Latin padding, UTF-16LE metadata, section offset table
-- [ ] **T12.** Decode the NNG bitstream codec (section 1 curve data)
-  - Records have 10-byte prefix, `68 00 02` markers, variable-length deltas
-  - Trace `FUN_1021e910` (LEB128 varint) and `FUN_10240e80` (tagged records)
-- [ ] **T13.** Cross-reference decoded curves with OpenStreetMap data
-- [ ] **T14.** Parse `.fpa` (address search) format
-- [x] **T15.** Parse `.poi` format — partially done
+- [x] **T12.** Decode the NNG bitstream codec — packed N+M bit coordinate pairs
+- [x] **T13.** Cross-reference decoded curves with OpenStreetMap data — 17-50m accuracy
+- [x] **T14.** Parse `.fpa` (address search) format — same codec as FBL
+- [x] **T15.** Parse `.poi` format — byte×2 category name encoding decoded
 - [x] **T16.** Parse `.spc` (speed camera) format — `tools/maps/spc_to_csv.py` ✅
 
-### Phase 5: Build Tools — IN PROGRESS
+### Phase 5: Build Tools — COMPLETE ✅
 
 - [x] **T17.** `tools/maps/decrypt_fbl.py` — decrypt map files ✅
 - [x] **T18.** `tools/maps/fbl_info.py` — show header info ✅
-- [ ] **T19.** `tools/maps/fbl_to_geojson.py` — convert road network to GeoJSON
-  - Needs bitstream codec (T12) to include curve points
+- [x] **T19.** `tools/maps/fbl_to_geojson.py` — extract all coordinates (UK 254MB works) ✅
 - [x] **T20.** `tools/maps/spc_to_csv.py` — speed cameras ✅
 - [x] **T21.** `tools/maps/junctions_to_geojson.py` — junction coordinates ✅
 - [x] **T22.** `tools/maps/segments_to_csv.py` — road segments ✅
+- [x] **T23.** `tools/maps/hnr_info.py` — HNR routing data ✅
+- [x] **T24.** `tools/maps/poi_to_geojson.py` — POI extraction with decoded names ✅
 
-### Key Question
+### Key Question — RESOLVED ✅
 
-~~The entire effort hinges on **T5-T7**: finding the decryption key.~~
+~~The entire effort hinges on finding the decryption key.~~
 
-**RESOLVED:** The curve data (section 1) is NOT encrypted. After XOR table
-decryption, the bitstream records are readable (entropy 5.5). The remaining
-challenge is **decoding the NNG bitstream codec** — reversing the variable-length
-integer encoding to extract actual coordinate deltas. This is a codec problem,
-not a cryptography problem.
+**RESOLVED:** The map data uses a simple repeating XOR table (4096 bytes, hardcoded
+in `nngine.dll`). After XOR decryption, all coordinate data is readable as packed
+bitstreams. No Blowfish or RSA needed for map geometry — those are for license
+management only.
 
-The most promising path forward:
-1. **Decode the section 1 bitstream** — trace the geometry reader in `nngine.dll`
-   or brute-force test variable-length integer encodings against known junction deltas
-2. **Build a curve extractor tool** — once the codec is understood, extract full
-   road geometry (junctions + curves) as GeoJSON
-3. **Optionally investigate section 16** — determine if it's compressed or encrypted,
-   and what data it contains (likely supplementary rendering data)
+**Remaining open questions:**
+- How to map HNR road IDs (22-bit hashes) to FBL road coordinates
+- What the HNR routing weight values (byte 1, 0-255) mean in terms of speed/cost
+- Road segment attributes for files larger than Vatican (11KB)
 
 ## References
 
@@ -861,16 +865,11 @@ uses raw int32 coordinates; larger files use packed bitstreams for space efficie
 - ✅ All other sections: packed bitstream format
 - ✅ Speed camera records (SPC files)
 
-### Exhaustive Key Search Result (Section 16 Only)
+### Section 16 — Empty ✅
 
-Tried every 16-byte window in the decrypted Vatican_osm.fbl as a Blowfish key
-on section 16. Best entropy achieved: **6.29** (at offset 0x0728). No key from
-the file itself produces clearly decrypted output (would need entropy < 4.0).
-
-**Conclusion:** Section 16's high entropy is either very good compression or
-encryption with an external key. Either way, the important curve geometry is
-in section 1 (accessible, entropy 5.5) — section 16 likely contains supplementary
-rendering data (area fills, building outlines, coastlines).
+Section 16 is **empty in all test files** — sections 16 and 17 always share the
+same offset. The earlier "high entropy section 16" finding was a misunderstanding;
+it was actually trailing coordinate data beyond the section offset table.
 
 ### nngine.dll API Analysis
 
@@ -954,11 +953,11 @@ transformations (quantization, prediction, zigzag) before varint encoding.
 reads the actual shape point data, and `FUN_10214720` which processes coordinate
 pairs within group records.
 
-### Gap Area — Road Network Index (Partially Decoded)
+### Gap Area — Additional Coordinate Data ✅
 
 Between the section offset table (ending at 0x04DE) and section 0, there is a
-**gap area** that encodes the road network topology and attributes. This area
-scales with the complexity of the road network.
+**gap area** that contains additional packed coordinate data — the same N+M bit
+encoding used in the numbered sections.
 
 **Size by country:**
 
@@ -1060,138 +1059,3 @@ the road network.
 (gap area + sections 0-17) is a single blob. The gap area coordinates are
 the beginning of this blob, read by the map geometry loader before it
 processes the numbered sub-sections.
-
-#### Vatican Tail Structure
-
-Vatican's gap area ends with a clear structure (other files have bitstream data
-right up to section 0):
-
-```
-0x06B7: 04          junction count (4)
-0x06B9: 10          16 (section count?)
-0x06BB: 03          segment count (3)
-0x06BC: 60 3E       15968 (unknown)
-0x06C7: 4D          77 (unknown)
-0x06CB: 03          segment count (3, repeated)
-```
-
-These values (junction count=4, segment count=3) match the known road network
-in Vatican's section 4 data.
-
-#### Relationship to Section 4
-
-Vatican is the **only file** that uses raw int32 coordinates with inline 12-byte
-metadata records in section 4. All larger files use packed bitstreams for section 4
-(coordinates only, no inline metadata). The road attributes for larger files are
-encoded in the gap area bitstream.
-
-**Vatican section 4 inline metadata (12 bytes per segment):**
-```
-[4B zeros] [1B road_type] [1B zero] [1B flags=0x05] [1B zero] [4B packed_shape_ref]
-```
-
-Road type values observed: 0x95 (149), 0x9A (154), 0xA5 (165) — all minor
-pedestrian/residential roads in Vatican City.
-
-#### Section Assignment vs Road Classification
-
-Cross-referencing Gibraltar sections 4, 5, and 8 with OSM shows that all three
-sections have **nearly identical highway type distributions** (~36% service, ~11%
-residential, ~10% secondary, etc.). The sections do NOT correspond to road
-classifications — they likely represent **zoom levels** or **rendering layers**.
-Road attributes (type, speed, one-way) are stored in the gap area, not implied
-by section assignment.
-
-**Blocker:** Decoding the gap area bitstream requires understanding the NNG
-variable-length record codec. The DLL function `FUN_10240e80` (tagged records)
-uses a switch on `byte & 0x7F` with cases 0-8 and 0x12, but the gap area
-bitstream does not start with a valid type byte for this format. The gap area
-likely uses a **different codec** — possibly a bit-packed format specific to the
-road network index, not the general-purpose tagged record format used for
-geometry data.
-
-**Attempted approaches (all failed to fully decode the road data):**
-1. LEB128 varint decoding — produces meaningless values
-2. NNG tagged record format (type & 0x7F) — only first byte parses, rest fails
-3. Fixed-width bit fields — no consistent pattern
-4. Unary-coded values — no meaningful structure
-5. Nibble-coded values — no pattern
-6. Section-based road classification — sections don't map to road types
-7. FC/FE as record delimiters — partially successful (found structure but not content)
-8. Bit-level search for known road_type values (0x95, 0x9A, 0xA5) — not found as raw values
-9. Unicorn emulation of FUN_10240e80 — reads first record (RAW8) then crashes on vtable
-10. Differential analysis — road attributes are NOT stored as raw bytes; likely compressed/indexed
-
-**Key conclusion:** Road attributes in the gap bitstream are encoded using a
-compressed/indexed format — not as raw byte values. The road_type bytes (0x95, 0x9A, 0xA5)
-from Vatican's section 4 do NOT appear in the gap bitstream at byte or bit boundaries.
-The encoding likely uses a lookup table or dictionary compression.
-
-#### FC/FE Marker Structure (Partially Decoded)
-
-Treating `0xFC` and `0xFE` as 3-byte markers (`FC XX YY` / `FE XX YY`) reveals
-structure in the bitstream:
-
-1. **Initial data** (23-56 bytes) — preamble, partially structured
-2. **FC marker cluster** — 6-9 consecutive FC markers (e.g., `FC 7f 0d FC 3b 26...`)
-3. **uint16 tables** — groups of uint16 LE values (range 76-2004, mostly multiples of 4),
-   separated by FC markers. Purpose unknown — possibly road segment sizes or offsets.
-4. **FC fd XX** — transition marker to the main data blob
-5. **Main data blob** (1000-2800 bytes) — sparse array with a fixed structure:
-   - First ~15 bytes: small values (road counts?)
-   - Zero padding (~100 bytes)
-   - `10 00 03 YY YY ZZ` — fixed marker (YY YY varies per file)
-   - 8 zero bytes
-   - `4D 00 00 00 03 00 00` — fixed pattern (0x4D=77, 0x03=3 are constants)
-   - Road network data (variable-length records)
-6. **FE/FC markers + high-entropy blobs** — the remaining road network data
-
-The `4D 00 00 00 03` pattern appears in Vatican, Monaco, Gibraltar, SanMarino,
-and Andorra at consistent positions relative to the `10 00 03` marker. The values
-77 and 3 are constants across files — likely format version or type identifiers.
-
-#### Repeating Byte Patterns in Road Data
-
-After the coordinate bitstream and uint16 table, the main road data contains
-repeating patterns:
-
-- `e0 85 XX YY` — appears 13 times in Andorra, 15 in Monaco, 11 in Gibraltar.
-  The XX YY values are mostly unique per occurrence (not road type codes).
-  0x85 = type 5 in the NNG tagged format (flag=1), but the surrounding bytes
-  don't parse as tagged records.
-- `05 80 17 XX YY` — appears 5 times in Andorra. Always followed by 2 variable bytes.
-- `c0 01` — appears 18 times in Andorra. Often preceded by `40 01` or `80 01`.
-- `00 05` / `00 07` / `00 08` / `00 09` — small values that could be field type indicators.
-
-The data is **variable-length encoded** with no clear fixed record size. Statistical
-analysis shows no dominant byte frequency matching expected road counts (~200-1000
-segments). The encoding is likely a combination of bit-packed fields and variable-length
-integers, but the specific codec remains unidentified.
-
-#### Vatican Tail Structure
-
-Vatican's gap area ends with a clear structure (other files have bitstream data
-right up to section 0):
-
-```
-offset -22: 00 03                  segment count prefix?
-offset -20: 60 3E                  0x3E60 = 15968 (unknown)
-offset -18: 00 00 00 00 00 00 00   zeros
-offset -11: 00 00 00
-offset  -8: 4D                     77 (unknown constant)
-offset  -7: 00 00 00
-offset  -4: 03                     segment count (3)
-offset  -3: 00 00 00               zeros
-```
-
-#### What Would Crack This
-
-1. **Full Unicorn pipeline** — emulate the complete SET file reader (`FUN_101b5a60`)
-   with the decrypted FBL data, hooking `FUN_100557f0` (read_u32) and `FUN_10109c80`
-   (read_u16) to trace every field read. The gap header has mixed field sizes (uint32,
-   uint16, uint8) that can't be determined from data analysis alone.
-2. **Ghidra struct recovery** — use Ghidra's data type recovery on the SET reader
-   function to reconstruct the exact C struct layout of the gap header.
-3. **Larger sample with known differences** — if two versions of the same country's
-   FBL exist (different map versions), comparing the gap areas would reveal which
-   bytes encode road attributes vs topology.

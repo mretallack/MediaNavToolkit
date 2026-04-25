@@ -68,3 +68,6 @@ analysis/mock_usb/
 analysis/brute_*
 analysis/brute_*.log
 analysis/brute_*.err
+
+# Large test data files
+tools/maps/testdata/*.hnr

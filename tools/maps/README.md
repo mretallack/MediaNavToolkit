@@ -131,10 +131,12 @@ open https://geojson.io  # paste the file
 
 ## Status
 
-| Phase | Status | Next Step |
-|-------|--------|-----------|
-| 1. Header analysis | Not started | Extract test files (setup above) |
-| 2. Try known keys | Not started | Blocked on Phase 1 |
-| 3. DLL analysis | Not started | Only if Phase 2 fails |
-| 4. Decryption | Not started | Blocked on Phase 2/3 |
-| 5. Parse & export | Not started | Blocked on Phase 4 |
+| Phase | Status |
+|-------|--------|
+| 1. Header analysis | ✅ Complete |
+| 2. Decryption | ✅ Complete (XOR table) |
+| 3. Coordinate extraction | ✅ Complete (all sections, large files) |
+| 4. Speed cameras | ✅ Complete (1,405 cameras) |
+| 5. POI extraction | ✅ Complete (byte×2 name encoding) |
+| 6. HNR routing | ✅ Substantially decoded |
+| 7. Road classification | ✅ From HNR A/B blocks |
