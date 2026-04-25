@@ -1149,3 +1149,32 @@ in the coordinate bitstreams** of larger FBL files:
 - **Vatican only:** Inline road_type byte in section 4 raw format (FRC in bits 3-5)
 - **All files:** HNR type A/B block split (major ~19% vs minor ~81%)
 - **Not available:** Per-segment FRC for files larger than Vatican without DLL runtime
+
+### NNG Opcode Table — Extracted from DLL ✅
+
+The packed bitstream format uses **opcodes** (0x00-0xFF) where each opcode
+defines the record type and size. The complete opcode→size lookup table was
+extracted from `nngine.dll` at RVA `0x2E58A0`.
+
+**Correction:** The Vatican "road_type" values (0x95, 0x9A, 0xA5) are NOT
+road classification codes — they are **record type opcodes** in the bitstream:
+- 0x95: 1-byte record (followed by 1 data byte)
+- 0x9A: 3-byte record (followed by 3 data bytes)
+- 0xA5: 0-byte record (no data follows)
+
+The earlier FRC interpretation (bits 3-5 = road class) was coincidental.
+
+**Key opcode ranges:**
+- 0x00-0x0E: 1-byte records (simple values)
+- 0x0F-0x10: 3-byte records
+- 0x1D-0x26: 2-byte records
+- 0x27-0x29: 4-byte records
+- 0x68-0x69: 5-byte records
+- 0x6E-0x6F: 33-byte records
+- 0x78-0x84: 3-byte records (coordinate-related)
+- 0x85-0x86: 5-byte records
+- 0x91-0x95: 1-byte records
+- 0x96-0x9C: 3-byte records (alternating with 1-byte)
+- 0xA4: 96-byte record
+- 0xC0: 123-byte record
+- 0xD0: 160-byte record (largest)
