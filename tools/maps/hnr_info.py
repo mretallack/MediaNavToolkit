@@ -94,11 +94,22 @@ def main():
 
     if show_stats:
         print(f"\nRegion breakdown:", file=sys.stderr)
+        print(f"{'Region':>8s} {'Major':>6s} {'Minor':>6s} {'Total':>7s} {'Ratio':>6s} {'Class':>10s}", file=sys.stderr)
         for i, (a, b) in enumerate(info["pairs"]):
             if a + b > 0:
                 ratio = a / b if b > 0 else 0
-                print(f"  Region {i:3d}: major={a:>5} minor={b:>5} "
-                      f"total={a+b:>5} ratio={ratio:.2f}", file=sys.stderr)
+                total = (a + b) * 64
+                cls = "urban" if ratio < 0.15 else ("suburban" if ratio < 0.35 else "rural")
+                print(f"{i:8d} {a:6d} {b:6d} {total:7d} {ratio:6.3f} {cls:>10s}", file=sys.stderr)
+
+        # Summary
+        ratios = [a / b for a, b in info["pairs"] if b > 0]
+        urban = sum(1 for r in ratios if r < 0.15)
+        suburban = sum(1 for r in ratios if 0.15 <= r < 0.35)
+        rural = sum(1 for r in ratios if r >= 0.35)
+        print(f"\n  Urban tiles (major < 15%): {urban}", file=sys.stderr)
+        print(f"  Suburban tiles (15-35%):   {suburban}", file=sys.stderr)
+        print(f"  Rural tiles (major > 35%): {rural}", file=sys.stderr)
 
 
 if __name__ == "__main__":
