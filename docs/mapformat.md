@@ -1086,3 +1086,19 @@ cannot be reconstructed.
 
 **Practical implication:** The HNR type A/B classification (major/minor roads)
 is the best road classification available without DLL runtime emulation.
+
+### FBL Spatial Index Key Format (from DLL tracing)
+
+Confirmed via Unicorn emulation of `FUN_101e4560`:
+
+```
+FBL key = (tile_index << 23) | sequential_counter
+```
+
+- `tile_index` (9 bits): geographic tile identifier, passed as function parameter
+- `sequential_counter` (23 bits): per-tile sequential ID, stored in object at offset +0xC
+- The function binary-searches a sorted array of 12-byte entries using this key
+
+This is the FBL's internal spatial index format. The HNR uses a **different** 32-bit
+ID scheme (uniformly distributed, not tile-based). The two ID spaces are linked only
+at runtime through the navigation engine's internal data structures.
