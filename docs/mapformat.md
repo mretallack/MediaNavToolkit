@@ -1066,3 +1066,23 @@ the road network.
 (gap area + sections 0-17) is a single blob. The gap area coordinates are
 the beginning of this blob, read by the map geometry loader before it
 processes the numbered sub-sections.
+
+### HNR-FBL Linking — Not Possible Without DLL Runtime
+
+The HNR road IDs (22-bit values) cannot be linked to FBL road coordinates:
+
+1. **Not coordinate-derived:** Tested 8 hash functions (XOR, CRC32, SDBM, Morton,
+   polynomial, multiply-add, raw truncation, midpoint) — all produce random-level matches.
+2. **Not stored in FBL:** Scanning all uint32 values in Monaco FBL finds zero
+   meaningful overlap with HNR entries (3 matches vs 2 expected random).
+3. **Not byte-order dependent:** Tested both LE and BE interpretations.
+4. **Opaque identifiers:** The IDs are assigned by the NNG map compiler during
+   OSM-to-NNG conversion. They exist only in the compiler's internal mapping.
+
+The navigation engine links HNR to FBL at runtime by loading both files and
+building an internal lookup table. Without emulating the full map loading
+pipeline (NngineStart → NngineAttachConfig → file loading), the mapping
+cannot be reconstructed.
+
+**Practical implication:** The HNR type A/B classification (major/minor roads)
+is the best road classification available without DLL runtime emulation.
