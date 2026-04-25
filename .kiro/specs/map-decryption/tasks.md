@@ -308,12 +308,12 @@ road classification). Two problems remain:
   - If weight = cost: type A should have LOWER weights
   - Statistical test: mean weight for type A vs type B
 
-- [ ] **12.4** Check if weights have temporal patterns
+- [x] **12.4** Check if weights have temporal patterns
   - If HNR encodes time-of-day profiles, consecutive segments in same tile
     might have correlated weights (rush hour vs off-peak)
   - Autocorrelation analysis within tiles
 
-- [ ] **12.5** Extract the Shortest variant's format
+- [x] **12.5** Extract the Shortest variant's format
   - Shortest uses different encoding (counts don't fit >>8 pattern)
   - Decode the Shortest header and count table
   - Compare record structure with Economic/Fastest
@@ -372,7 +372,7 @@ road classification). Two problems remain:
 
 ### Phase D: Build Complete Routing Data Extractor
 
-- [ ] **12.17** Build `hnr_weights.py` tool
+- [x] **12.17** Build `hnr_weights.py` tool
   - Extract routing weights per segment from any HNR file
   - Output CSV: tile, segment, road_class(A/B), weight, road_id
 
@@ -384,7 +384,7 @@ road classification). Two problems remain:
   - For linked segments, compare HNR weight with OSM maxspeed tag
   - Determine the weight → speed mapping function
 
-- [ ] **12.20** Document complete HNR format in mapformat.md
+- [x] **12.20** Document complete HNR format in mapformat.md
   - Routing weight semantics
   - HNR↔FBL linking method (if solved)
   - Complete tile structure

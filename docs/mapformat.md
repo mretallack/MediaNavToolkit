@@ -1466,3 +1466,27 @@ geographic bbox isolation, 10 countries are definitively linked to HNR tiles:
 
 The matching ratio is 8.3 FBL segments per HNR entry (consistent across all countries).
 Large countries span multiple HNR tiles and require multi-tile matching.
+
+### HNR Complete Format Summary
+
+**Economic/Fastest variants:**
+- Magic: `HNRF`, version 351, XOR decryption
+- Count table at 0x0210: 384 uint32 entries, value >> 8 = record count
+- Record size: fixed 256 bytes = 64 entries × 4 bytes
+- Entry structure: 4 opaque bytes (road segment ID)
+- Block pairs: type A (major roads, ~15%) + type B (minor roads, ~85%)
+- Routing weight: BINARY (A/B block assignment), not per-entry
+- No temporal patterns (autocorrelation ≈ 0)
+- 10 countries linked to tiles by segment count × 8.3 ratio
+
+**Shortest variant:**
+- Same HNRF magic and version
+- Count table uses uint16 pairs: (count, record_size)
+- Variable record sizes (10K-62K bytes) unlike fixed 256B
+- 1,911 total entries across 384 table slots
+- Different internal structure from Economic/Fastest
+
+**Tile-country linking (verified):**
+FrenchGuiana→11, Liechtenstein→20, Reunion→21, Guadeloupe→36,
+SanMarino→38, Martinique→41, Andorra→51, Gibraltar→52,
+Monaco→147, Mayotte→166
