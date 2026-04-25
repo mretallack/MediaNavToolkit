@@ -126,3 +126,34 @@ naturally look random.
 ## Documentation Rule
 
 **Keep [`docs/mapformat.md`](../../docs/mapformat.md) up to date as findings are made.**
+
+## 10. Extract Road Attributes from Large FBL Files via DLL Runtime Emulation
+
+Road attributes (FRC, speed class) are only inline in Vatican's raw format.
+Large files store pure coordinate bitstreams. The DLL must build road attribute
+tables at runtime. Plan:
+
+- [ ] **10.1** Find the DLL function that reads the section 4 header nibbles
+  - Vatican section 4 starts with `03 01 13 31 33...` (nibble descriptor)
+  - Search decompiled code for functions that process 4-bit values or nibble arrays
+  - The function that reads this header also reads the road_type for each segment
+
+- [ ] **10.2** Emulate the section 4 reader with Unicorn on Vatican data
+  - Feed Vatican's decrypted section 4 data to the reader function
+  - Hook memory reads to trace which bytes it accesses
+  - Capture the road_type values it extracts (should match 0x95, 0x9A, 0xA5)
+
+- [ ] **10.3** Emulate the same reader on Monaco data
+  - Feed Monaco's section 4 bitstream to the same function
+  - The function should decode the packed bitstream and extract road attributes
+  - Capture the FRC values for Monaco's road segments
+
+- [ ] **10.4** Reverse the attribute extraction algorithm
+  - From the Unicorn trace, determine how the DLL extracts FRC from the bitstream
+  - Implement a Python decoder that extracts road attributes from any FBL file
+  - Verify against Vatican's known values (0x95, 0x9A, 0xA5)
+
+- [ ] **10.5** Build `segments_with_class.py` tool
+  - Extract road segments with FRC classification from any FBL file
+  - Output: lon, lat, FRC, speed_class per segment
+  - Test on Vatican, Monaco, Andorra, UK
