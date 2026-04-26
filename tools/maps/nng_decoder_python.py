@@ -514,21 +514,16 @@ def decode_line_python(data: bytes, flags: int = 0x480080) -> list[int]:
                 continue
 
             elif value == 0x5B:  # [ character class
-                # Only consume if there's a matching ] nearby
+                # Generate attribute record and skip content
+                records.append(0x800A0000)
+                # Skip to matching ] or end of data before next #
                 p = next_pos
-                found_close = False
-                while p < end and p - next_pos < 100:  # limit scan range
-                    if data[p] == 0x5D:
-                        found_close = True
-                        break
+                while p < end and data[p] != 0x5D and data[p] != 0x23:
                     p += 1
-                if found_close:
-                    records.append(0x800A0000)
+                if p < end and data[p] == 0x5D:
                     pos = p + 1
                 else:
-                    # No matching ] — treat [ as data
-                    records.append(value)
-                    pos = next_pos
+                    pos = next_pos  # no ] found, just advance past [
                 continue
 
             elif value == 0x7B:  # { — repetition or data
