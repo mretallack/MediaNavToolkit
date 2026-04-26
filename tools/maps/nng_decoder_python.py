@@ -425,13 +425,12 @@ def decode_line_python(data: bytes, flags: int = 0x480080) -> list[int]:
                     if esc == 0x45:  # \E
                         pos = next_pos + 1
                         continue
-                    # Read escaped value (may be multi-byte varint)
+                    # Use DLL escape table for other escapes
                     esc_val, esc_end = (
                         decode_varint(data, next_pos)
                         if use_varint and data[next_pos] > 0xBF
                         else (data[next_pos], next_pos + 1)
                     )
-                    # Look up in DLL escape table (DAT_102e3480)
                     if esc_val is not None and esc_val < len(_ESC_TABLE):
                         tv = _ESC_TABLE[esc_val]
                         if tv > 0:
@@ -439,15 +438,16 @@ def decode_line_python(data: bytes, flags: int = 0x480080) -> list[int]:
                             pos = esc_end
                             continue
                         elif tv < 0:
-                            # Negative = road class → 0x80180000 | class_index
+                            # Road class → 0x80180000 | class_index
                             records.append(0x80180000 | (-tv))
                             pos = esc_end
                             continue
-                    # Table value 0 or out of range: output escaped value as-is
+                    # Fall through: output escaped value as data
                     if esc_val is not None:
                         records.append(esc_val)
                     pos = esc_end
                     continue
+                records.append(value)
                 pos = next_pos
                 continue
 
