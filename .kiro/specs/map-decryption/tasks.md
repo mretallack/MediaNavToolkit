@@ -496,7 +496,7 @@ But ~70% of the varint values have unknown meaning. The DLL's pattern compiler
   - Build sections 1, 2, 3, 5, 8 (curves, boundaries, secondary, tertiary)
   - Build section 15 (labels/names)
 
-- [ ] **13.19** Implement the SET container writer
+- [x] **13.19** Implement the SET container writer (template-based)
   - Write SET header (magic, version, section count, data offset)
   - Write metadata (country, version, copyright in UTF-16LE)
   - Write section offset table
