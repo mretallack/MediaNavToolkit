@@ -328,19 +328,23 @@ def records_to_bytes(records: list[int]) -> bytes:
 
 
 def write_fbl(
-    template_path: str,
+    template_path: str | None,
     output_path: str,
     network: RoadNetwork,
     section_idx: int = 4,
 ):
-    """Write an FBL file using a template and new road network data.
+    """Write an FBL file from road network data.
 
-    Args:
-        template_path: Existing FBL file to use as template.
-        output_path: Output FBL file path.
-        network: Road network data to encode.
-        section_idx: Section to replace (default 4 = roads_main).
+    If template_path is None, builds the entire FBL from scratch.
+    If template_path is provided, replaces sections in the template.
     """
+    if template_path is None:
+        from tools.maps.fbl_builder import build_fbl
+
+        fbl_bytes = build_fbl(network.country, network.bbox, network.segments)
+        Path(output_path).write_bytes(fbl_bytes)
+        return len(network.segments)
+
     import sys
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
@@ -365,7 +369,11 @@ def main():
         required=True,
         help="Bounding box: lon_min,lat_min,lon_max,lat_max",
     )
-    parser.add_argument("--template", required=True, help="Template FBL file")
+    parser.add_argument(
+        "--template",
+        default=None,
+        help="Template FBL file (optional, builds from scratch if omitted)",
+    )
     parser.add_argument("-o", "--output", required=True, help="Output FBL file")
     parser.add_argument("--country", default="OSM", help="3-letter country code")
     parser.add_argument("--section", type=int, default=4, help="Section to replace")
