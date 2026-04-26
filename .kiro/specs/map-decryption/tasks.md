@@ -35,8 +35,8 @@ These improve the FBL output from osm_to_fbl.py. The basic format works
 (graph builder accepts it) but richer data improves navigation quality.
 
 **Junction Connectivity (19.4)**
-- [ ] **19.4a** Identify shared nodes between OSM ways (intersection detection)
-- [ ] **19.4b** Assign junction IDs to shared nodes
+- [x] **19.4a** Identify shared nodes between OSM ways (intersection detection)
+- [x] **19.4b** Assign junction IDs to shared nodes
 - [ ] **19.4c** Encode junction records (0x80080000 | junction_id) in section data
 - [ ] **19.4d** Update network_to_records() to emit junction records between segments
 - [ ] **19.4e** Verify graph builder accepts junction records
