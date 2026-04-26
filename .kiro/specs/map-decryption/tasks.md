@@ -611,25 +611,25 @@ High-level structure:
   - Implement main loop: read varint, check escape/group/hash modes
   - Test: should consume all input bytes without crashing
 
-- [ ] **14.12** Translate escape mode (`\Q`, `\E`, `\` sequences)
+- [x] **14.12** Translate escape mode (`\Q`, `\E`, `\` sequences)
   - `\Q` (0x5C 0x51): Enter quote mode (literal values)
   - `\E` (0x5C 0x45): Exit quote mode
   - `\` + other: Call FUN_10244b70 for extended escapes
   - Test: road class markers (value 92) should generate 0x80030000
 
-- [ ] **14.13** Translate group mode (`(` and `)`)
+- [x] **14.13** Translate group mode (`(` and `)`)
   - `(` opens a group: set local_5c=1, store group start
   - `)` closes group: set local_5c=0, write group length
   - Inside group: all values stored as records
   - Test: parenthesized groups should produce correct record counts
 
-- [ ] **14.14** Translate hash/reference handling (`#`)
+- [x] **14.14** Translate hash/reference handling (`#`)
   - `#` triggers hash lookup using param_4[0x23]/[0x24]
   - Hash key matching against section data
   - Generate control records on match
   - Test: hash references should produce 0x80090000 separators
 
-- [ ] **14.15** Translate pattern matching (the `(* ... )` syntax)
+- [x] **14.15** Translate pattern matching (the `(* ... )` syntax)
   - Pattern definitions start with `(*`
   - Patterns match sequences of varint values
   - Matched patterns generate specific control records
