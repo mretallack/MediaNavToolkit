@@ -647,7 +647,7 @@ High-level structure:
   - Fix any discrepancies
   - Target: 100% match on all 6,379 records
 
-- [ ] **14.18** Validate on all 7 test FBL files
+- [x] **14.18** Validate on all 7 test FBL files
   - Run decoder on all sections of all test files
   - Compare record counts and control record types
   - Report accuracy metrics
