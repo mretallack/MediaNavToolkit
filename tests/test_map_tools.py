@@ -21,6 +21,17 @@ pytestmark = pytest.mark.skipif(
     not _HAS_MAP_DATA, reason="Map test data not available (analysis/ or testdata/)"
 )
 
+# Check if Unicorn + DLL are available (needed for decoder tests)
+_DLL_PATH = Path(__file__).parent.parent / "analysis" / "extracted" / "nngine.dll"
+try:
+    import unicorn  # noqa: F401
+
+    _HAS_UNICORN = _DLL_PATH.exists()
+except ImportError:
+    _HAS_UNICORN = False
+
+_skip_unicorn = pytest.mark.skipif(not _HAS_UNICORN, reason="Unicorn or nngine.dll not available")
+
 
 def _decrypt(fbl_path):
     xor = XOR_TABLE.read_bytes()
@@ -240,6 +251,7 @@ class TestNngDecoder:
         assert val == 31710617
         assert pos == 5
 
+    @_skip_unicorn
     def test_decode_line_monaco_line0(self):
         """Decode Monaco section 4 first line and check record count."""
         from tools.maps.nng_decoder import decode_line
@@ -255,6 +267,7 @@ class TestNngDecoder:
         ctrl = [r for r in records if r >= 0x80000000]
         assert len(ctrl) >= 1
 
+    @_skip_unicorn
     def test_decode_section_monaco(self):
         """Full Monaco section 4 decode."""
         from tools.maps.nng_decoder import decode_section
@@ -267,6 +280,7 @@ class TestNngDecoder:
         ctrl_types = set(r & 0xFFFF0000 for r in records if r >= 0x80000000)
         assert 0x80000000 in ctrl_types  # END
 
+    @_skip_unicorn
     def test_decode_has_road_class(self):
         """Check that road class records are present."""
         from tools.maps.nng_decoder import decode_section
@@ -277,6 +291,7 @@ class TestNngDecoder:
         road_class = [r for r in records if (r & 0xFFFF0000) == 0x80030000]
         assert len(road_class) >= 1  # Monaco has road class records
 
+    @_skip_unicorn
     def test_decode_vatican(self):
         """Decode Vatican section 4."""
         from tools.maps.nng_decoder import decode_section
@@ -294,6 +309,7 @@ class TestNngDecoder:
             dec, _ = decode_varint(enc, 0)
             assert dec == val, f"Roundtrip failed: {val} → {enc.hex()} → {dec}"
 
+    @_skip_unicorn
     def test_encode_records_roundtrip(self):
         """Encode records and decode back — should match."""
         from tools.maps.nng_decoder import decode_line, encode_records
@@ -327,6 +343,7 @@ class TestNngDecoder:
         decrypted = xor_encrypt(encrypted)
         assert decrypted == original
 
+    @_skip_unicorn
     def test_osm_to_fbl_roundtrip(self):
         """OSM XML → records → bytes → decode should preserve structure."""
         from tools.maps.nng_decoder import decode_line
