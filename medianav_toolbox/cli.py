@@ -77,6 +77,82 @@ def detect(ctx):
 
 @cli.command()
 @click.pass_context
+def status(ctx):
+    """Show installed maps, licenses, and content on the USB drive."""
+    import re
+
+    from rich.table import Table
+
+    from medianav_toolbox.device import parse_device_nng, read_device_status, validate_drive
+
+    usb = ctx.obj["usb_path"]
+    errors = validate_drive(usb)
+    if errors:
+        for e in errors:
+            console.print(f"[red]✗ {e}[/red]")
+        sys.exit(1)
+
+    device = parse_device_nng(usb / "NaviSync" / "license" / "device.nng")
+    try:
+        ds = read_device_status(usb)
+        console.print(
+            f"[green]✓[/green] {ds.os_version}  "
+            f"{ds.free_space / 1e9:.1f} GB free / {ds.total_space / 1e9:.1f} GB total"
+        )
+    except FileNotFoundError:
+        console.print(f"[green]✓[/green] AppCID: 0x{device.appcid:08X}")
+
+    # Maps
+    map_dir = usb / "NaviSync" / "content" / "map"
+    if map_dir.exists():
+        table = Table(title="Installed Maps")
+        table.add_column("Map", style="cyan")
+        table.add_column("Size", justify="right")
+        table.add_column("Content ID", justify="right", style="dim")
+        total = 0
+        for stm in sorted(map_dir.glob("*.stm")):
+            data = stm.read_text()
+            name = stm.stem.replace(".fbl", "").replace(".hnr", "")
+            size_m = re.search(r"size\s*=\s*(\d+)", data)
+            cid = re.search(r"content_id\s*=\s*(\d+)", data)
+            sz = int(size_m.group(1)) if size_m else 0
+            total += sz
+            if ".hnr" not in stm.name:  # skip routing files, show map files only
+                table.add_row(
+                    name,
+                    f"{sz / 1024 / 1024:.1f} MB",
+                    cid.group(1) if cid else "",
+                )
+        console.print(table)
+        console.print(f"  Total map data: {total / 1024 / 1024 / 1024:.2f} GB")
+
+    # Licenses
+    lic_dir = usb / "NaviSync" / "license"
+    if lic_dir.exists():
+        lycs = sorted(lic_dir.glob("*.lyc"))
+        if lycs:
+            console.print(f"\n[bold]Licenses ({len(lycs)})[/bold]")
+            for lyc in lycs:
+                md5_file = lyc.parent / f"{lyc.name}.md5"
+                md5_status = "✓" if md5_file.exists() else "no md5"
+                console.print(f"  {lyc.name:<70s} {lyc.stat().st_size:>6d} B  {md5_status}")
+
+    # Other content summary
+    content_dir = usb / "NaviSync" / "content"
+    if content_dir.exists():
+        summary = []
+        for subdir in ["speedcam", "poi", "voice", "lang", "tmc"]:
+            d = content_dir / subdir
+            if d.exists():
+                count = len(list(d.glob("*.stm")))
+                if count:
+                    summary.append(f"{subdir}: {count}")
+        if summary:
+            console.print(f"\n[bold]Other content:[/bold] {', '.join(summary)}")
+
+
+@cli.command()
+@click.pass_context
 def register(ctx):
     """Register device with NaviExtras (creates new credentials)."""
     import json
@@ -776,3 +852,80 @@ def dump_mds(ctx):
         # Save raw response
         Path("mds_response.json").write_text(resp.text)
         console.print(f"\n  Saved to mds_response.json")
+
+
+@cli.command()
+@click.option("--output", "-o", default="downloads", help="Output directory for downloaded files")
+@click.option("--max-polls", default=50, help="Maximum getprocess polling attempts")
+@click.pass_context
+def download(ctx, output, max_polls):
+    """Download content files from NaviExtras.
+
+    After selecting and confirming content (via 'sync'), this command
+    polls getprocess to download the actual file data.
+
+    Requires: NAVIEXTRAS_USER and NAVIEXTRAS_PASS environment variables.
+
+    Examples:
+        medianav-toolbox download --usb-path /media/usb -o ./downloads
+    """
+    from medianav_toolbox.content import confirm_selection, get_content_tree, select_content
+    from medianav_toolbox.content_download import download_content, parse_manifest
+    from medianav_toolbox.session import run_session
+
+    usb = ctx.obj["usb_path"]
+    username = os.environ.get("NAVIEXTRAS_USER", "")
+    password = os.environ.get("NAVIEXTRAS_PASS", "")
+
+    if not username or not password:
+        console.print("[red]Set NAVIEXTRAS_USER and NAVIEXTRAS_PASS environment variables[/red]")
+        sys.exit(1)
+
+    console.print("Connecting...")
+    result = run_session(usb, username, password)
+    if result["errors"]:
+        for e in result["errors"]:
+            console.print(f"[red]✗ {e}[/red]")
+        sys.exit(1)
+
+    creds = result.get("device_creds")
+    session = result.get("session")
+    swids = [lic.swid for lic in result.get("licenses", []) if hasattr(lic, "swid") and lic.swid]
+
+    if not creds or not session:
+        console.print("[red]Session not established[/red]")
+        sys.exit(1)
+
+    from medianav_toolbox.api.client import NaviExtrasClient
+    from medianav_toolbox.config import Config
+
+    output_dir = Path(output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    console.print(f"Downloading to {output_dir}/ ...")
+    console.print(f"SWIDs: {len(swids)}")
+
+    with NaviExtrasClient(Config()) as hc:
+        # Set session cookie
+        hc._client.cookies.set("JSESSIONID", session.jsessionid)
+
+        def progress(name, received, total):
+            console.print(f"  ↓ {name}: {received:,} bytes")
+
+        files = download_content(
+            hc._client,
+            creds,
+            session,
+            swids,
+            output_dir,
+            max_polls=max_polls,
+            progress_cb=progress,
+        )
+
+    if files:
+        console.print(f"\n[green]✓ Downloaded {len(files)} file(s) to {output_dir}/[/green]")
+        for f in files:
+            console.print(f"  {f.name} ({f.stat().st_size:,} bytes)")
+    else:
+        console.print("[yellow]No files downloaded. Server may not have pending updates.[/yellow]")
+        console.print("[dim]Tip: Run 'sync' first to select content, then 'download'.[/dim]")

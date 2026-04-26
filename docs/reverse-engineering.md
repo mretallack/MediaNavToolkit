@@ -87,7 +87,12 @@ NngineFireEvent
 
 ### Remaining ❌
 
-- **Full sync pipeline** — `medianav-toolbox sync` command not yet wired end-to-end
+- **Map data file download** — sync command handles selection, confirmation, and license
+  installation, but downloading the actual map data files (hundreds of MB) is not yet
+  implemented. Requires `getprocess` polling for download URLs + file transfer + writing
+  `.stm` shadow files to USB. Note: the server only offers downloads when the device
+  reports older map versions — if the update is already installed on the head unit,
+  the server shows it as "installed" and doesn't provide download URLs.
 
 ---
 
@@ -1013,10 +1018,11 @@ matches all captured SnakeOil calls.
 
 No hardcoding needed — every device gets its own `creds.secret` at registration.
 
-### R.13: session.py Integration — STATUS: OPEN
+### R.13: session.py Integration — STATUS: SOLVED ✅
 
-`_send_device_status()` in `session.py` still uses the old replay approach with
-captured chain bodies. Needs to be updated to use `build_dynamic_request()`.
+`_send_device_status()` updated to use `build_dynamic_request()`. Session flow
+reordered to match captured Toolbox sequences. Both 0x60 and delegated
+senddevicestatus return HTTP 200.
 
 ### R.14: Live Server 409s — STATUS: SOLVED ✅
 

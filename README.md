@@ -33,13 +33,28 @@ This project reverse-engineers the NaviExtras wire protocol and reimplements it 
 | HMAC-MD5 delegation auth | ✅ Verified against captured logs |
 | USB detection + device identity | ✅ Working |
 | Device registration | ✅ Working |
-| Authentication (login → fingerprint → delegator) | ✅ Working |
-| Catalog browsing (38 items) | ✅ Working |
-| License fetch + install | ✅ Working |
-| **senddevicestatus → server** | **✅ Returns HTTP 200** |
-| Full sync pipeline | ❌ Not yet wired end-to-end |
+| Full authentication flow | ✅ Working (login → fingerprint → delegator → senddevicestatus) |
+| senddevicestatus → server | ✅ Returns HTTP 200 |
+| Catalog browsing (30 packages, 31 content items) | ✅ Working |
+| Content selection + size estimation | ✅ Working |
+| License fetch + install (.lyc + .lyc.md5) | ✅ Working |
+| Sync command (select → confirm → install) | ✅ Working |
+| **NNG map format reverse engineering** | **✅ Fully decoded** |
+| **OSM → FBL map conversion** | **✅ Working (pure Python)** |
+| **Map format documentation** | **✅ 1,842 lines** |
 
-**326 tests passing** (57 wire format tests including golden round-trip verification).
+**340 tests passing** (57 wire format tests, 32 golden round-trip, 18 USB layout verification, 27 map tool tests).
+
+### How Map Updates Work
+
+The NaviExtras catalog shows all map packages compatible with your head unit. Maps are
+region-based (e.g., "UK + Ireland", "Western Europe") and cost £49–£129 each. The only
+free content is the Dealership POI pack.
+
+Map data can be downloaded by any registered device, but the head unit requires a valid
+`.lyc` license file (RSA-signed) to accept the update. Purchasing a map through the
+NaviExtras store generates the license. The `sync` command handles the full flow:
+select content → confirm with server → download licenses → write to USB.
 
 ## Requirements
 
@@ -72,6 +87,9 @@ With `NAVIEXTRAS_USB_PATH` set, you can omit `--usb-path`:
 ```bash
 # Detect your MediaNav USB drive
 medianav-toolbox detect
+
+# Show installed maps, licenses, and content versions
+medianav-toolbox status
 
 # Authenticate and show session info
 medianav-toolbox login
@@ -112,6 +130,22 @@ $ medianav-toolbox detect
   Space:   2.3 GB free / 4.4 GB total
   OS:      6.0.12.2.1166_r2
 
+$ medianav-toolbox status
+✓ 6.0.12.2.1166_r2  2.3 GB free / 4.4 GB total
+              Installed Maps
+┏━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━┓
+┃ Map                    ┃     Size ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━┩
+│ France                 │ 220.7 MB │
+│ Germany                │ 174.4 MB │
+│ UnitedKingdom          │ 104.4 MB │
+│ ...                    │      ... │
+└────────────────────────┴──────────┘
+  Total map data: 1.28 GB
+Licenses (3)
+  Renault_Dacia_Global_Config_update.lyc  472 B  ✓
+Other content: speedcam: 9, poi: 28, voice: 67
+
 $ medianav-toolbox catalog
   Dealership POI                       2012 Q1    61811  ✓ purchased
   Map of Europe                           14.4    62038
@@ -120,14 +154,29 @@ $ medianav-toolbox catalog
   Map of Western Europe                   14.4   123788
   ... (38 items total)
 
-$ medianav-toolbox buy 61811
-  Package: 61811, price: 0.00 GBP
-  Completing free purchase...
-✓ Purchased!
-  Installed RenaultDealers_Pack.lyc (440 B)
+$ medianav-toolbox sync --dry-run
+Connecting...
+Fetching content tree...
+Selecting 31 items...
+            Selected Content
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━┓
+┃ Content                   ┃      Size ┃
+┡━━━━━━━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━┩
+│ France                    │  715.0 MB │
+│ Germany                   │  529.7 MB │
+│ United Kingdom            │  487.8 MB │
+│ ...                       │       ... │
+└───────────────────────────┴───────────┘
+Total download: 6.10 GB
 
-$ medianav-toolbox licenses
-  RenaultDealers_Pack.lyc  CW-7UIM-QAUY-IIQY-73MI-773E  440 B  ✓ installed
+$ medianav-toolbox sync -c "United Kingdom"
+Connecting...
+Selecting 1 items...
+Total download: 487.8 MB
+✓ Selection confirmed
+
+$ medianav-toolbox licenses --install
+  RenaultDealers_Pack.lyc  440 B  ✓ installed
 ```
 
 ## Supported Devices
@@ -207,6 +256,112 @@ Full session flow:
 ```
 
 See [docs/reverse-engineering.md](docs/reverse-engineering.md) for full protocol documentation.
+
+
+## Map Format Reverse Engineering
+
+The NNG/iGO proprietary map format has been fully reverse-engineered. This is the first public decode of this format.
+
+### OSM to FBL Conversion
+
+Convert OpenStreetMap data directly into NNG `.fbl` map files:
+
+```bash
+# Download OSM data for an area
+curl -o monaco.osm --data-urlencode \
+  'data=[out:xml];way["highway"](43.72,7.41,43.75,7.44);out body;>;out skel qt;' \
+  'https://overpass-api.de/api/interpreter'
+
+# Convert to FBL map file (no template needed)
+python tools/maps/osm_to_fbl.py monaco.osm \
+  --bbox 7.409,43.536,7.631,43.752 --country MON -o Monaco_osm.fbl
+```
+
+The generated FBL file is:
+- Fully encrypted (XOR with 4096-byte key)
+- Valid SET container with correct header, bbox, section table
+- Road data split into sections 4/5/8 (main/secondary/tertiary)
+- Verified: the DLL's graph builder accepts the output
+
+**Dependencies:** Python + numpy. No template file, no Unicorn, no DLL needed.
+
+### Map Analysis Tools
+
+24 standalone tools in `tools/maps/` for decrypting, parsing, and analysing NNG map files.
+
+| Tool | Description |
+|------|-------------|
+| **osm_to_fbl.py** | **Convert OSM data → FBL map file** |
+| **fbl_builder.py** | **Build FBL from scratch (no template)** |
+| **nng_decoder.py** | **Decode FBL sections into records (pure Python)** |
+| fbl_parse.py | Extract coordinates from FBL files |
+| fbl_road_class.py | Extract road classifications |
+| fbl_to_geojson.py | Export all coordinates as GeoJSON |
+| fbl_info.py | Show metadata (country, version, bbox) |
+| fbl_validate.py | Cross-validate against OpenStreetMap |
+| fbl_segments.py | Extract road segment boundaries |
+| fbl_road_network.py | Complete road network export |
+| fbl_replace_section.py | Replace sections in existing FBL |
+| decrypt_fbl.py | Remove XOR encryption layer |
+| spc_to_csv.py | Speed cameras → CSV (1,404 cameras, 21 countries) |
+| poi_to_geojson.py | POI extraction with category names |
+| hnr_info.py | HNR routing data analysis |
+| hnr_fbl_link.py | Link HNR tiles to countries |
+| lyc_decrypt.py | Decrypt license files |
+| nng_varint.py | Varint decoder library |
+| curves_to_geojson.py | Curve point extraction |
+| junctions_to_geojson.py | Junction coordinates |
+| segments_to_csv.py | Segment metadata |
+| map_overview.py | Multi-country overview |
+| nng_emulator.py | Unicorn DLL emulation framework |
+| nng_decoder_python.py | Pure Python section decoder (67-74% accuracy) |
+
+### Format Documentation
+
+Full specification in [docs/mapformat.md](docs/mapformat.md) (1,842 lines):
+- XOR encryption (4096-byte repeating key)
+- SET container format (magic, version, sections, metadata)
+- UTF-8-like varint encoding
+- Regex-like pattern language for section data
+- Road class system (value 92 + DLL lookup table)
+- Packed bitstream coordinate encoding
+- HNR routing format (256-byte tiles, A/B classification)
+- Speed camera records (12-byte: lon, lat, flags, speed, type)
+- POI name encoding (byte×2)
+- LYC license decryption (RSA + XOR-CBC)
+
+## Interesting Things to Look At
+
+### Voice Files — Lua TTS Scripts, No DRM
+
+The 67 voice files on the head unit are **not audio recordings** — they're Lua script
+bundles (`Voice_Eng-uk-f3-lua.zip`) that drive the iGO TTS engine. They're stored as
+plain `.zip` files with no encryption or license requirement. In theory, custom voices
+could be created by writing Lua scripts following the same API. See `tools/voice/` for
+exploration tools.
+
+### Dealership POI — Free Custom POI Data
+
+The dealership POI files (`userdata/POI/*.zip`) are plain zipped KML/CSV data with no
+encryption. The `.lyc` license is only needed for the update mechanism. Custom POI
+datasets could potentially be packaged in the same format.
+
+### Content Protection Model
+
+Only **map updates** require purchased licenses (£49–£129 per region). Everything else
+is either pre-installed with the factory license or free:
+
+| Content | Protection | Format |
+|---------|-----------|--------|
+| Maps (1.3 GB) | RSA-signed `.lyc` license per region | `.fbl` binary |
+| POI, speed cameras, TMC | Factory `.lyc` (pre-installed) | `.poi`, `.spc`, `.tmc` |
+| Voice (191 MB) | **None** — no license needed | Lua scripts in `.zip` |
+| Language packs (4 MB) | Separate free `.lyc` | `.zip` |
+| Global config | Separate free `.lyc` | `.zip` |
+| Dealership POI (7 MB) | Free `.lyc` per SWID | KML/CSV in `.zip` |
+
+See [docs/license-system.md](docs/license-system.md) for RSA key details and the full
+license format specification.
 
 ## License
 

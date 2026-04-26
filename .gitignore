@@ -61,3 +61,13 @@ capture/
 analysis/nngine_decompiled.c.backup
 analysis/wine64_prefix/
 analysis/__pycache__/
+analysis/using-win32/
+analysis/captures/
+analysis/usb-images-latest/
+analysis/mock_usb/
+analysis/brute_*
+analysis/brute_*.log
+analysis/brute_*.err
+
+# Large test data files
+tools/maps/testdata/*.hnr

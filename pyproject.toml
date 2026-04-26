@@ -22,6 +22,8 @@ dev = [
     "respx>=0.21",
     "black>=24.0",
     "isort>=5.13",
+    "numpy>=1.26",
+    "pefile>=2023.2.7",
 ]
 
 [project.scripts]
