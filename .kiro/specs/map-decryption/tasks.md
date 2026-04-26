@@ -712,7 +712,7 @@ download uses the proprietary SnakeOil-encrypted wire protocol for streaming.
   - Capture all wire protocol calls after confirmselection
   - Save raw request/response pairs
 
-- [ ] **15.2** Parse the post-confirmation getprocess response
+- [x] **15.2** Parse the post-confirmation getprocess response
   - Decrypt the getprocess response using SnakeOil
   - Identify the download task structure (content ID, size, checksum)
   - Check: does it contain URLs or is it a streaming protocol?
@@ -729,7 +729,7 @@ download uses the proprietary SnakeOil-encrypted wire protocol for streaming.
 
 ### Phase B: Implement the Download Client
 
-- [ ] **15.5** Implement getprocess response parser for download tasks
+- [x] **15.5** Implement getprocess response parser for download tasks
   - Parse the igo-binary response into DownloadItem objects
   - Extract: content_id, file_name, file_size, md5, chunk_count
 

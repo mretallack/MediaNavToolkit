@@ -852,3 +852,80 @@ def dump_mds(ctx):
         # Save raw response
         Path("mds_response.json").write_text(resp.text)
         console.print(f"\n  Saved to mds_response.json")
+
+
+@cli.command()
+@click.option("--output", "-o", default="downloads", help="Output directory for downloaded files")
+@click.option("--max-polls", default=50, help="Maximum getprocess polling attempts")
+@click.pass_context
+def download(ctx, output, max_polls):
+    """Download content files from NaviExtras.
+
+    After selecting and confirming content (via 'sync'), this command
+    polls getprocess to download the actual file data.
+
+    Requires: NAVIEXTRAS_USER and NAVIEXTRAS_PASS environment variables.
+
+    Examples:
+        medianav-toolbox download --usb-path /media/usb -o ./downloads
+    """
+    from medianav_toolbox.content import confirm_selection, get_content_tree, select_content
+    from medianav_toolbox.content_download import download_content, parse_manifest
+    from medianav_toolbox.session import run_session
+
+    usb = ctx.obj["usb_path"]
+    username = os.environ.get("NAVIEXTRAS_USER", "")
+    password = os.environ.get("NAVIEXTRAS_PASS", "")
+
+    if not username or not password:
+        console.print("[red]Set NAVIEXTRAS_USER and NAVIEXTRAS_PASS environment variables[/red]")
+        sys.exit(1)
+
+    console.print("Connecting...")
+    result = run_session(usb, username, password)
+    if result["errors"]:
+        for e in result["errors"]:
+            console.print(f"[red]✗ {e}[/red]")
+        sys.exit(1)
+
+    creds = result.get("device_creds")
+    session = result.get("session")
+    swids = [lic.swid for lic in result.get("licenses", []) if hasattr(lic, "swid") and lic.swid]
+
+    if not creds or not session:
+        console.print("[red]Session not established[/red]")
+        sys.exit(1)
+
+    from medianav_toolbox.api.client import NaviExtrasClient
+    from medianav_toolbox.config import Config
+
+    output_dir = Path(output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    console.print(f"Downloading to {output_dir}/ ...")
+    console.print(f"SWIDs: {len(swids)}")
+
+    with NaviExtrasClient(Config()) as hc:
+        # Set session cookie
+        hc._client.cookies.set("JSESSIONID", session.jsessionid)
+
+        def progress(name, received, total):
+            console.print(f"  ↓ {name}: {received:,} bytes")
+
+        files = download_content(
+            hc._client,
+            creds,
+            session,
+            swids,
+            output_dir,
+            max_polls=max_polls,
+            progress_cb=progress,
+        )
+
+    if files:
+        console.print(f"\n[green]✓ Downloaded {len(files)} file(s) to {output_dir}/[/green]")
+        for f in files:
+            console.print(f"  {f.name} ({f.stat().st_size:,} bytes)")
+    else:
+        console.print("[yellow]No files downloaded. Server may not have pending updates.[/yellow]")
+        console.print("[dim]Tip: Run 'sync' first to select content, then 'download'.[/dim]")
