@@ -140,7 +140,7 @@ naturally look random.
       total FBL segments × some ratio
     - The ratio should be consistent across countries
 
-  - [ ] **9.5b.6** Try matching by segment SIZE distribution
+  - [x] **9.5b.6** Try matching by segment SIZE distribution
     - FBL segments have sizes (2-587 bytes). Larger = more important road.
     - HNR type A entries might correspond to larger FBL segments
     - Compare: FBL segment size distribution for major vs minor roads
@@ -151,18 +151,18 @@ naturally look random.
     - HNR tiles cover geographic areas (we know tile size ~0.78°)
     - Compute which tiles COULD contain each country based on bbox overlap
 
-  - [ ] **9.5b.8** Try matching by segment ORDER within tiles
+  - [x] **9.5b.8** Try matching by segment ORDER within tiles
     - If HNR entries within a tile are ordered the same as FBL segments
       within a country, we can match by position
     - Compare: first N entries of an HNR tile with first N FBL segments
     - Check if road class (major/minor) matches A/B block assignment
 
-  - [ ] **9.5b.9** Use the FBL section 15 offsets as region boundaries
+  - [x] **9.5b.9** Use the FBL section 15 offsets as region boundaries
     - The FBL header has 7 uint24 offsets into section 15
     - These might divide the country into regions
     - Each region might correspond to one HNR tile
 
-  - [ ] **9.5b.10** Build a segment-level matcher using road class + position
+  - [x] **9.5b.10** Build a segment-level matcher using road class + position
     - For a matched tile-country pair:
       - Sort FBL segments by byte offset (= geographic order)
       - Sort HNR entries by position within tile
@@ -337,7 +337,7 @@ road classification). Two problems remain:
   - HNR has per-tile segment counts (192 tiles × 64 segments)
   - Check: does sum of HNR segments for a country's tiles = FBL segment count?
 
-- [ ] **12.10** Try matching by segment COUNT per region
+- [x] **12.10** Try matching by segment COUNT per region
   - If HNR tile X has N segments and FBL country Y has N segments in a region,
     they might correspond
   - Use the FBL header offsets (7 pointers into section 15) as region boundaries
