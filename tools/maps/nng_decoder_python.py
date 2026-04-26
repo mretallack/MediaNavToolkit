@@ -425,7 +425,7 @@ def decode_line_python(data: bytes, flags: int = 0x480080) -> list[int]:
                     if esc == 0x45:  # \E
                         pos = next_pos + 1
                         continue
-                    # Use DLL escape table for other escapes
+                    # Use escape table for known escape codes
                     esc_val, esc_end = (
                         decode_varint(data, next_pos)
                         if use_varint and data[next_pos] > 0xBF
@@ -438,13 +438,12 @@ def decode_line_python(data: bytes, flags: int = 0x480080) -> list[int]:
                             pos = esc_end
                             continue
                         elif tv < 0:
-                            # Road class → 0x80180000 | class_index
-                            records.append(0x80180000 | (-tv))
+                            # Road class escape — output the raw escaped value
+                            records.append(esc_val)
                             pos = esc_end
                             continue
-                    # Fall through: handle octal escapes and others
+                    # Octal escapes: \0-\7
                     if esc_val is not None and 0x30 <= esc_val <= 0x37:
-                        # Octal escape: \0 = NUL, \012 = 10, etc.
                         octal_val = esc_val - 0x30
                         p = esc_end
                         for _ in range(2):
@@ -456,6 +455,7 @@ def decode_line_python(data: bytes, flags: int = 0x480080) -> list[int]:
                         records.append(octal_val)
                         pos = p
                         continue
+                    # Other: output escaped value as data
                     if esc_val is not None:
                         records.append(esc_val)
                     pos = esc_end
