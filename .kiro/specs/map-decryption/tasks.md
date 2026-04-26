@@ -496,14 +496,14 @@ But ~70% of the varint values have unknown meaning. The DLL's pattern compiler
   - Build sections 1, 2, 3, 5, 8 (curves, boundaries, secondary, tertiary)
   - Build section 15 (labels/names)
 
-- [ ] **13.19** Implement the SET container writer — BLOCKED (needs pattern grammar)
+- [ ] **13.19** Implement the SET container writer
   - Write SET header (magic, version, section count, data offset)
   - Write metadata (country, version, copyright in UTF-16LE)
   - Write section offset table
   - Write gap area header with section 15 offsets
   - Write all sections
 
-- [ ] **13.20** Implement XOR encryption — BLOCKED (needs pattern grammar)
+- [x] **13.20** Implement XOR encryption
   - Apply the 4096-byte XOR table to produce the final encrypted file
   - Verify: decrypting the output should give back the original data
 

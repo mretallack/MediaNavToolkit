@@ -310,3 +310,13 @@ class TestNngDecoder:
         encoded = encode_records(records)
         assert b"\x5e" in encoded  # ^ for separator
         assert b"\x0a" in encoded  # LF for end
+
+    def test_xor_roundtrip(self):
+        """XOR encrypt then decrypt should return original."""
+        from tools.maps.nng_decoder import xor_encrypt
+
+        original = b"Hello, NNG map format!"
+        encrypted = xor_encrypt(original)
+        assert encrypted != original
+        decrypted = xor_encrypt(encrypted)
+        assert decrypted == original

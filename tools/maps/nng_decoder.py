@@ -406,3 +406,18 @@ def encode_records(records: list[int]) -> bytes:
         out.extend(encode_varint(r))
         i += 1
     return bytes(out)
+
+
+# ── XOR encryption ───────────────────────────────────────────────────────────
+
+
+def xor_encrypt(data: bytes, xor_table: bytes = None) -> bytes:
+    """Apply XOR encryption/decryption (symmetric)."""
+    import numpy as np
+
+    if xor_table is None:
+        xor_table = _XOR_PATH.read_bytes()
+    d = np.frombuffer(data, dtype=np.uint8).copy()
+    t = np.frombuffer(xor_table, dtype=np.uint8)
+    d ^= np.tile(t, (len(d) // len(t)) + 1)[: len(d)]
+    return bytes(d)
