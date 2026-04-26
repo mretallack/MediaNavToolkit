@@ -16,7 +16,9 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-XOR_TABLE_PATH = Path(__file__).parent.parent.parent / "analysis" / "xor_table_normal.bin"
+_XOR_LOCAL = Path(__file__).parent / "xor_key.bin"
+_XOR_ANALYSIS = Path(__file__).parent.parent.parent / "analysis" / "xor_table_normal.bin"
+XOR_TABLE_PATH = _XOR_LOCAL if _XOR_LOCAL.exists() else _XOR_ANALYSIS
 RATIO = 8.3  # HNR entries per FBL segment
 
 

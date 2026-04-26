@@ -12,7 +12,9 @@ import struct
 from pathlib import Path
 
 _DLL_PATH = Path(__file__).parent.parent.parent / "analysis" / "extracted" / "nngine.dll"
-_XOR_PATH = Path(__file__).parent.parent.parent / "analysis" / "xor_table_normal.bin"
+_XOR_LOCAL = Path(__file__).parent / "xor_key.bin"
+_XOR_ANALYSIS = Path(__file__).parent.parent.parent / "analysis" / "xor_table_normal.bin"
+_XOR_PATH = _XOR_LOCAL if _XOR_LOCAL.exists() else _XOR_ANALYSIS
 
 
 def decode_varint(data: bytes, pos: int):

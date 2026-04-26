@@ -11,7 +11,9 @@ import pefile
 import numpy as np
 
 DLL_PATH = "analysis/extracted/nngine.dll"
-XOR_TABLE_PATH = "analysis/xor_table_normal.bin"
+_XOR_LOCAL = str(Path(__file__).parent / "xor_key.bin")
+_XOR_ANALYSIS = "analysis/xor_table_normal.bin"
+XOR_TABLE_PATH = _XOR_LOCAL if Path(_XOR_LOCAL).exists() else _XOR_ANALYSIS
 
 IMAGE_BASE = 0x10000000
 STACK_BASE = 0x00100000

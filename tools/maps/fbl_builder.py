@@ -12,7 +12,9 @@ from pathlib import Path
 import numpy as np
 
 SCALE = 2**23
-_XOR_PATH = Path(__file__).parent.parent.parent / "analysis" / "xor_table_normal.bin"
+_XOR_LOCAL = Path(__file__).parent / "xor_key.bin"
+_XOR_ANALYSIS = Path(__file__).parent.parent.parent / "analysis" / "xor_table_normal.bin"
+_XOR_PATH = _XOR_LOCAL if _XOR_LOCAL.exists() else _XOR_ANALYSIS
 
 # SET header copyright text (from real FBL files)
 _COPYRIGHT = (
