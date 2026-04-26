@@ -15,6 +15,12 @@ TEST_DATA = Path(__file__).parent / "data"
 TESTDATA_MAPS = Path(__file__).parent.parent / "tools" / "maps" / "testdata"
 XOR_TABLE = Path(__file__).parent.parent / "analysis" / "xor_table_normal.bin"
 
+# Skip entire module if test data not available (CI doesn't have FBL files)
+_HAS_MAP_DATA = XOR_TABLE.exists() and TESTDATA_MAPS.exists() and any(TESTDATA_MAPS.glob("*.fbl"))
+pytestmark = pytest.mark.skipif(
+    not _HAS_MAP_DATA, reason="Map test data not available (analysis/ or testdata/)"
+)
+
 
 def _decrypt(fbl_path):
     xor = XOR_TABLE.read_bytes()
