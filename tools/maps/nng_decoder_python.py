@@ -465,13 +465,39 @@ def decode_line_python(data: bytes, flags: int = 0x480080) -> list[int]:
                         p += 1
                     pos = p + 1 if p < end else end
                     continue
-                # All other ( — stored as data
+                # Check for (?...) group
+                if next_pos < end and data[next_pos] == 0x3F:
+                    group_depth += 1
+                    if not hasattr(decode_line_python, "_jct"):
+                        decode_line_python._jct = 0
+                    decode_line_python._jct += 1
+                    records.append(0x80080000 | decode_line_python._jct)
+                    p = next_pos + 1
+                    while p < end and data[p] not in (0x29, 0x3A):
+                        p += 1
+                    if p < end and data[p] == 0x3A:
+                        pos = p + 1
+                    elif p < end and data[p] == 0x29:
+                        group_depth -= 1
+                        pos = p + 1
+                    else:
+                        pos = p
+                    continue
+                # Plain ( — stored as data
                 records.append(value)
                 pos = next_pos
                 continue
 
-            elif value == 0x29:  # ) — stored as data
-                records.append(value)
+            elif value == 0x29:  # )
+                # In the DLL, ) generates 0x80190000 and decrements local_8.
+                # If local_8 == 0 (no matching open group), returns error 0x7A
+                # which terminates processing for this line.
+                if group_depth <= 0:
+                    # No matching ( — terminate (like DLL return 0x7A)
+                    records.append(0x80000000)
+                    return records
+                group_depth -= 1
+                records.append(0x80190000)
                 pos = next_pos
                 continue
 
