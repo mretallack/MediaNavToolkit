@@ -556,17 +556,17 @@ these patterns to convert raw bytes into uint32 records.
 
 ### Phase B: Understand the Pattern Format
 
-- [ ] **14.5** Analyze the pattern data structure
+- [x] **14.5** Analyze the pattern data structure
   - Is it a text pattern (like regex) or a binary table?
   - If text: parse the ( ) # \ structure to understand grouping
   - If binary: identify field sizes and meanings
 
-- [ ] **14.6** Map pattern entries to record types
+- [x] **14.6** Map pattern entries to record types
   - Each pattern should produce a specific 0x80XX0000 control record
   - Match: pattern N → record type 0x80XX0000
   - Document the mapping
 
-- [ ] **14.7** Understand how patterns consume varint values
+- [x] **14.7** Understand how patterns consume varint values
   - Patterns match sequences of varint values
   - When a pattern matches, the consumed values become record data
   - Document: which values are consumed vs passed through
