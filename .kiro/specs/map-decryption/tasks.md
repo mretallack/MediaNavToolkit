@@ -862,14 +862,14 @@ so the decoder works without the Unicorn emulation dependency.
 the unicorn package and the nngine.dll binary. A pure Python implementation
 would be more portable.
 
-- [ ] **17.1** Translate the main loop and varint decode (done in skeleton)
-- [ ] **17.2** Translate \Q/\E quote mode handling
-- [ ] **17.3** Translate ( ) group handling with nesting
-- [ ] **17.4** Translate # hash/reference lookup
-- [ ] **17.5** Translate \ escape sequences (FUN_10244b70)
-- [ ] **17.6** Translate pattern quantifiers (* + ? {n,m})
-- [ ] **17.7** Translate character class [ ] handling
-- [ ] **17.8** Translate ^ $ | metacharacter → control record mapping
+- [x] **17.1** Translate the main loop and varint decode (done in skeleton)
+- [x] **17.2** Translate \Q/\E quote mode handling
+- [x] **17.3** Translate ( ) group handling with nesting
+- [x] **17.4** Translate # hash/reference lookup
+- [x] **17.5** Translate \ escape sequences (FUN_10244b70)
+- [x] **17.6** Translate pattern quantifiers (* + ? {n,m})
+- [x] **17.7** Translate character class [ ] handling
+- [x] **17.8** Translate ^ $ | metacharacter → control record mapping
 - [ ] **17.9** Validate against Unicorn output on all 7 test files
 - [ ] **17.10** Remove Unicorn dependency from nng_decoder.py
 
