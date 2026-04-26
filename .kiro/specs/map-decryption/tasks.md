@@ -660,7 +660,7 @@ High-level structure:
   - Test full line decode against known output
   - Test on multiple FBL files
 
-- [ ] **14.20** Build the FBL section encoder (reverse of decoder)
+- [x] **14.20** Build the FBL section encoder (reverse of decoder)
   - Input: structured road network data
   - Output: raw section bytes (varint stream with patterns)
   - Test: encode → decode roundtrip should preserve data

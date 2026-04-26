@@ -279,3 +279,34 @@ class TestNngDecoder:
         sec4 = _get_sec4(dec)
         records = decode_section(sec4)
         assert len(records) > 10
+
+    def test_encode_varint_roundtrip(self):
+        from tools.maps.nng_decoder import decode_varint, encode_varint
+
+        for val in [0, 1, 127, 128, 2047, 2048, 65535, 1000000, 31710617]:
+            enc = encode_varint(val)
+            dec, _ = decode_varint(enc, 0)
+            assert dec == val, f"Roundtrip failed: {val} → {enc.hex()} → {dec}"
+
+    def test_encode_records_roundtrip(self):
+        """Encode records and decode back — should match."""
+        from tools.maps.nng_decoder import decode_line, encode_records
+
+        dec = _decrypt(TESTDATA_MAPS / "Monaco_osm.fbl")
+        sec4 = _get_sec4(dec)
+        line0 = sec4.split(b"\x0a")[0]
+        original = decode_line(line0)
+        encoded = encode_records(original)
+        roundtrip = decode_line(encoded)
+        orig_data = [r for r in original if r != 0x80000000]
+        rt_data = [r for r in roundtrip if r != 0x80000000]
+        assert orig_data == rt_data
+
+    def test_encode_control_records(self):
+        """Control records should encode to metacharacters."""
+        from tools.maps.nng_decoder import encode_records
+
+        records = [42, 0x80090000, 99, 0x80000000]
+        encoded = encode_records(records)
+        assert b"\x5e" in encoded  # ^ for separator
+        assert b"\x0a" in encoded  # LF for end

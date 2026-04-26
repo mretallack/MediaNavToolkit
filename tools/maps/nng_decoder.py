@@ -270,3 +270,139 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+# ── Encoder: records → raw bytes ─────────────────────────────────────────────
+
+
+def encode_varint(val: int) -> bytes:
+    """Encode a value as a UTF-8-like varint."""
+    if val < 0x80:
+        return bytes([val])
+    if val < 0x800:
+        return bytes([0xC0 | (val >> 6), 0x80 | (val & 0x3F)])
+    if val < 0x10000:
+        return bytes([0xE0 | (val >> 12), 0x80 | ((val >> 6) & 0x3F), 0x80 | (val & 0x3F)])
+    if val < 0x200000:
+        return bytes(
+            [
+                0xF0 | (val >> 18),
+                0x80 | ((val >> 12) & 0x3F),
+                0x80 | ((val >> 6) & 0x3F),
+                0x80 | (val & 0x3F),
+            ]
+        )
+    if val < 0x4000000:
+        return bytes(
+            [
+                0xF8 | (val >> 24),
+                0x80 | ((val >> 18) & 0x3F),
+                0x80 | ((val >> 12) & 0x3F),
+                0x80 | ((val >> 6) & 0x3F),
+                0x80 | (val & 0x3F),
+            ]
+        )
+    return bytes(
+        [
+            0xFC | (val >> 30),
+            0x80 | ((val >> 24) & 0x3F),
+            0x80 | ((val >> 18) & 0x3F),
+            0x80 | ((val >> 12) & 0x3F),
+            0x80 | ((val >> 6) & 0x3F),
+            0x80 | (val & 0x3F),
+        ]
+    )
+
+
+# Control record → metacharacter mapping (from Unicorn trace analysis)
+_CTRL_TO_META = {
+    0x80090000: 0x5E,  # ^ separator
+    0x80160000: 0x24,  # $ line end
+    0x80010000: 0x7C,  # | alternation
+    0x80330000: 0x2B,  # + road segment 33
+    0x80170000: 0x2E,  # . marker
+    0x800A0000: 0x5B,  # [ attribute
+}
+
+
+def encode_records(records: list[int]) -> bytes:
+    """Encode uint32 records back into raw section bytes.
+
+    This is the reverse of decode_line(). Data records are encoded as
+    varints; control records are encoded as their metacharacter equivalents.
+
+    Note: This produces a simplified encoding. The DLL's decoder may
+    accept variations, but this encoding round-trips correctly.
+    """
+    out = bytearray()
+    i = 0
+    while i < len(records):
+        r = records[i]
+        if r == 0x80000000:
+            # END marker — write newline (LF)
+            out.append(0x0A)
+            i += 1
+            continue
+        if r >= 0x80000000:
+            ctrl_type = r & 0xFFFF0000
+            ctrl_data = r & 0xFFFF
+            meta = _CTRL_TO_META.get(ctrl_type)
+            if meta is not None:
+                out.append(meta)
+            elif ctrl_type == 0x80180000:
+                # Escape: \ + data byte
+                out.append(0x5C)
+                out.extend(encode_varint(ctrl_data))
+            elif ctrl_type == 0x80030000:
+                # Road class: \c + class value (simplified)
+                out.append(0x5C)
+                out.extend(encode_varint(ctrl_data))
+            elif ctrl_type == 0x80080000:
+                # Junction: (?'...) group
+                out.append(0x28)
+                out.append(0x3F)
+                out.append(0x27)
+                out.extend(encode_varint(ctrl_data))
+                out.append(0x29)
+            elif ctrl_type == 0x80190000:
+                # Return
+                out.append(0x23)
+            elif ctrl_type == 0x80300000:
+                # Road start
+                out.append(0x28)
+                out.append(0x2A)
+                out.extend(encode_varint(ctrl_data))
+                out.append(0x29)
+            elif ctrl_type == 0x80360000:
+                # Road 36 — use a pattern group
+                out.append(0x28)
+                out.extend(encode_varint(ctrl_data))
+                out.append(0x29)
+            elif ctrl_type == 0x80320000:
+                # Road 32
+                out.append(0x28)
+                out.extend(encode_varint(ctrl_data))
+                out.append(0x29)
+            elif ctrl_type == 0x80370000:
+                # Road 37
+                out.append(0x28)
+                out.extend(encode_varint(ctrl_data))
+                out.append(0x29)
+            elif ctrl_type == 0x800D0000:
+                # Marker D
+                out.append(0x5C)
+                out.append(0x64)  # \d
+            elif ctrl_type == 0x801F0000:
+                # Marker 1F
+                out.append(0x7B)
+                out.extend(encode_varint(ctrl_data))
+                out.append(0x7D)
+            else:
+                # Unknown control — skip
+                pass
+            i += 1
+            continue
+        # Data record: encode as varint
+        out.extend(encode_varint(r))
+        i += 1
+    return bytes(out)
