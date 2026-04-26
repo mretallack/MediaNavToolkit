@@ -1732,3 +1732,35 @@ NngineStart
       → FUN_1024a720 (varint decoder with pattern matching)
       → FUN_10249210 → FUN_102460d0 (graph builder)
 ```
+
+
+### Complete Record Stream Analysis (72 Lines, 6,379 Records)
+
+Emulating FUN_1024a720 on all 72 LF-separated lines of Monaco section 4:
+
+| Control Type | Count | Meaning |
+|-------------|-------|---------|
+| 0x80000000 | 52 | End of line/section |
+| 0x80010000 | 24 | Sub-section end |
+| 0x80330000 | 20 | Road segment group |
+| 0x80360000 | 22 | Road segment type 36 |
+| 0x80090000 | 21 | Separator |
+| 0x80080000 | 20 | Junction marker |
+| 0x80170000 | 23 | Marker (unknown) |
+| 0x80160000 | 16 | Marker (unknown) |
+| 0x800A0000 | 14 | Road attribute |
+| 0x80300000 | 10 | Road start |
+| 0x800D0000 | 7 | Marker |
+| 0x80190000 | 5 | Return to caller |
+| 0x80180000 | 3 | Segment type (with data) |
+| 0x80030000 | 2 | Road class (data=2=trunk, data=8=pedestrian) |
+| 0x801F0000 | 2 | Marker |
+| 0x80320000 | 1 | Road type 32 |
+| 0x80370000 | 1 | Road type 37 |
+
+**Data records:** 6,136 values with structured distribution (33-41 per common value).
+152 segment marker values (98-103) appear in the data stream.
+Road class value 92 is consumed by pattern matching and generates 0x80030000 control records.
+
+**Line structure:** Each LF-separated line is decoded independently.
+Average 25 data records between control records.
