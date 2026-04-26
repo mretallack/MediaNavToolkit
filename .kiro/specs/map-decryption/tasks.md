@@ -43,9 +43,11 @@ These improve the FBL output from osm_to_fbl.py. The basic format works
 - [x] **19.4f** Test: two roads sharing a node should produce a junction record
 
 **Road Names (19.5 + 19.11)**
-- [ ] **19.5a** Extract unique road names from OSM `name` tags
+- [x] **19.5a** Extract unique road names from OSM `name` tags
 - [ ] **19.5b** Build name index (name → integer ID)
-- [ ] **19.5c** Encode name strings for section 15 (determine encoding from real FBL)
+- [ ] **19.5c** Encode name strings for section 15 — BLOCKED
+  - Names are NOT plain text in FBL files. Proprietary binary encoding.
+  - Requires reverse-engineering the DLL rendering engine name codec.
 - [ ] **19.5d** Emit name reference records in section 4/5/8 segment data
 - [ ] **19.5e** Generate section 15 bytes and update section offset table
 - [ ] **19.5f** Verify graph builder accepts name records
