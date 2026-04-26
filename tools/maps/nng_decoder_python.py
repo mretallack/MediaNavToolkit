@@ -108,10 +108,31 @@ def decode_line_python(data: bytes, flags: int = 0x480080) -> list[int]:
         # The DLL searches for a matching delimiter (newline chars from context).
         # In practice, # consumes until the next metacharacter at the same nesting level.
         if in_hash:
-            # # consumes everything to end of line (delimiter 0x0A not found
-            # since we split by 0x0A). The DLL scans raw bytes for the
-            # delimiter and when not found, advances to end of input.
-            pos = next_pos
+            # # hash reference: scans RAW BYTES for delimiter (0x00).
+            # The DLL scans byte-by-byte, skipping UTF-8 continuation bytes.
+            # When delimiter found: advance past it (delimiter_length bytes).
+            # When not found: advance to end of input.
+            p = pos
+            while p < end:
+                if data[p] == 0x00:
+                    # Found delimiter — advance past it (length=1 since param_4[0x24]=0→iVar12=0→skip 0 extra)
+                    # Actually iVar12 = param_4[0x24] = delimiter length
+                    # LAB_1024ac1b: pbVar18 = local_28 + iVar12
+                    # local_28 was set to local_20 (current scan pos)
+                    # So we advance by iVar12 bytes past the match start
+                    # With iVar12=0, we don't advance at all — we stay at the NUL
+                    # But then the main loop reads the NUL and hits the 0x00 metachar → break
+                    pos = p
+                    in_hash = False
+                    break
+                # Skip UTF-8 continuation bytes
+                p += 1
+                if use_varint:
+                    while p < end and (data[p] & 0xC0) == 0x80:
+                        p += 1
+            else:
+                pos = end
+                in_hash = False
             continue
 
         # --- Values > 0xFF: always data ---
@@ -131,8 +152,10 @@ def decode_line_python(data: bytes, flags: int = 0x480080) -> list[int]:
 
         # --- Metacharacter handling ---
         if _is_meta(value):
-            if value == 0x00:  # NUL — end
-                break
+            if value == 0x00:  # NUL — stored as data (falls through to default in DLL)
+                records.append(0)
+                pos = next_pos
+                continue
 
             elif value == 0x5C:  # backslash
                 if next_pos < end:
