@@ -491,10 +491,10 @@ But ~70% of the varint values have unknown meaning. The DLL's pattern compiler
   - Encode coordinates, road classes, segment markers, junction refs
   - Use the same UTF-8-like encoding
 
-- [x] **13.18** Implement the section builder — DEFERRED (template approach used instead)
+- [x] **13.18** Implement the section builder — SIMPLIFIED (template approach, \Q..\E encoding)
   - Build section 4 (main roads) from encoded varint stream
-  - Build sections 1, 2, 3, 5, 8 (curves, boundaries, secondary, tertiary)
-  - Build section 15 (labels/names)
+  - ⚠️ Only produces 3 control record types (^, +, \) vs 17 in real FBL
+  - ⚠️ No junction connectivity, shape points, road names, or nested groups
 
 - [x] **13.19** Implement the SET container writer (template-based)
   - Write SET header (magic, version, section count, data offset)
@@ -507,17 +507,100 @@ But ~70% of the varint values have unknown meaning. The DLL's pattern compiler
   - Apply the 4096-byte XOR table to produce the final encrypted file
   - Verify: decrypting the output should give back the original data
 
-- [x] **13.21** Build `osm_to_fbl.py` — DEFERRED (template-based fbl_replace_section.py built instead)
+- [x] **13.21** Build `osm_to_fbl.py` — SIMPLIFIED (template-based, flat coordinate encoding)
   - Input: OSM PBF file + country bbox
-  - Output: valid .fbl file readable by iGO navigation engine
-  - Test: decrypt and parse the output with our existing tools
+  - Output: .fbl file that our decoder can read back
+  - ⚠️ Navigation engine likely rejects this — record structure too simple
 
-- [x] **13.22** Validate generated FBL against original — DEFERRED
-  - Generate FBL from the same OSM data NNG used (2025.09)
-  - Compare: segment count, road class distribution, coordinate accuracy
-  - Report differences
+- [x] **13.22** Validate generated FBL against original — DONE (structural comparison)
+  - Generated: 44 records (11 ctrl, 33 data) vs original: 6,379 records (243 ctrl)
+  - Missing: 14 of 17 control record types
+  - Missing: junction connectivity, road names, shape points
 
 - [ ] **13.23** Test on the actual head unit (if possible) — see Task 18
+
+## 19. Make Generated FBL Usable by Navigation Engine
+
+**Goal:** Enrich the osm_to_fbl.py output so the head unit's iGO engine
+can actually load and navigate with it.
+
+**Current gap:** Our encoder produces a flat `\Q data \E + ^` structure.
+The real FBL has 17 control record types with junction graphs, road names,
+shape points, and nested pattern groups. The navigation engine's graph
+builder (FUN_102460d0) likely requires specific record sequences.
+
+### Phase A: Understand What the Graph Builder Requires
+
+- [ ] **19.1** Emulate FUN_102460d0 on our generated records
+  - Feed our simplified records to the graph builder via Unicorn
+  - Check: does it crash, return an error, or produce output?
+  - If error: what record type/sequence does it expect?
+
+- [ ] **19.2** Emulate FUN_102460d0 on the REAL Monaco records
+  - Feed the 6,379 real records to the graph builder
+  - Capture: what output does it produce? (compiled byte stream)
+  - This is the "reference" output we need to match
+
+- [ ] **19.3** Identify the MINIMUM record set the graph builder accepts
+  - Start with the real records, remove record types one at a time
+  - Find: which control records are required vs optional?
+  - Goal: smallest valid record set
+
+### Phase B: Add Missing Record Types to Encoder
+
+- [ ] **19.4** Add junction records (0x80080000)
+  - Junctions connect road segments at intersections
+  - Each junction needs: coordinates, connected segment IDs
+  - Extract junction data from OSM node/way topology
+
+- [ ] **19.5** Add road name records (0x80070000 in graph builder)
+  - Road names are stored in section 15 (labels)
+  - Each segment references a name by index
+  - Extract names from OSM `name` tags
+
+- [ ] **19.6** Add shape point records
+  - Road curves need intermediate points between junctions
+  - Currently we store all coords flat; need to mark which are shape points
+  - Use OSM way node sequence for shape point geometry
+
+- [ ] **19.7** Add section boundary records (0x80010000, 0x80160000)
+  - The graph builder expects section start/end markers
+  - Add proper `|` and `$` markers at section boundaries
+
+- [ ] **19.8** Add road attribute records (0x800A0000, 0x800D0000)
+  - Speed limits, one-way flags, road surface type
+  - Extract from OSM tags: maxspeed, oneway, surface
+
+### Phase C: Multi-Section Support
+
+- [ ] **19.9** Generate section 5 (secondary roads) and section 8 (tertiary)
+  - Currently only section 4 (main roads) is generated
+  - Split OSM roads by class into sections 4/5/8
+  - Each section needs its own record stream
+
+- [ ] **19.10** Generate section 1 (curves) as packed bitstream
+  - Section 1 uses packed N+M bit coordinate encoding
+  - Generate from OSM curve geometry
+
+- [ ] **19.11** Generate section 15 (labels/names)
+  - Road name strings referenced by section 4/5/8 segments
+  - Encode as the DLL expects (format TBD from analysis)
+
+### Phase D: Validate and Test
+
+- [ ] **19.12** Roundtrip test: generate → decode → compare with OSM source
+  - All coordinates should match within 1m
+  - All road classes should match
+  - Junction connectivity should be preserved
+
+- [ ] **19.13** Emulate graph builder on generated records
+  - Feed enriched records to FUN_102460d0 via Unicorn
+  - Verify: no errors, produces valid compiled output
+
+- [ ] **19.14** Test on head unit (→ Task 18)
+  - Copy generated FBL to USB
+  - Check synctool acceptance
+  - Check navigation functionality
   - Copy generated FBL to USB drive
   - Check if the head unit's synctool accepts it
   - Check if navigation works with the generated map
