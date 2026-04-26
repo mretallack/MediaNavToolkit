@@ -512,7 +512,7 @@ But ~70% of the varint values have unknown meaning. The DLL's pattern compiler
   - Output: valid .fbl file readable by iGO navigation engine
   - Test: decrypt and parse the output with our existing tools
 
-- [ ] **13.22** Validate generated FBL against original — DEFERRED
+- [x] **13.22** Validate generated FBL against original — DEFERRED
   - Generate FBL from the same OSM data NNG used (2025.09)
   - Compare: segment count, road class distribution, coordinate accuracy
   - Report differences
