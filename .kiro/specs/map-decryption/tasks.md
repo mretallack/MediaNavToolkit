@@ -534,22 +534,22 @@ these patterns to convert raw bytes into uint32 records.
 
 ### Phase A: Find the Pattern Data in the DLL
 
-- [ ] **14.1** Trace the map loading call chain from NngineStart
+- [x] **14.1** Trace the map loading call chain from NngineStart
   - Search for "NngineStart", "NngineAttach", or SET magic (0x544553) references
   - Map: NngineStart → file open → SET parse → section load → FUN_10243ae0
   - Identify where the context structure (param_6) is created
 
-- [ ] **14.2** Find the context structure initialization
+- [x] **14.2** Find the context structure initialization
   - FUN_10243ae0 receives param_6 (context pointer)
   - The caller at line 412089 passes `*(undefined4 *)(iVar2 + 0x18)` as context
   - Trace back: what creates the object at iVar2? What sets offset 0x18?
 
-- [ ] **14.3** Identify the pattern data pointer in the context
+- [x] **14.3** Identify the pattern data pointer in the context
   - The context structure has: [0]=alloc, [1]=free, [2]=userdata, [5]=char_table
   - Pattern data is likely at another offset (possibly [3] or [4])
   - Check: does the context have a pointer to a pattern string/table?
 
-- [ ] **14.4** Extract the pattern data bytes from the DLL
+- [x] **14.4** Extract the pattern data bytes from the DLL
   - Once we know the RVA of the pattern data, read it from the DLL binary
   - The pattern data might be a string with ( ) # \ structural chars
   - Or it might be a compiled binary table
