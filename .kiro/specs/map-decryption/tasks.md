@@ -880,3 +880,33 @@ would be more portable.
 - [ ] **18.3** Test if synctool accepts the generated file
 - [ ] **18.4** Test if navigation works with the generated map
 - [ ] **18.5** Document any format validation errors from the head unit
+
+
+## 16. Parse TMC Files — REVISED APPROACH
+
+**Original plan:** Reverse-engineer proprietary NNG `.tmc` files from head unit.
+**Problem:** UK TMC data (Inrix) is proprietary. Can't download from Naviextras
+(device up to date). Files only exist on head unit internal storage.
+
+**Revised approach:** Use publicly available TMC location code lists.
+
+Several European countries publish their TMC tables as open data:
+- ✅ France: http://diffusion-numerique.info-routiere.gouv.fr/tables-alert-c-a4.html
+- ✅ Germany: https://www.bast.de/BASt_2017/DE/Verkehrstechnik/Fachthemen/v2-LCL/
+- ✅ Belgium, Finland, Italy, Norway, Spain, Sweden: see OSM wiki
+- ❌ UK (Inrix): proprietary, not publicly available
+
+**Plan:** Download France's public TMC table, parse it, and build a tool
+that maps TMC location codes to FBL road segments. This proves the concept
+without needing the proprietary files.
+
+- [ ] **16.1** Download France TMC location code list (public, free)
+- [ ] **16.2** Parse the ISO 14819-3 format (points, lines, areas with coordinates)
+- [ ] **16.3** Build tmc_locations.py tool to query TMC codes → coordinates
+- [ ] **16.4** Match TMC locations to FBL road segments using coordinates
+- [ ] **16.5** Validate against the cached traffic events in trafficevents_A.txt
+  - We have: `cc=12 ltn=10 loc=17602 event_1=807` (France, location 17602)
+  - Look up 17602 in the public table → should give road coordinates
+- [ ] **16.6** Build tmc_to_fbl.py — generate NNG .tmc file from public data
+  - If we understand the .tmc format, we can generate it from public tables
+  - This would let us create TMC files for ANY country with public data
