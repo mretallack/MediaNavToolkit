@@ -531,7 +531,7 @@ builder (FUN_102460d0) likely requires specific record sequences.
 
 ### Phase A: Understand What the Graph Builder Requires
 
-- [ ] **19.1** Emulate FUN_102460d0 on our generated records
+- [x] **19.1** Emulate FUN_102460d0 on our generated records
   - Feed our simplified records to the graph builder via Unicorn
   - Check: does it crash, return an error, or produce output?
   - If error: what record type/sequence does it expect?
