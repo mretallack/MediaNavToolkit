@@ -457,73 +457,21 @@ def decode_line_python(data: bytes, flags: int = 0x480080) -> list[int]:
                 pos = next_pos
                 continue
 
-            elif value == 0x28:  # ( open group
-                # Check for special groups: (?...) (*...)
-                if next_pos < end:
-                    nb = data[next_pos]
-                    if nb == 0x3F:  # (?...)
-                        if next_pos + 1 < end:
-                            nb2 = data[next_pos + 1]
-                            if nb2 == 0x27 or nb2 == 0x26:
-                                # (?'...) or (?&...) → junction 0x80080000|n
-                                p = next_pos + 2
-                                delim = nb2
-                                while p < end and data[p] != 0x29 and data[p] != delim:
-                                    p += 1
-                                if p < end and data[p] == delim:
-                                    p += 1
-                                while p < end and data[p] != 0x29:
-                                    p += 1
-                                if not hasattr(decode_line_python, "_jct"):
-                                    decode_line_python._jct = 0
-                                decode_line_python._jct += 1
-                                records.append(0x80080000 | decode_line_python._jct)
-                                pos = p + 1 if p < end else end
-                                continue
-                            if nb2 == 0x21:
-                                # (?!...) → 0x80230000
-                                p = next_pos + 2
-                                depth = 1
-                                while p < end and depth > 0:
-                                    if data[p] == 0x28:
-                                        depth += 1
-                                    elif data[p] == 0x29:
-                                        depth -= 1
-                                    p += 1
-                                records.append(0x80230000)
-                                pos = p
-                                continue
-                        # Other (?...) — skip flags, handle as group
-                        p = next_pos + 1
-                        while p < end and data[p] not in (0x29, 0x3A):
-                            p += 1
-                        if p < end and data[p] == 0x29:
-                            pos = p + 1
-                            continue
-                        if p < end and data[p] == 0x3A:
-                            pos = p + 1
-                            group_depth += 1
-                            continue
-                        pos = p
-                        continue
-                    if nb == 0x2A:  # (*...)
-                        p = next_pos + 1
-                        depth = 1
-                        while p < end and depth > 0:
-                            if data[p] == 0x28:
-                                depth += 1
-                            elif data[p] == 0x29:
-                                depth -= 1
-                            p += 1
-                        pos = p
-                        continue
-                group_depth += 1
+            elif value == 0x28:  # (
+                # Check for (?#...) comment — skip to )
+                if next_pos + 1 < end and data[next_pos] == 0x3F and data[next_pos + 1] == 0x23:
+                    p = next_pos + 2
+                    while p < end and data[p] != 0x29:
+                        p += 1
+                    pos = p + 1 if p < end else end
+                    continue
+                # All other ( — stored as data
+                records.append(value)
                 pos = next_pos
                 continue
 
-            elif value == 0x29:  # ) close group
-                if group_depth > 0:
-                    group_depth -= 1
+            elif value == 0x29:  # ) — stored as data
+                records.append(value)
                 pos = next_pos
                 continue
 
@@ -551,12 +499,21 @@ def decode_line_python(data: bytes, flags: int = 0x480080) -> list[int]:
                 pos = p + 1 if p < end else end
                 continue
 
-            elif value == 0x7B:  # { repetition
-                # Skip to matching }
+            elif value == 0x7B:  # { — repetition or data
+                # Check if followed by valid {n,m} pattern
+                # If not, it's data (falls through to default in DLL)
                 p = next_pos
-                while p < end and data[p] != 0x7D:
+                has_digit = False
+                while p < end and (0x30 <= data[p] <= 0x39 or data[p] == 0x2C):
+                    has_digit = True
                     p += 1
-                pos = p + 1 if p < end else end
+                if has_digit and p < end and data[p] == 0x7D:
+                    # Valid {n,m} — skip it (quantifier modifies previous)
+                    pos = p + 1
+                    continue
+                # Not a valid repetition — store as data
+                records.append(value)
+                pos = next_pos
                 continue
 
             elif value == 0x2B:  # + quantifier → 0x80330000
