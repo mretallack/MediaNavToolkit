@@ -536,12 +536,12 @@ builder (FUN_102460d0) likely requires specific record sequences.
   - Check: does it crash, return an error, or produce output?
   - If error: what record type/sequence does it expect?
 
-- [ ] **19.2** Emulate FUN_102460d0 on the REAL Monaco records
+- [x] **19.2** Emulate FUN_102460d0 on the REAL Monaco records
   - Feed the 6,379 real records to the graph builder
   - Capture: what output does it produce? (compiled byte stream)
   - This is the "reference" output we need to match
 
-- [ ] **19.3** Identify the MINIMUM record set the graph builder accepts
+- [x] **19.3** Identify the MINIMUM record set the graph builder accepts
   - Start with the real records, remove record types one at a time
   - Find: which control records are required vs optional?
   - Goal: smallest valid record set
