@@ -194,7 +194,7 @@ naturally look random.
     - Describe the matching algorithm
     - Report accuracy metrics
     - Mark 9.5b as SOLVED
-- [ ] **9.6** Parse TMC (traffic message channel) files
+- [ ] **9.6** Parse TMC (traffic message channel) files — see Task 16 (blocked on Task 15)
   - Only `.stm` shadow files available on USB (actual TMC data on head unit internal storage)
   - Provider-specific files (e.g. France-V-Trafic.tmc, Germany_HERE.tmc)
   - Cannot investigate without extracting actual files from head unit
@@ -517,7 +517,7 @@ But ~70% of the varint values have unknown meaning. The DLL's pattern compiler
   - Compare: segment count, road class distribution, coordinate accuracy
   - Report differences
 
-- [ ] **13.23** Test on the actual head unit (if possible) — DEFERRED
+- [ ] **13.23** Test on the actual head unit (if possible) — see Task 18
   - Copy generated FBL to USB drive
   - Check if the head unit's synctool accepts it
   - Check if navigation works with the generated map
@@ -676,3 +676,124 @@ High-level structure:
 7. **Section roles** — what data goes in sections 1-8 vs 15-17
 8. **Record type semantics** — what each 0x8000-0x803B type means
 9. **Pattern compiler state machine** — the full grammar of FUN_1024a720
+
+
+## 15. Content Download — Retrieve Files from Naviextras
+
+**Goal:** Download actual content files (.tmc, .fbl, .hnr, .poi, .spc) from
+the Naviextras server so we can reverse-engineer formats like TMC.
+
+**Current state:** We can authenticate, browse the catalog, select content,
+and confirm selection. But we cannot download the actual files because the
+download uses the proprietary SnakeOil-encrypted wire protocol for streaming.
+
+**What exists:**
+- ✅ Login + session establishment (run_session)
+- ✅ Content catalog browsing (get_content_tree)
+- ✅ Content selection + size estimation (select_content)
+- ✅ Selection confirmation (confirm_selection)
+- ✅ DownloadManager class with cache/resume/MD5 (medianav_toolbox/download.py)
+- ✅ DownloadItem model with url/size/md5 fields (medianav_toolbox/models.py)
+- ❌ Download URL/stream extraction from getprocess response
+- ❌ Wire protocol file streaming (post-confirmation getprocess)
+- ❌ File chunk reassembly and decryption
+
+**What we know from captures:**
+- Native toolbox downloads via wire protocol (NOT REST CDN URLs)
+- File chunks are SnakeOil-encrypted, up to 53KB per chunk
+- getprocess after confirmselection returns download task metadata
+- 46,000 SnakeOil calls observed during a single download session
+
+### Phase A: Understand the Download Protocol
+
+- [ ] **15.1** Capture a fresh download session with mitmproxy
+  - Run the native Windows toolbox with mitmproxy intercepting
+  - Select a SMALL content item (e.g., Vatican City map, ~12KB)
+  - Capture all wire protocol calls after confirmselection
+  - Save raw request/response pairs
+
+- [ ] **15.2** Parse the post-confirmation getprocess response
+  - Decrypt the getprocess response using SnakeOil
+  - Identify the download task structure (content ID, size, checksum)
+  - Check: does it contain URLs or is it a streaming protocol?
+
+- [ ] **15.3** Identify the file streaming wire protocol calls
+  - After getprocess, what endpoint is called to fetch file data?
+  - Is it repeated getprocess calls or a different endpoint?
+  - What's the request format for each chunk?
+
+- [ ] **15.4** Parse file chunk responses
+  - Decrypt each chunk response
+  - Identify: chunk offset, chunk size, file data
+  - Check: is there a chunk header or is it raw file data?
+
+### Phase B: Implement the Download Client
+
+- [ ] **15.5** Implement getprocess response parser for download tasks
+  - Parse the igo-binary response into DownloadItem objects
+  - Extract: content_id, file_name, file_size, md5, chunk_count
+
+- [ ] **15.6** Implement file chunk fetcher
+  - Build wire protocol requests for each chunk
+  - Handle SnakeOil encryption/decryption
+  - Implement sequential chunk fetching
+
+- [ ] **15.7** Implement file reassembly
+  - Concatenate decrypted chunks into complete files
+  - Verify MD5 checksum
+  - Write to USB NaviSync/content/ directory structure
+
+- [ ] **15.8** Add download command to CLI
+  - `medianav-toolbox download --country France --type tmc`
+  - Support filtering by content type (map, tmc, poi, spc, hnr)
+  - Show progress bar during download
+
+- [ ] **15.9** Test: download Vatican City map (~12KB)
+  - Smallest available content for testing
+  - Verify downloaded .fbl matches expected format
+  - Decode with our tools to validate
+
+- [ ] **15.10** Test: download France TMC file
+  - Download France-V-Trafic.tmc
+  - Verify file format and begin reverse engineering
+
+## 16. Parse TMC Files
+
+**Goal:** Decode TMC (Traffic Message Channel) location code tables that map
+FM radio traffic event codes to FBL road segments.
+
+**Blocked on:** Task 15 (need actual .tmc files first)
+
+- [ ] **16.1** Examine TMC file header and magic bytes
+- [ ] **16.2** Identify the location code table structure
+- [ ] **16.3** Map TMC location codes to FBL road segments
+- [ ] **16.4** Build tmc_to_csv.py tool
+- [ ] **16.5** Cross-validate TMC locations against OSM
+
+## 17. Pure Python Decoder (replace Unicorn dependency)
+
+**Goal:** Translate the DLL's FUN_1024a720 regex engine to pure Python
+so the decoder works without the Unicorn emulation dependency.
+
+**Current state:** nng_decoder.py uses Unicorn emulation which requires
+the unicorn package and the nngine.dll binary. A pure Python implementation
+would be more portable.
+
+- [ ] **17.1** Translate the main loop and varint decode (done in skeleton)
+- [ ] **17.2** Translate \Q/\E quote mode handling
+- [ ] **17.3** Translate ( ) group handling with nesting
+- [ ] **17.4** Translate # hash/reference lookup
+- [ ] **17.5** Translate \ escape sequences (FUN_10244b70)
+- [ ] **17.6** Translate pattern quantifiers (* + ? {n,m})
+- [ ] **17.7** Translate character class [ ] handling
+- [ ] **17.8** Translate ^ $ | metacharacter → control record mapping
+- [ ] **17.9** Validate against Unicorn output on all 7 test files
+- [ ] **17.10** Remove Unicorn dependency from nng_decoder.py
+
+## 18. Head Unit Testing
+
+- [ ] **18.1** Generate FBL file from OSM data using osm_to_fbl.py
+- [ ] **18.2** Copy generated FBL to USB drive
+- [ ] **18.3** Test if synctool accepts the generated file
+- [ ] **18.4** Test if navigation works with the generated map
+- [ ] **18.5** Document any format validation errors from the head unit
