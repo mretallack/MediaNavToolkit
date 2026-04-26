@@ -206,7 +206,19 @@ def decode_line_python(data: bytes, flags: int = 0x480080) -> list[int]:
                 if next_pos < end:
                     nb = data[next_pos]
                     if nb == 0x3F:  # (?...)
-                        # Skip to matching )
+                        if next_pos + 1 < end:
+                            nb2 = data[next_pos + 1]
+                            if nb2 == 0x27:  # (?'...) named group → junction
+                                # Skip to matching ), generate junction record
+                                p = next_pos + 2
+                                while p < end and data[p] != 0x29:
+                                    p += 1
+                                group_depth_counter = getattr(decode_line_python, "_jct", 0) + 1
+                                decode_line_python._jct = group_depth_counter
+                                records.append(0x80080000 | group_depth_counter)
+                                pos = p + 1 if p < end else end
+                                continue
+                        # Other (?...) — skip to matching )
                         p = next_pos + 1
                         depth = 1
                         while p < end and depth > 0:
