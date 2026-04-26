@@ -326,3 +326,38 @@ class TestNngDecoder:
         assert encrypted != original
         decrypted = xor_encrypt(encrypted)
         assert decrypted == original
+
+    def test_osm_to_fbl_roundtrip(self):
+        """OSM XML → records → bytes → decode should preserve structure."""
+        from tools.maps.nng_decoder import decode_line
+        from tools.maps.osm_to_fbl import (
+            Coord,
+            RoadNetwork,
+            RoadSegment,
+            network_to_records,
+            records_to_bytes,
+        )
+
+        net = RoadNetwork(
+            country="TST",
+            bbox=(7.41, 43.53, 7.63, 43.75),
+            segments=[
+                RoadSegment(
+                    road_class=3,
+                    coords=[Coord(7.42, 43.73), Coord(7.43, 43.74)],
+                ),
+                RoadSegment(
+                    road_class=5,
+                    coords=[Coord(7.50, 43.60), Coord(7.51, 43.61)],
+                ),
+            ],
+        )
+        records = network_to_records(net)
+        raw = records_to_bytes(records)
+        decoded = decode_line(raw)
+        # Should have 2 road segment markers
+        road_markers = [r for r in decoded if r == 0x80330000]
+        assert len(road_markers) == 2
+        # Should have coordinate data
+        data = [r for r in decoded if r < 0x80000000]
+        assert len(data) > 4  # At least 4 coord values + 2 class values
