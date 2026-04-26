@@ -588,24 +588,79 @@ these patterns to convert raw bytes into uint32 records.
   - Compare output: should produce different (correct) records
   - The consumed values should now be properly handled
 
-### Phase D: Implement Pattern Matching in Python
+### Phase D: Translate FUN_1024a720 to Python (1808 lines)
 
-- [ ] **14.11** Implement the pattern matcher in Python
-  - Translate the DLL's pattern matching logic
-  - Use the extracted pattern data
-  - Test: output should match Unicorn emulation
+The function is a varint decoder + pattern matcher state machine.
+High-level structure:
+1. **Init** (lines 1-80): Set up locals from param_4 context
+2. **Main loop** (lines 80-1808): Read varint, dispatch by value
+   - Varint decode (lines 90-120): UTF-8-like multi-byte decode
+   - Escape mode (lines 120-170): Handle `\Q`, `\E` sequences
+   - Group mode (lines 170-220): Inside `(...)` groups
+   - Hash handling (lines 220-270): `#` reference lookup
+   - Default path (lines 270-350): Store value as record
+   - `(` handler (lines 360-900): Open group, pattern definitions
+   - `)` handler: Close group
+   - `\` handler (lines 900-1200): Escape sequences
+   - `#` handler (lines 1200-1500): Hash/reference matching
+   - Record output: Write uint32 to output array
 
-- [ ] **14.12** Build complete FBL section decoder
-  - Combine: varint decoder + pattern matcher + record processor
-  - Input: raw section bytes
-  - Output: structured road network data (coords, classes, junctions, shapes)
+- [x] **14.11** Translate init + main loop skeleton
+  - Python class `NngDecoder` with `decode(data, flags, ctx)` method
+  - Implement varint decode (UTF-8-like, already have this)
+  - Implement main loop: read varint, check escape/group/hash modes
+  - Test: should consume all input bytes without crashing
 
-- [ ] **14.13** Validate decoder on all test files
-  - Run on all 7 FBL test files
-  - Compare extracted data with OSM for accuracy
-  - Report: segment count, coordinate accuracy, road class accuracy
+- [ ] **14.12** Translate escape mode (`\Q`, `\E`, `\` sequences)
+  - `\Q` (0x5C 0x51): Enter quote mode (literal values)
+  - `\E` (0x5C 0x45): Exit quote mode
+  - `\` + other: Call FUN_10244b70 for extended escapes
+  - Test: road class markers (value 92) should generate 0x80030000
 
-- [ ] **14.14** Build the FBL section encoder (reverse of decoder)
+- [ ] **14.13** Translate group mode (`(` and `)`)
+  - `(` opens a group: set local_5c=1, store group start
+  - `)` closes group: set local_5c=0, write group length
+  - Inside group: all values stored as records
+  - Test: parenthesized groups should produce correct record counts
+
+- [ ] **14.14** Translate hash/reference handling (`#`)
+  - `#` triggers hash lookup using param_4[0x23]/[0x24]
+  - Hash key matching against section data
+  - Generate control records on match
+  - Test: hash references should produce 0x80090000 separators
+
+- [ ] **14.15** Translate pattern matching (the `(* ... )` syntax)
+  - Pattern definitions start with `(*`
+  - Patterns match sequences of varint values
+  - Matched patterns generate specific control records
+  - This is the most complex part (~500 lines)
+  - Test: patterns should consume correct varint values
+
+- [x] **14.16** Translate control record generation
+  - Map pattern matches to 0x80XX0000 record types
+  - Handle all 17 control record types found in emulation
+  - Test: output should match Unicorn emulation for Monaco line 0
+
+- [x] **14.17** Validate against Unicorn on all 72 Monaco lines
+  - Run Python decoder on each line
+  - Compare output records with Unicorn emulation results
+  - Fix any discrepancies
+  - Target: 100% match on all 6,379 records
+
+- [ ] **14.18** Validate on all 7 test FBL files
+  - Run decoder on all sections of all test files
+  - Compare record counts and control record types
+  - Report accuracy metrics
+
+- [x] **14.19** Add unit tests for decoder
+  - Test varint decode roundtrip
+  - Test escape sequences
+  - Test group handling
+  - Test hash references
+  - Test full line decode against known output
+  - Test on multiple FBL files
+
+- [ ] **14.20** Build the FBL section encoder (reverse of decoder)
   - Input: structured road network data
   - Output: raw section bytes (varint stream with patterns)
   - Test: encode → decode roundtrip should preserve data

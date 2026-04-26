@@ -206,3 +206,76 @@ class TestFblParse:
         assert gj["type"] == "FeatureCollection"
         assert len(gj["features"]) > 0
         assert gj["features"][0]["geometry"]["type"] == "Point"
+
+
+# ── nng_decoder tests ────────────────────────────────────────────────────────
+
+
+class TestNngDecoder:
+    """Tests for the NNG section decoder (Unicorn-based)."""
+
+    def test_varint_decode_single_byte(self):
+        from tools.maps.nng_decoder import decode_varint
+
+        assert decode_varint(b"\x00", 0) == (0, 1)
+        assert decode_varint(b"\x7f", 0) == (127, 1)
+        assert decode_varint(b"\xbf", 0) == (0xBF, 1)
+
+    def test_varint_decode_multi_byte(self):
+        from tools.maps.nng_decoder import decode_varint
+
+        # 2-byte: 0xC0-0xDF
+        assert decode_varint(b"\xc2\x80", 0) == (0x80, 2)
+        # 3-byte
+        val, pos = decode_varint(b"\xe0\xa0\x80", 0)
+        assert pos == 3
+        # 5-byte: Monaco's first value
+        val, pos = decode_varint(b"\xf9\xb8\xfd\xb6\x99", 0)
+        assert val == 31710617
+        assert pos == 5
+
+    def test_decode_line_monaco_line0(self):
+        """Decode Monaco section 4 first line and check record count."""
+        from tools.maps.nng_decoder import decode_line
+
+        dec = _decrypt(TESTDATA_MAPS / "Monaco_osm.fbl")
+        sec4 = _get_sec4(dec)
+        # First line (up to first 0x0A)
+        first_line = sec4.split(b"\x0a")[0]
+        records = decode_line(first_line)
+        # First line produces ~76 records
+        assert len(records) > 30
+        # Should have control records
+        ctrl = [r for r in records if r >= 0x80000000]
+        assert len(ctrl) >= 1
+
+    def test_decode_section_monaco(self):
+        """Full Monaco section 4 decode."""
+        from tools.maps.nng_decoder import decode_section
+
+        dec = _decrypt(TESTDATA_MAPS / "Monaco_osm.fbl")
+        sec4 = _get_sec4(dec)
+        records = decode_section(sec4)
+        assert len(records) > 3000
+        # Check control record types
+        ctrl_types = set(r & 0xFFFF0000 for r in records if r >= 0x80000000)
+        assert 0x80000000 in ctrl_types  # END
+
+    def test_decode_has_road_class(self):
+        """Check that road class records are present."""
+        from tools.maps.nng_decoder import decode_section
+
+        dec = _decrypt(TESTDATA_MAPS / "Monaco_osm.fbl")
+        sec4 = _get_sec4(dec)
+        records = decode_section(sec4)
+        road_class = [r for r in records if (r & 0xFFFF0000) == 0x80030000]
+        assert len(road_class) >= 1  # Monaco has road class records
+
+    def test_decode_vatican(self):
+        """Decode Vatican section 4."""
+        from tools.maps.nng_decoder import decode_section
+
+        dec = _decrypt(TESTDATA_MAPS / "Vatican_osm.fbl")
+        sec4 = _get_sec4(dec)
+        records = decode_section(sec4)
+        assert len(records) > 10
