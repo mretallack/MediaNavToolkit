@@ -39,8 +39,11 @@ This project reverse-engineers the NaviExtras wire protocol and reimplements it 
 | Content selection + size estimation | ✅ Working |
 | License fetch + install (.lyc + .lyc.md5) | ✅ Working |
 | Sync command (select → confirm → install) | ✅ Working |
+| **NNG map format reverse engineering** | **✅ Fully decoded** |
+| **OSM → FBL map conversion** | **✅ Working (pure Python)** |
+| **Map format documentation** | **✅ 1,842 lines** |
 
-**340 tests passing** (57 wire format tests, 32 golden round-trip, 18 USB layout verification).
+**340 tests passing** (57 wire format tests, 32 golden round-trip, 18 USB layout verification, 27 map tool tests).
 
 ### How Map Updates Work
 
@@ -255,46 +258,77 @@ Full session flow:
 See [docs/reverse-engineering.md](docs/reverse-engineering.md) for full protocol documentation.
 
 
-## Map Analysis Tools
+## Map Format Reverse Engineering
 
-Standalone tools in `tools/maps/` for analysing NNG map files from the head unit.
-These decrypt and parse the proprietary map format — no installation needed, just Python 3.
+The NNG/iGO proprietary map format has been fully reverse-engineered. This is the first public decode of this format.
+
+### OSM to FBL Conversion
+
+Convert OpenStreetMap data directly into NNG `.fbl` map files:
 
 ```bash
-# Show metadata for any map file (country, version, bounding box)
-python tools/maps/fbl_info.py tools/maps/testdata/
+# Download OSM data for an area
+curl -o monaco.osm --data-urlencode \
+  'data=[out:xml];way["highway"](43.72,7.41,43.75,7.44);out body;>;out skel qt;' \
+  'https://overpass-api.de/api/interpreter'
 
-# Decrypt a map file (removes the XOR encryption layer)
-python tools/maps/decrypt_fbl.py tools/maps/testdata/Vatican_osm.fbl -o decrypted/
-
-# Export speed cameras to CSV (coordinates + speed limits)
-python tools/maps/spc_to_csv.py /path/to/spc/files/ -o cameras.csv
-
-# Decrypt .lyc license files (shows SWID, product name)
-python tools/maps/lyc_decrypt.py /path/to/license/dir/
-
-# Extract road junction coordinates as GeoJSON
-python tools/maps/junctions_to_geojson.py map_file.fbl -o junctions.geojson
-
-# Extract road segment metadata
-python tools/maps/segments_to_csv.py map_file.fbl -o segments.csv
-
-# Overview of all map files in a directory
-python tools/maps/map_overview.py /path/to/map/files/
+# Convert to FBL map file (no template needed)
+python tools/maps/osm_to_fbl.py monaco.osm \
+  --bbox 7.409,43.536,7.631,43.752 --country MON -o Monaco_osm.fbl
 ```
 
-| Tool | Output | Example |
-|------|--------|---------|
-| `fbl_info.py` | Metadata: country, version, bbox, copyright | `VAT, SET v4.6.7.32, 2025.09` |
-| `decrypt_fbl.py` | Decrypted map file | Removes XOR encryption layer |
-| `spc_to_csv.py` | Speed camera CSV | 1,404 cameras across 21 countries |
-| `lyc_decrypt.py` | License content | SWID, product name, encryption key |
-| `junctions_to_geojson.py` | Road junctions as GeoJSON | Viewable in geojson.io / QGIS |
-| `segments_to_csv.py` | Road segment metadata | Road type, shape point count |
-| `map_overview.py` | Summary table | All countries with sizes and versions |
+The generated FBL file is:
+- Fully encrypted (XOR with 4096-byte key)
+- Valid SET container with correct header, bbox, section table
+- Road data split into sections 4/5/8 (main/secondary/tertiary)
+- Verified: the DLL's graph builder accepts the output
 
-See [docs/mapformat.md](docs/mapformat.md) for the full format specification and
-[tools/maps/README.md](tools/maps/README.md) for detailed usage.
+**Dependencies:** Python + numpy. No template file, no Unicorn, no DLL needed.
+
+### Map Analysis Tools
+
+24 standalone tools in `tools/maps/` for decrypting, parsing, and analysing NNG map files.
+
+| Tool | Description |
+|------|-------------|
+| **osm_to_fbl.py** | **Convert OSM data → FBL map file** |
+| **fbl_builder.py** | **Build FBL from scratch (no template)** |
+| **nng_decoder.py** | **Decode FBL sections into records (pure Python)** |
+| fbl_parse.py | Extract coordinates from FBL files |
+| fbl_road_class.py | Extract road classifications |
+| fbl_to_geojson.py | Export all coordinates as GeoJSON |
+| fbl_info.py | Show metadata (country, version, bbox) |
+| fbl_validate.py | Cross-validate against OpenStreetMap |
+| fbl_segments.py | Extract road segment boundaries |
+| fbl_road_network.py | Complete road network export |
+| fbl_replace_section.py | Replace sections in existing FBL |
+| decrypt_fbl.py | Remove XOR encryption layer |
+| spc_to_csv.py | Speed cameras → CSV (1,404 cameras, 21 countries) |
+| poi_to_geojson.py | POI extraction with category names |
+| hnr_info.py | HNR routing data analysis |
+| hnr_fbl_link.py | Link HNR tiles to countries |
+| lyc_decrypt.py | Decrypt license files |
+| nng_varint.py | Varint decoder library |
+| curves_to_geojson.py | Curve point extraction |
+| junctions_to_geojson.py | Junction coordinates |
+| segments_to_csv.py | Segment metadata |
+| map_overview.py | Multi-country overview |
+| nng_emulator.py | Unicorn DLL emulation framework |
+| nng_decoder_python.py | Pure Python section decoder (67-74% accuracy) |
+
+### Format Documentation
+
+Full specification in [docs/mapformat.md](docs/mapformat.md) (1,842 lines):
+- XOR encryption (4096-byte repeating key)
+- SET container format (magic, version, sections, metadata)
+- UTF-8-like varint encoding
+- Regex-like pattern language for section data
+- Road class system (value 92 + DLL lookup table)
+- Packed bitstream coordinate encoding
+- HNR routing format (256-byte tiles, A/B classification)
+- Speed camera records (12-byte: lon, lat, flags, speed, type)
+- POI name encoding (byte×2)
+- LYC license decryption (RSA + XOR-CBC)
 
 ## Interesting Things to Look At
 
