@@ -875,7 +875,7 @@ would be more portable.
 
 ## 18. Head Unit Testing
 
-- [ ] **18.1** Generate FBL file from OSM data using osm_to_fbl.py
+- [x] **18.1** Generate FBL file from OSM data using osm_to_fbl.py
 - [ ] **18.2** Copy generated FBL to USB drive
 - [ ] **18.3** Test if synctool accepts the generated file
 - [ ] **18.4** Test if navigation works with the generated map
