@@ -475,12 +475,12 @@ But ~70% of the varint values have unknown meaning. The DLL's pattern compiler
 
 ### Phase D: Build the FBL Writer (OSM → NNG)
 
-- [ ] **13.15** Define the NNG data model — BLOCKED (needs pattern grammar)
+- [ ] **13.15** Define the NNG data model — DEFERRED (template approach used instead)
   - Road segment: start_junction, end_junction, road_class, shape_points[], name
   - Junction: lon, lat, connected_segments[]
   - Document the complete data model
 
-- [ ] **13.16** Build OSM-to-NNG data converter — BLOCKED (needs pattern grammar)
+- [ ] **13.16** Build OSM-to-NNG data converter — DEFERRED (template approach used instead)
   - Parse OSM PBF/XML using osmium or similar
   - Map OSM highway tags to NNG road classes (0-9)
   - Extract junctions, segments, shape points from OSM ways
@@ -491,7 +491,7 @@ But ~70% of the varint values have unknown meaning. The DLL's pattern compiler
   - Encode coordinates, road classes, segment markers, junction refs
   - Use the same UTF-8-like encoding
 
-- [ ] **13.18** Implement the section builder — BLOCKED (needs pattern grammar)
+- [ ] **13.18** Implement the section builder — DEFERRED (template approach used instead)
   - Build section 4 (main roads) from encoded varint stream
   - Build sections 1, 2, 3, 5, 8 (curves, boundaries, secondary, tertiary)
   - Build section 15 (labels/names)
@@ -507,17 +507,17 @@ But ~70% of the varint values have unknown meaning. The DLL's pattern compiler
   - Apply the 4096-byte XOR table to produce the final encrypted file
   - Verify: decrypting the output should give back the original data
 
-- [ ] **13.21** Build `osm_to_fbl.py` — complete OSM-to-FBL converter — BLOCKED (needs pattern grammar)
+- [ ] **13.21** Build `osm_to_fbl.py` — DEFERRED (template-based fbl_replace_section.py built instead)
   - Input: OSM PBF file + country bbox
   - Output: valid .fbl file readable by iGO navigation engine
   - Test: decrypt and parse the output with our existing tools
 
-- [ ] **13.22** Validate generated FBL against original — BLOCKED (needs pattern grammar)
+- [ ] **13.22** Validate generated FBL against original — DEFERRED
   - Generate FBL from the same OSM data NNG used (2025.09)
   - Compare: segment count, road class distribution, coordinate accuracy
   - Report differences
 
-- [ ] **13.23** Test on the actual head unit (if possible) — BLOCKED (needs pattern grammar)
+- [ ] **13.23** Test on the actual head unit (if possible) — DEFERRED
   - Copy generated FBL to USB drive
   - Check if the head unit's synctool accepts it
   - Check if navigation works with the generated map
