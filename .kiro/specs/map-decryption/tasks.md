@@ -910,3 +910,43 @@ without needing the proprietary files.
 - [ ] **16.6** Build tmc_to_fbl.py — generate NNG .tmc file from public data
   - If we understand the .tmc format, we can generate it from public tables
   - This would let us create TMC files for ANY country with public data
+
+
+## 20. Generate Supporting Map Files from OSM
+
+The FBL file is the road network. A complete map update also needs
+HNR (routing), POI, SPC (speed cameras), and TMC (traffic) files.
+
+### HNR — Historical Navigation Routing
+
+- [ ] **20.1** Understand HNR tile structure (256-byte tiles, 64 entries, A/B blocks)
+  - Already decoded: magic HNRF, XOR encryption, binary major/minor classification
+- [ ] **20.2** Build osm_to_hnr.py — generate HNR from OSM road classifications
+  - Map OSM highway tags to A (major) / B (minor) blocks
+  - Generate 256-byte tiles with correct entry format
+  - XOR encrypt with same key as FBL
+- [ ] **20.3** Validate generated HNR against original
+
+### POI — Points of Interest
+
+- [ ] **20.4** Understand POI container format (magic 0xC5676632A, uint16 coord pairs)
+  - Already decoded: XOR encryption, category name encoding (byte×2)
+- [ ] **20.5** Build osm_to_poi.py — generate POI from OSM amenity/shop/tourism tags
+  - Map OSM tags to NNG POI categories
+  - Encode coordinates as uint16 pairs scaled to bbox
+  - Encode category names with byte×2 encoding
+- [ ] **20.6** Validate generated POI against original
+
+### SPC — Speed Cameras
+
+- [ ] **20.7** Understand SPC record format (12-byte: lon, lat, flags, speed, type)
+  - Already fully decoded
+- [ ] **20.8** Build osm_to_spc.py — generate SPC from OSM enforcement/speed_camera data
+  - Extract speed camera locations from OSM
+  - Encode as 12-byte records with correct flags
+  - XOR encrypt
+- [ ] **20.9** Validate generated SPC against original
+
+### TMC — Traffic Message Channel
+
+- [ ] **20.10** See Task 16 (revised approach using public location code lists)
