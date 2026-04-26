@@ -871,7 +871,7 @@ would be more portable.
 - [x] **17.7** Translate character class [ ] handling
 - [x] **17.8** Translate ^ $ | metacharacter → control record mapping
 - [x] **17.9** Validate against Unicorn output on all 7 test files
-- [ ] **17.10** Remove Unicorn dependency from nng_decoder.py
+- [x] **17.10** Remove Unicorn dependency from nng_decoder.py
 
 ## 18. Head Unit Testing
 

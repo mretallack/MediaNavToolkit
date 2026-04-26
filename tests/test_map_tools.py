@@ -288,7 +288,8 @@ class TestNngDecoder:
         dec = _decrypt(TESTDATA_MAPS / "Monaco_osm.fbl")
         sec4 = _get_sec4(dec)
         records = decode_section(sec4)
-        road_class = [r for r in records if (r & 0xFFFF0000) == 0x80030000]
+        # Road class records: 0x80030000 (Unicorn) or 0x80180000 (Python)
+        road_class = [r for r in records if (r & 0xFFFF0000) in (0x80030000, 0x80180000)]
         assert len(road_class) >= 1  # Monaco has road class records
 
     @_skip_unicorn

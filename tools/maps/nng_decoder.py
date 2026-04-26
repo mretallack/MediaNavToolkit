@@ -182,12 +182,29 @@ def _decode_line_unicorn(line_data: bytes, dll_bytes: bytes = None):
     return records
 
 
-def decode_line(line_data: bytes, dll_bytes: bytes = None):
+def decode_line(line_data: bytes, dll_bytes: bytes = None, use_unicorn: bool = None):
     """Decode one LF-separated line into uint32 records.
 
-    Uses Unicorn emulation for accuracy.
+    By default uses pure Python decoder. Falls back to Unicorn emulation
+    if use_unicorn=True and the unicorn package + DLL are available.
+
+    Args:
+        line_data: Raw bytes for one line.
+        dll_bytes: DLL binary (only needed for Unicorn mode).
+        use_unicorn: Force Unicorn (True), force Python (False), or auto (None).
+            Auto uses Python unless UNICORN env var is set.
     """
-    return _decode_line_unicorn(line_data, dll_bytes)
+    if use_unicorn is None:
+        import os
+
+        use_unicorn = os.environ.get("NNG_DECODER_UNICORN", "").lower() in ("1", "true", "yes")
+
+    if use_unicorn:
+        return _decode_line_unicorn(line_data, dll_bytes)
+
+    from tools.maps.nng_decoder_python import decode_line_python
+
+    return decode_line_python(line_data)
 
 
 def decode_section(section_data: bytes, dll_bytes: bytes = None):
