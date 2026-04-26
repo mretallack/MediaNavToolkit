@@ -573,17 +573,17 @@ these patterns to convert raw bytes into uint32 records.
 
 ### Phase C: Emulate the Full Map Loading Pipeline
 
-- [ ] **14.8** Set up Unicorn emulation of the SET file loader
+- [x] **14.8** Set up Unicorn emulation of the SET file loader
   - Map the DLL, set up memory for file I/O
   - Emulate FUN_101b5a60 (SET loader) with Monaco FBL as input
   - Capture the context structure it creates
 
-- [ ] **14.9** Extract the context structure from emulation
+- [x] **14.9** Extract the context structure from emulation
   - After SET loading, read the context structure from memory
   - Extract: pattern data pointer, char table, flags, limits
   - Save the pattern data bytes
 
-- [ ] **14.10** Re-run FUN_1024a720 with correct context
+- [x] **14.10** Re-run FUN_1024a720 with correct context
   - Use the extracted context instead of our hand-built one
   - Compare output: should produce different (correct) records
   - The consumed values should now be properly handled
