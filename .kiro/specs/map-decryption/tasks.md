@@ -870,7 +870,7 @@ would be more portable.
 - [x] **17.6** Translate pattern quantifiers (* + ? {n,m})
 - [x] **17.7** Translate character class [ ] handling
 - [x] **17.8** Translate ^ $ | metacharacter → control record mapping
-- [ ] **17.9** Validate against Unicorn output on all 7 test files
+- [x] **17.9** Validate against Unicorn output on all 7 test files
 - [ ] **17.10** Remove Unicorn dependency from nng_decoder.py
 
 ## 18. Head Unit Testing
