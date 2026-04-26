@@ -442,7 +442,20 @@ def decode_line_python(data: bytes, flags: int = 0x480080) -> list[int]:
                             records.append(0x80180000 | (-tv))
                             pos = esc_end
                             continue
-                    # Fall through: output escaped value as data
+                    # Fall through: handle octal escapes and others
+                    if esc_val is not None and 0x30 <= esc_val <= 0x37:
+                        # Octal escape: \0 = NUL, \012 = 10, etc.
+                        octal_val = esc_val - 0x30
+                        p = esc_end
+                        for _ in range(2):
+                            if p < end and 0x30 <= data[p] <= 0x37:
+                                octal_val = octal_val * 8 + (data[p] - 0x30)
+                                p += 1
+                            else:
+                                break
+                        records.append(octal_val)
+                        pos = p
+                        continue
                     if esc_val is not None:
                         records.append(esc_val)
                     pos = esc_end
