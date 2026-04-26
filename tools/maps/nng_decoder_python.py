@@ -108,29 +108,25 @@ def decode_line_python(data: bytes, flags: int = 0x480080) -> list[int]:
         # The DLL searches for a matching delimiter (newline chars from context).
         # In practice, # consumes until the next metacharacter at the same nesting level.
         if in_hash:
-            # # hash reference: scans RAW BYTES for delimiter (0x00).
-            # The DLL scans byte-by-byte, skipping UTF-8 continuation bytes.
-            # When delimiter found: advance past it (delimiter_length bytes).
-            # When not found: advance to end of input.
+            # # hash reference: scans character-by-character for NUL delimiter.
+            # The DLL advances one byte, skips UTF-8 continuation bytes (0x80-0xBF),
+            # then checks if the first byte of the next character == 0x00.
+            # This means it scans varint-by-varint, checking the lead byte.
             p = pos
+            found = False
             while p < end:
                 if data[p] == 0x00:
-                    # Found delimiter — advance past it (length=1 since param_4[0x24]=0→iVar12=0→skip 0 extra)
-                    # Actually iVar12 = param_4[0x24] = delimiter length
-                    # LAB_1024ac1b: pbVar18 = local_28 + iVar12
-                    # local_28 was set to local_20 (current scan pos)
-                    # So we advance by iVar12 bytes past the match start
-                    # With iVar12=0, we don't advance at all — we stay at the NUL
-                    # But then the main loop reads the NUL and hits the 0x00 metachar → break
+                    # Found NUL delimiter — resume here
                     pos = p
                     in_hash = False
+                    found = True
                     break
-                # Skip UTF-8 continuation bytes
+                # Advance past this character (skip continuations)
                 p += 1
                 if use_varint:
                     while p < end and (data[p] & 0xC0) == 0x80:
                         p += 1
-            else:
+            if not found:
                 pos = end
                 in_hash = False
             continue
@@ -208,25 +204,46 @@ def decode_line_python(data: bytes, flags: int = 0x480080) -> list[int]:
                     if nb == 0x3F:  # (?...)
                         if next_pos + 1 < end:
                             nb2 = data[next_pos + 1]
-                            if nb2 == 0x27:  # (?'...) named group → junction
-                                # Skip to matching ), generate junction record
+                            if nb2 == 0x27 or nb2 == 0x26:
+                                # (?'...) or (?&...) → junction 0x80080000|n
                                 p = next_pos + 2
+                                delim = nb2
+                                while p < end and data[p] != 0x29 and data[p] != delim:
+                                    p += 1
+                                if p < end and data[p] == delim:
+                                    p += 1
                                 while p < end and data[p] != 0x29:
                                     p += 1
-                                group_depth_counter = getattr(decode_line_python, "_jct", 0) + 1
-                                decode_line_python._jct = group_depth_counter
-                                records.append(0x80080000 | group_depth_counter)
+                                if not hasattr(decode_line_python, "_jct"):
+                                    decode_line_python._jct = 0
+                                decode_line_python._jct += 1
+                                records.append(0x80080000 | decode_line_python._jct)
                                 pos = p + 1 if p < end else end
                                 continue
-                        # Other (?...) — skip to matching )
+                            if nb2 == 0x21:
+                                # (?!...) → 0x80230000
+                                p = next_pos + 2
+                                depth = 1
+                                while p < end and depth > 0:
+                                    if data[p] == 0x28:
+                                        depth += 1
+                                    elif data[p] == 0x29:
+                                        depth -= 1
+                                    p += 1
+                                records.append(0x80230000)
+                                pos = p
+                                continue
+                        # Other (?...) — skip flags, handle as group
                         p = next_pos + 1
-                        depth = 1
-                        while p < end and depth > 0:
-                            if data[p] == 0x28:
-                                depth += 1
-                            elif data[p] == 0x29:
-                                depth -= 1
+                        while p < end and data[p] not in (0x29, 0x3A):
                             p += 1
+                        if p < end and data[p] == 0x29:
+                            pos = p + 1
+                            continue
+                        if p < end and data[p] == 0x3A:
+                            pos = p + 1
+                            group_depth += 1
+                            continue
                         pos = p
                         continue
                     if nb == 0x2A:  # (*...)
@@ -302,7 +319,8 @@ def decode_line_python(data: bytes, flags: int = 0x480080) -> list[int]:
                 pos = next_pos
                 continue
 
-            elif value == 0x5D:  # ] stray
+            elif value == 0x5D:  # ] — NOT in DLL switch, falls through to data
+                records.append(value)
                 pos = next_pos
                 continue
 
