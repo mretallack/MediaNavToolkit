@@ -522,16 +522,102 @@ But ~70% of the varint values have unknown meaning. The DLL's pattern compiler
   - Check if the head unit's synctool accepts it
   - Check if navigation works with the generated map
 
+## 14. Extract DLL Pattern Data — Unblock OSM-to-FBL Converter
+
+**Goal:** Extract the pattern matching tables from nngine.dll that define
+how the varint stream is parsed. These patterns encode 92.8% of section data
+(junction connectivity, shape points, road attributes, names).
+
+**Why this matters:** Without the pattern data, we cannot decode or reconstruct
+the non-coordinate portion of FBL section data. The DLL's FUN_1024a720 uses
+these patterns to convert raw bytes into uint32 records.
+
+### Phase A: Find the Pattern Data in the DLL
+
+- [ ] **14.1** Trace the map loading call chain from NngineStart
+  - Search for "NngineStart", "NngineAttach", or SET magic (0x544553) references
+  - Map: NngineStart → file open → SET parse → section load → FUN_10243ae0
+  - Identify where the context structure (param_6) is created
+
+- [ ] **14.2** Find the context structure initialization
+  - FUN_10243ae0 receives param_6 (context pointer)
+  - The caller at line 412089 passes `*(undefined4 *)(iVar2 + 0x18)` as context
+  - Trace back: what creates the object at iVar2? What sets offset 0x18?
+
+- [ ] **14.3** Identify the pattern data pointer in the context
+  - The context structure has: [0]=alloc, [1]=free, [2]=userdata, [5]=char_table
+  - Pattern data is likely at another offset (possibly [3] or [4])
+  - Check: does the context have a pointer to a pattern string/table?
+
+- [ ] **14.4** Extract the pattern data bytes from the DLL
+  - Once we know the RVA of the pattern data, read it from the DLL binary
+  - The pattern data might be a string with ( ) # \ structural chars
+  - Or it might be a compiled binary table
+
+### Phase B: Understand the Pattern Format
+
+- [ ] **14.5** Analyze the pattern data structure
+  - Is it a text pattern (like regex) or a binary table?
+  - If text: parse the ( ) # \ structure to understand grouping
+  - If binary: identify field sizes and meanings
+
+- [ ] **14.6** Map pattern entries to record types
+  - Each pattern should produce a specific 0x80XX0000 control record
+  - Match: pattern N → record type 0x80XX0000
+  - Document the mapping
+
+- [ ] **14.7** Understand how patterns consume varint values
+  - Patterns match sequences of varint values
+  - When a pattern matches, the consumed values become record data
+  - Document: which values are consumed vs passed through
+
+### Phase C: Emulate the Full Map Loading Pipeline
+
+- [ ] **14.8** Set up Unicorn emulation of the SET file loader
+  - Map the DLL, set up memory for file I/O
+  - Emulate FUN_101b5a60 (SET loader) with Monaco FBL as input
+  - Capture the context structure it creates
+
+- [ ] **14.9** Extract the context structure from emulation
+  - After SET loading, read the context structure from memory
+  - Extract: pattern data pointer, char table, flags, limits
+  - Save the pattern data bytes
+
+- [ ] **14.10** Re-run FUN_1024a720 with correct context
+  - Use the extracted context instead of our hand-built one
+  - Compare output: should produce different (correct) records
+  - The consumed values should now be properly handled
+
+### Phase D: Implement Pattern Matching in Python
+
+- [ ] **14.11** Implement the pattern matcher in Python
+  - Translate the DLL's pattern matching logic
+  - Use the extracted pattern data
+  - Test: output should match Unicorn emulation
+
+- [ ] **14.12** Build complete FBL section decoder
+  - Combine: varint decoder + pattern matcher + record processor
+  - Input: raw section bytes
+  - Output: structured road network data (coords, classes, junctions, shapes)
+
+- [ ] **14.13** Validate decoder on all test files
+  - Run on all 7 FBL test files
+  - Compare extracted data with OSM for accuracy
+  - Report: segment count, coordinate accuracy, road class accuracy
+
+- [ ] **14.14** Build the FBL section encoder (reverse of decoder)
+  - Input: structured road network data
+  - Output: raw section bytes (varint stream with patterns)
+  - Test: encode → decode roundtrip should preserve data
+
 ## Current Knowledge Gaps (for map reconstruction)
 
-The following must be understood before we can write valid FBL files:
-
-1. **Varint stream grammar** — what each value means in context
-2. **Coordinate encoding** — absolute vs delta, precision, ordering
-3. **Junction connectivity** — how segments reference shared junctions
-4. **Shape point encoding** — intermediate curve points per segment
+1. ~~Varint stream grammar~~ — PARTIALLY SOLVED (UTF-8-like encoding confirmed)
+2. **Coordinate encoding** — embedded in pattern-matched compressed stream
+3. **Junction connectivity** — encoded in pattern data
+4. **Shape point encoding** — encoded in pattern data
 5. **Section 15 structure** — label/name data format
-6. **Gap area coordinate purpose** — what the pre-section coordinates represent
+6. **Gap area coordinate purpose** — pre-section coordinate data
 7. **Section roles** — what data goes in sections 1-8 vs 15-17
-8. **Record type semantics** — what each 0x8000-0x803B type means in detail
+8. **Record type semantics** — what each 0x8000-0x803B type means
 9. **Pattern compiler state machine** — the full grammar of FUN_1024a720

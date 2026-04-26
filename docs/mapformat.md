@@ -1662,3 +1662,73 @@ bitstream contains interleaved coordinate and non-coordinate data.
 The varint stream is a compressed representation where coordinates,
 attributes, and structure are all encoded together. Extracting individual
 components requires the full pattern matching grammar.
+
+
+### CRITICAL UPDATE: Character Class Table Discovery (Task 14)
+
+The previous emulation used an **identity character class table** which caused
+incorrect behavior. The REAL table is at RVA 0x2E5408 (char_table_base + 0x340):
+
+```
+Character class values:
+  0x01 = whitespace (0x09-0x0D, 0x20) — consumed by decoder
+  0x80 = special chars (NUL, $, (, ), [, \, ^, {, |, ?)
+  0x1C = digits (0-9)
+  0x1A = hex letters (a-f, A-F)
+  0x12 = letters (g-z, G-Z)
+  0x10 = underscore (_)
+  0x00 = all other bytes (0x80-0xFF)
+```
+
+**Only 6 values** (whitespace) have bit 0 set. The decoder's `(table[value] & 1)`
+check only consumes whitespace characters. All other values go through the
+pattern matching logic.
+
+### Correct Decoder Output: 76 Records from 14,086 Varints
+
+With the correct character class table, the decoder produces only **76 records**
+from Monaco section 4 (14,086 varint values). This means:
+
+- **99.5% of varint values are consumed** by pattern matching
+- **0.5% are output** as meaningful data records
+- The varint stream IS a compiled pattern language
+- The "data" we see is the pattern structure, not raw coordinates
+
+The 76 output records include:
+- 73 data values (small integers and a few large values)
+- 3 control records: 0x80090000 (separator), 0x80330000 (road type), 0x80000000 (end)
+
+This confirms that the FBL section data is a **highly compressed pattern language**
+where the vast majority of bytes encode the pattern structure itself, and only
+a tiny fraction represents the actual road network data.
+
+### Context Structure (36 bytes at RVA 0x2E32A4)
+
+```
+Offset  Value         Meaning
+0x00    0x10243AC0    alloc function pointer
+0x04    0x10243AD0    free function pointer
+0x08    0x00000000    user data
+0x0C    0x00000000    (unused)
+0x10    0x00000000    (unused)
+0x14    0x102E50C8    character table base (identity + case fold)
+0x18    0xFFFFFFFF    max input length
+0x1C    0x00020001    flags
+0x20    0x000000FA    max records (250)
+```
+
+The character CLASS table is at `char_table_base + 0x340 = 0x102E5408`.
+
+### Map Loading Call Chain
+
+```
+NngineStart
+  → FUN_1000ee00 (create engine object → DAT_103143d0)
+  → FUN_101d31b0 (load map file)
+    → FUN_101d30a0 (create 0x20-byte map object)
+      → FUN_102436e0 (create base object at offset 0x14)
+      → FUN_10243790 (create context at offset 0x18, 36 bytes from 0x2E32A4)
+    → FUN_10243ae0 (parse section, context = *(obj + 0x18))
+      → FUN_1024a720 (varint decoder with pattern matching)
+      → FUN_10249210 → FUN_102460d0 (graph builder)
+```
