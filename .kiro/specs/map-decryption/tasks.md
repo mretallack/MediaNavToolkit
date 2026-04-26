@@ -110,7 +110,7 @@ naturally look random.
   - No per-entry weight difference between A and B (confirmed statistically)
   - HNR↔FBL linking impossible without DLL runtime (opaque compiler IDs)
   - Road classification available via FBL value 92 + DLL lookup table instead
-- [ ] **9.5b** HNR↔FBL segment linking — PARTIALLY SOLVED (10 countries linked)
+- [x] **9.5b** HNR↔FBL segment linking — SOLVED (10 countries linked, segment-level matcher built)
   - **What:** Link HNR routing data (major/minor per segment) to FBL map coordinates
   - **Previous attempts that failed:** Direct ID matching, hash functions, spatial keys
   - **New opportunity:** We now have road class for 99% of FBL segments via forward-fill.
