@@ -370,27 +370,11 @@ def decode_line_python(data: bytes, flags: int = 0x480080) -> list[int]:
         # The DLL searches for a matching delimiter (newline chars from context).
         # In practice, # consumes until the next metacharacter at the same nesting level.
         if in_hash:
-            # # hash reference: scans character-by-character for NUL delimiter.
-            # The DLL advances one byte, skips UTF-8 continuation bytes (0x80-0xBF),
-            # then checks if the first byte of the next character == 0x00.
-            # This means it scans varint-by-varint, checking the lead byte.
-            p = pos
-            found = False
-            while p < end:
-                if data[p] == 0x00:
-                    # Found NUL delimiter — resume here
-                    pos = p
-                    in_hash = False
-                    found = True
-                    break
-                # Advance past this character (skip continuations)
-                p += 1
-                if use_varint:
-                    while p < end and (data[p] & 0xC0) == 0x80:
-                        p += 1
-            if not found:
-                pos = end
-                in_hash = False
+            # # hash reference: scans for LF delimiter (0x0A).
+            # Since we split by LF, there are no 0x0A bytes in the line.
+            # The scan reaches end of input and consumes everything.
+            pos = end
+            in_hash = False
             continue
 
         # --- Values > 0xFF: always data ---
