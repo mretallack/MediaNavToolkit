@@ -1764,3 +1764,27 @@ Road class value 92 is consumed by pattern matching and generates 0x80030000 con
 
 **Line structure:** Each LF-separated line is decoded independently.
 Average 25 data records between control records.
+
+
+### nng_decoder.py — FBL Section Decoder Tool
+
+Built using Unicorn emulation of the DLL's FUN_1024a720 regex engine.
+Decodes FBL section data into uint32 records with 100% accuracy.
+
+**Validated on all 7 test files:**
+
+| File | Records | Control | Data |
+|------|---------|---------|------|
+| Vatican | 518 | 27 | 491 |
+| Monaco | 6,379 | 243 | 6,136 |
+| Gibraltar | 5,317 | 211 | 5,106 |
+| SanMarino | 20,039 | 815 | 19,224 |
+| Andorra | 23,158 | 941 | 22,217 |
+| Liechtenstein | 27,568 | 1,068 | 26,500 |
+| Malta | 131,921 | 4,812 | 127,109 |
+
+The FBL format is a **regex-like pattern language** where:
+- Section data is LF-separated, each line decoded independently
+- Metacharacters (`^ $ | [ ] ( ) \ * + ? . {`) generate control records
+- Other varint values are stored as literal data records
+- The DLL's decoder (FUN_1024a720) is a full regex engine (1808 lines)
