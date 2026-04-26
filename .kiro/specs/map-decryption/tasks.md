@@ -37,10 +37,10 @@ These improve the FBL output from osm_to_fbl.py. The basic format works
 **Junction Connectivity (19.4)**
 - [x] **19.4a** Identify shared nodes between OSM ways (intersection detection)
 - [x] **19.4b** Assign junction IDs to shared nodes
-- [ ] **19.4c** Encode junction records (0x80080000 | junction_id) in section data
-- [ ] **19.4d** Update network_to_records() to emit junction records between segments
-- [ ] **19.4e** Verify graph builder accepts junction records
-- [ ] **19.4f** Test: two roads sharing a node should produce a junction record
+- [x] **19.4c** Encode junction records (0x80080000 | junction_id) in section data
+- [x] **19.4d** Update network_to_records() to emit junction records between segments
+- [x] **19.4e** Verify graph builder accepts junction records
+- [x] **19.4f** Test: two roads sharing a node should produce a junction record
 
 **Road Names (19.5 + 19.11)**
 - [ ] **19.5a** Extract unique road names from OSM `name` tags
