@@ -573,7 +573,7 @@ builder (FUN_102460d0) likely requires specific record sequences.
 
 ### Phase C: Multi-Section Support
 
-- [ ] **19.9** Generate section 5 (secondary roads) and section 8 (tertiary)
+- [x] **19.9** Generate section 5 (secondary roads) and section 8 (tertiary)
   - Currently only section 4 (main roads) is generated
   - Split OSM roads by class into sections 4/5/8
   - Each section needs its own record stream
@@ -588,12 +588,12 @@ builder (FUN_102460d0) likely requires specific record sequences.
 
 ### Phase D: Validate and Test
 
-- [ ] **19.12** Roundtrip test: generate → decode → compare with OSM source
+- [x] **19.12** Roundtrip test: generate → decode → compare with OSM source
   - All coordinates should match within 1m
   - All road classes should match
   - Junction connectivity should be preserved
 
-- [ ] **19.13** Emulate graph builder on generated records
+- [x] **19.13** Emulate graph builder on generated records
   - Feed enriched records to FUN_102460d0 via Unicorn
   - Verify: no errors, produces valid compiled output
 
