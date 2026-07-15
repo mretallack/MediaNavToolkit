@@ -167,26 +167,51 @@ def read_osm_xml(xml_path: str, bbox: tuple[float, float, float, float]) -> Road
             nodes[int(node.get("id"))] = Coord(lon, lat)
 
     segments: list[RoadSegment] = []
+    # Find junction nodes (shared by 2+ highway ways)
+    node_way_count: dict[int, int] = {}
+    way_data: list[tuple[list[int], str, dict]] = []
     for way in root.iter("way"):
         tags = {t.get("k"): t.get("v") for t in way.iter("tag")}
         highway = tags.get("highway")
         if highway not in OSM_TO_NNG_CLASS:
             continue
-        coords = []
-        for nd in way.iter("nd"):
-            ref = int(nd.get("ref"))
-            if ref in nodes:
-                coords.append(nodes[ref])
-        if len(coords) < 2:
+        nd_refs = [int(nd.get("ref")) for nd in way.iter("nd")]
+        nd_refs = [n for n in nd_refs if n in nodes]
+        if len(nd_refs) < 2:
             continue
-        segments.append(
-            RoadSegment(
-                road_class=OSM_TO_NNG_CLASS[highway],
-                coords=coords,
-                name=tags.get("name", ""),
-                oneway=tags.get("oneway") == "yes",
-            )
-        )
+        way_data.append((nd_refs, highway, tags))
+        for nid in nd_refs:
+            node_way_count[nid] = node_way_count.get(nid, 0) + 1
+
+    junction_nodes = {nid for nid, count in node_way_count.items() if count >= 2}
+
+    # Split ways at junctions into proper road segments
+    segments: list[RoadSegment] = []
+    for nd_refs, highway, tags in way_data:
+        road_class = OSM_TO_NNG_CLASS[highway]
+        name = tags.get("name", "")
+        oneway = tags.get("oneway") == "yes"
+
+        current_nodes = [nd_refs[0]]
+        for i in range(1, len(nd_refs)):
+            nid = nd_refs[i]
+            current_nodes.append(nid)
+
+            is_junction = nid in junction_nodes
+            is_last = i == len(nd_refs) - 1
+
+            if is_junction or is_last:
+                if len(current_nodes) >= 2:
+                    coords = [nodes[n] for n in current_nodes]
+                    segments.append(
+                        RoadSegment(
+                            road_class=road_class,
+                            coords=coords,
+                            name=name,
+                            oneway=oneway,
+                        )
+                    )
+                current_nodes = [nid]
 
     return RoadNetwork(country="OSM", bbox=bbox, segments=segments)
 

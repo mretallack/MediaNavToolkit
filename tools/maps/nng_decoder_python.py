@@ -370,27 +370,11 @@ def decode_line_python(data: bytes, flags: int = 0x480080) -> list[int]:
         # The DLL searches for a matching delimiter (newline chars from context).
         # In practice, # consumes until the next metacharacter at the same nesting level.
         if in_hash:
-            # # hash reference: scans character-by-character for NUL delimiter.
-            # The DLL advances one byte, skips UTF-8 continuation bytes (0x80-0xBF),
-            # then checks if the first byte of the next character == 0x00.
-            # This means it scans varint-by-varint, checking the lead byte.
-            p = pos
-            found = False
-            while p < end:
-                if data[p] == 0x00:
-                    # Found NUL delimiter — resume here
-                    pos = p
-                    in_hash = False
-                    found = True
-                    break
-                # Advance past this character (skip continuations)
-                p += 1
-                if use_varint:
-                    while p < end and (data[p] & 0xC0) == 0x80:
-                        p += 1
-            if not found:
-                pos = end
-                in_hash = False
+            # # hash reference: scans for LF delimiter (0x0A).
+            # Since we split by LF, there are no 0x0A bytes in the line.
+            # The scan reaches end of input and consumes everything.
+            pos = end
+            in_hash = False
             continue
 
         # --- Values > 0xFF: always data ---
@@ -425,7 +409,7 @@ def decode_line_python(data: bytes, flags: int = 0x480080) -> list[int]:
                     if esc == 0x45:  # \E
                         pos = next_pos + 1
                         continue
-                    # Use DLL escape table for other escapes
+                    # Use escape table for known escape codes
                     esc_val, esc_end = (
                         decode_varint(data, next_pos)
                         if use_varint and data[next_pos] > 0xBF
@@ -438,11 +422,24 @@ def decode_line_python(data: bytes, flags: int = 0x480080) -> list[int]:
                             pos = esc_end
                             continue
                         elif tv < 0:
-                            # Road class → 0x80180000 | class_index
-                            records.append(0x80180000 | (-tv))
+                            # Road class escape — output the raw escaped value
+                            records.append(esc_val)
                             pos = esc_end
                             continue
-                    # Fall through: output escaped value as data
+                    # Octal escapes: \0-\7
+                    if esc_val is not None and 0x30 <= esc_val <= 0x37:
+                        octal_val = esc_val - 0x30
+                        p = esc_end
+                        for _ in range(2):
+                            if p < end and 0x30 <= data[p] <= 0x37:
+                                octal_val = octal_val * 8 + (data[p] - 0x30)
+                                p += 1
+                            else:
+                                break
+                        records.append(octal_val)
+                        pos = p
+                        continue
+                    # Other: output escaped value as data
                     if esc_val is not None:
                         records.append(esc_val)
                     pos = esc_end
@@ -465,13 +462,39 @@ def decode_line_python(data: bytes, flags: int = 0x480080) -> list[int]:
                         p += 1
                     pos = p + 1 if p < end else end
                     continue
-                # All other ( — stored as data
+                # Check for (?...) group
+                if next_pos < end and data[next_pos] == 0x3F:
+                    group_depth += 1
+                    if not hasattr(decode_line_python, "_jct"):
+                        decode_line_python._jct = 0
+                    decode_line_python._jct += 1
+                    records.append(0x80080000 | decode_line_python._jct)
+                    p = next_pos + 1
+                    while p < end and data[p] not in (0x29, 0x3A):
+                        p += 1
+                    if p < end and data[p] == 0x3A:
+                        pos = p + 1
+                    elif p < end and data[p] == 0x29:
+                        group_depth -= 1
+                        pos = p + 1
+                    else:
+                        pos = p
+                    continue
+                # Plain ( — stored as data
                 records.append(value)
                 pos = next_pos
                 continue
 
-            elif value == 0x29:  # ) — stored as data
-                records.append(value)
+            elif value == 0x29:  # )
+                # In the DLL, ) generates 0x80190000 and decrements local_8.
+                # If local_8 == 0 (no matching open group), returns error 0x7A
+                # which terminates processing for this line.
+                if group_depth <= 0:
+                    # No matching ( — terminate (like DLL return 0x7A)
+                    records.append(0x80000000)
+                    return records
+                group_depth -= 1
+                records.append(0x80190000)
                 pos = next_pos
                 continue
 
@@ -491,12 +514,16 @@ def decode_line_python(data: bytes, flags: int = 0x480080) -> list[int]:
                 continue
 
             elif value == 0x5B:  # [ character class
-                # Skip to matching ]
-                p = next_pos
-                while p < end and data[p] != 0x5D:
-                    p += 1
+                # Generate attribute record and skip content
                 records.append(0x800A0000)
-                pos = p + 1 if p < end else end
+                # Skip to matching ] or end of data before next #
+                p = next_pos
+                while p < end and data[p] != 0x5D and data[p] != 0x23:
+                    p += 1
+                if p < end and data[p] == 0x5D:
+                    pos = p + 1
+                else:
+                    pos = next_pos  # no ] found, just advance past [
                 continue
 
             elif value == 0x7B:  # { — repetition or data
