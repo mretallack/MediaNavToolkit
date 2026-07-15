@@ -155,7 +155,10 @@ def build_live_senddevicestatus(
     if license_dir.exists():
         entries += _encode_dir_entry("license", "primary", "NaviSync", _file_ts_ms(license_dir))
 
-    # All files in NaviSync/license/ — device.nng first, then others sorted
+    # All files in NaviSync/license/ — device.nng first, then others sorted.
+    # IMPORTANT: .md5 files must be excluded. These are checksum sidecar files
+    # created by our `licenses --install` command but not recognised by the server.
+    # Including them causes senddevicestatus to return HTTP 409.
     if license_dir.exists():
         device_nng = license_dir / "device.nng"
         if device_nng.exists():
@@ -168,7 +171,7 @@ def build_live_senddevicestatus(
                 _file_ts_ms(device_nng),
             )
         for f in sorted(license_dir.iterdir()):
-            if f.is_file() and f.name != "device.nng":
+            if f.is_file() and f.name != "device.nng" and not f.name.endswith(".md5"):
                 entries += _encode_file_entry(
                     _md5_file(f),
                     f.name,

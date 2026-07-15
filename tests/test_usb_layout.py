@@ -180,7 +180,12 @@ class TestBodyStructure:
 
 
 class TestBodyMatchesReference:
-    """Compare our body structure against the run34 reference."""
+    """Compare our body structure against the run34 reference.
+
+    NOTE: The run34 reference includes .md5 files which we now know cause
+    the server to return 409. Our output correctly excludes them, so entry
+    count and size will be smaller than the reference.
+    """
 
     def test_same_entry_count(self, usb_copy, ref_body):
         from medianav_toolbox.device_status import build_live_senddevicestatus
@@ -188,7 +193,9 @@ class TestBodyMatchesReference:
         our = build_live_senddevicestatus(usb_copy, variant=0x02)
         our_entries, _ = parse_entries(our, 202)
         ref_entries, _ = parse_entries(ref_body, 202)
-        assert len(our_entries) == len(ref_entries)
+        # Our output excludes .md5 files that the reference includes
+        ref_without_md5 = [(t, n) for t, n in ref_entries if ".md5" not in n]
+        assert len(our_entries) == len(ref_without_md5)
 
     def test_same_entry_types(self, usb_copy, ref_body):
         from medianav_toolbox.device_status import build_live_senddevicestatus
@@ -197,7 +204,7 @@ class TestBodyMatchesReference:
         our_entries, _ = parse_entries(our, 202)
         ref_entries, _ = parse_entries(ref_body, 202)
         our_types = [(t, n) for t, n in our_entries]
-        ref_types = [(t, n) for t, n in ref_entries]
+        ref_types = [(t, n) for t, n in ref_entries if ".md5" not in n]
         assert our_types == ref_types
 
     def test_same_file_md5s(self, usb_copy, ref_body):
@@ -216,7 +223,9 @@ class TestBodyMatchesReference:
         from medianav_toolbox.device_status import build_live_senddevicestatus
 
         our = build_live_senddevicestatus(usb_copy, variant=0x02)
-        assert len(our) == len(ref_body)
+        # Our body is smaller than the reference because we exclude .md5 files
+        # (the reference was captured when .md5 files were incorrectly included)
+        assert len(our) < len(ref_body)
 
 
 class TestLicenseInstall:
@@ -236,7 +245,11 @@ class TestLicenseInstall:
         assert md5_path.read_text().strip() == expected_md5
 
     def test_installed_license_appears_in_body(self, usb_copy):
-        """After installing a license, it should appear in the senddevicestatus body."""
+        """After installing a license, the .lyc should appear but .md5 should NOT.
+
+        The server rejects senddevicestatus bodies that list .md5 files,
+        so they must be excluded from the body even though they exist on disk.
+        """
         from medianav_toolbox.device_status import build_live_senddevicestatus
         from medianav_toolbox.installer import install_license
 
@@ -244,4 +257,4 @@ class TestLicenseInstall:
 
         body = build_live_senddevicestatus(usb_copy, variant=0x02)
         assert b"NewContent.lyc" in body
-        assert b"NewContent.lyc.md5" in body
+        assert b"NewContent.lyc.md5" not in body

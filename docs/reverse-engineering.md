@@ -212,8 +212,12 @@ The server likely requires context from earlier calls before accepting senddevic
 - `hasActivatableService` — checks what content is available
 - `get_device_model_list` — identifies the device model
 
-We skip most of these and jump straight to senddevicestatus. The server returns 409
-because it doesn't have the device context it needs.
+~~We skip most of these and jump straight to senddevicestatus. The server returns 409
+because it doesn't have the device context it needs.~~
+
+**UPDATE 2026-07-15:** The actual cause was `.lyc.md5` sidecar files in the body's file
+listing. The server rejects requests listing unexpected files. See §"senddevicestatus 409
+SOLVED" below. Flow ordering is NOT the issue.
 
 ### Step Details
 
@@ -926,6 +930,25 @@ Tested the hypothesis that 0x68 needs to come after web login + catalog browse:
 **Root cause hypothesis:** The server associates the delegation credential (Name₃) with a specific HU device registration. Our `register_hu_device()` returns 409 (already registered), meaning the server already has an HU device registration from the original Windows Toolbox. The delegator returns credentials that match that registration. But the server may require the 0x68 to come from the SAME session/client that performed the original HU registration — which was the Windows Toolbox, not our Python tool.
 
 **The real blocker is not the HMAC, not the flow order, not the extra bytes — it's the server-side association between the HU device registration and the session.**
+
+#### 2026-07-15 — senddevicestatus 409 SOLVED: .md5 files in body
+
+**Root cause found:** The `senddevicestatus` body includes a file listing of `NaviSync/license/`.
+Our `licenses --install` command writes `.lyc.md5` sidecar files alongside each `.lyc` license.
+The server validates the file listing and returns **HTTP 409** when it encounters files it doesn't
+recognise (the `.md5` files are our invention, not part of the NaviExtras format).
+
+**Fix:** Exclude any `.md5` files from the `senddevicestatus` body in `device_status.py`:
+
+```python
+if f.is_file() and f.name != "device.nng" and not f.name.endswith(".md5"):
+```
+
+**Result:** Both `senddevicestatus` calls (0x60 standard and delegated) now return HTTP 200.
+The web session correctly shows device rights, enabling the content management pages.
+
+The previous hypothesis about server-side session binding was **wrong** — the credentials and
+encryption were correct all along. The server simply rejects requests that list unexpected files.
 
 ### Failed Approaches Summary
 
