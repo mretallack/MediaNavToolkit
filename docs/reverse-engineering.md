@@ -181,7 +181,27 @@ populate download tasks. The missing trigger is likely:
    The full wire flow (fingerprint 1 → senddevicestatus → delegator → delegated status →
    fingerprint 2 → sendfilecontent) all return HTTP 200. The remaining gap is SSE timing.
 
-#### CDN Download Protocol (discovered 2026-07-16)
+#### sendfilecontent Format (decoded from Run 35)
+
+`sendfilecontent` is a **delegated request** (NOT standard DEVICE mode):
+```
+Wire: build_dynamic_request(flags=0x08, no tb_name, 41B query)
+Body: 0xE0 + mount + path + filename + 00000001 + varint(len) + content + zeros + 0xC3
+```
+
+Decoded body (253 bytes):
+```
+marker:   0xE0
+mount:    "primary"
+path:     "NaviSync"
+filename: "device_status.ini"
+flags:    00 00 00 01
+content:  device_status.ini contents (freesize, totalsize, capabilities, os info)
+trailer:  14× 0x00 + 0xC3
+```
+
+This sends the head unit's `device_status.ini` file to the server. The server uses this
+to understand the device capabilities and prepare the download task list.
 
 **Host:** `download.naviextras.com` (OVHcloud CDN, nginx edge)
 
