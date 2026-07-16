@@ -175,9 +175,11 @@ populate download tasks. The missing trigger is likely:
 
 1. ~~**Capture a live download**~~ — **DONE (2026-07-16).** Run 35 captured the full download flow.
    The download manifest is a SnakeOil-encrypted `getprocess` response containing CDN URLs.
-2. **Implement full automated flow** — `sendfilecontent` still returns 409 from our tool.
-   Once fixed, the full pipeline (confirm → sendfilecontent → SSE event → getprocess → CDN download)
-   can be automated. Currently using the captured manifest directly.
+2. **SSE event integration** — The server pushes a `"newProcess"` event via SSE long-poll after
+   `sendfilecontent`. The `getprocess` call only returns the manifest AFTER this event fires.
+   Need to have an active `/sse/events` connection before confirming content selection.
+   The full wire flow (fingerprint 1 → senddevicestatus → delegator → delegated status →
+   fingerprint 2 → sendfilecontent) all return HTTP 200. The remaining gap is SSE timing.
 
 #### CDN Download Protocol (discovered 2026-07-16)
 
