@@ -99,6 +99,87 @@ NngineFireEvent
   0x22 for dirs) but multi-entry bodies return 409. The captured Toolbox sends 53KB
   fingerprints but the server accepts our minimal stub. Full fingerprint not yet required
   for update availability — the `.stm` files in `senddevicestatus` body provide version info.
+- **Map data file download** — the full download protocol is partially understood but not
+  yet implemented. See §"Download Protocol Analysis" below.
+
+---
+
+### Download Protocol Analysis (2026-07-16)
+
+#### What Works
+
+The full update flow up to download triggering is operational:
+
+1. ✅ `senddevicestatus` (0x60 + delegated) → 200
+2. ✅ `senddevicestatus` 0x28 format (with `tb_name`) → 200
+3. ✅ Catalog shows UK & Ireland as **✓ purchased**
+4. ✅ Content tree shows **31 updates available**
+5. ✅ Content selection + confirmation → 200
+6. ✅ `/mds/` reports `GenericSynchronizingDeviceState` (ready for download)
+7. ✅ `/event/` returns `RELOAD` event
+8. ❌ `getprocess` returns `0x00` (no download tasks)
+
+#### The 0x28 senddevicestatus Format
+
+The 0x28 format (1243 bytes in captured traffic) is identical to `build_dynamic_request`
+with `tb_name=creds.name`:
+
+```python
+wire = build_dynamic_request(
+    counter=i, body=body,
+    hu_code=hu_creds.code, tb_code=creds.code,
+    hu_secret=hu_creds.secret, session_key=creds.secret,
+    tb_name=creds.name,  # This makes it 0x28 format (58B query vs 41B)
+)
+```
+
+Query structure (58 bytes):
+```
+[0x48] [0x80]                    — flags (0x08|0x40 = name present)
+[16B tb_name]                    — toolbox credential name
+[0x80]                           — separator
+[0xC4 + 8B hu_code + 8B tb_code + 4B timestamp]  — credential data (21B)
+[0x30 0x10]                      — footer
+[16B HMAC-MD5]                   — HMAC(hu_secret, credential_data)
+```
+
+The server accepts this (HTTP 200) but it alone doesn't trigger downloads.
+
+#### Download Manager (from nngine.dll decompilation)
+
+The DLL's download manager uses:
+- Download items: **432 bytes** (0x1b0) each, stored in an array
+- Each item contains: `source_url`, `target_path`, `md5_source_url`, `expected_size`, flags
+- Flags: `check_sgn`, `check_md5`, `download_md5`, `store_md5`, `auto_md5_url`, `preallocate_file_space`
+- Downloads use **WinHTTP** with **Range** headers (resume support)
+- Config: `download_manager.max_http_requests_per_host`, `download_manager.cache_path`
+- Debug: `alternative_download_host` config override
+- URLs are logged: `"InternalRequestNode, after setup ... URL: \"%s\", TargetPath: \"%s\", size: %llu, exp_md5: %s"`
+
+Download items are populated from `getprocess` response data. The `getprocess` response
+contains the full task list with embedded CDN URLs when downloads are pending.
+
+#### Why getprocess Returns Empty
+
+Our `getprocess` returns `0x00` — the server has no download tasks prepared. The captured
+Windows Toolbox (run32) also got empty `getprocess` because that session wasn't downloading.
+We have **no capture of an active download session**.
+
+The server is in `GenericSynchronizingDeviceState` and sends a `RELOAD` event, but doesn't
+populate download tasks. The missing trigger is likely:
+- A specific state transition message from the Toolbox to the server
+- Or a timing issue (tasks prepared asynchronously on the server)
+- Or an additional `sendfilecontent` / `sendprocessstatus` call that we can't yet send (409)
+
+#### Next Steps
+
+1. **Capture a live download** — run the Windows Toolbox in the VM with traffic capture
+   while it downloads the UK map update. This will reveal:
+   - What triggers `getprocess` to return download tasks
+   - The CDN URL pattern for map files
+   - The `sendprocessstatus` format for progress reporting
+2. **Alternative: Unicorn emulation** — emulate the Toolbox's event loop to understand
+   what it does when it receives a `RELOAD` event during download mode
 
 ---
 
