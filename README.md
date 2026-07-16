@@ -35,7 +35,7 @@ This project reverse-engineers the NaviExtras wire protocol and reimplements it 
 | Device registration | ✅ Working |
 | Full authentication flow | ✅ Working (login → fingerprint → delegator → senddevicestatus) |
 | senddevicestatus → server | ✅ Returns HTTP 200 |
-| Catalog browsing (30 packages, 31 content items) | ✅ Working |
+| Catalog browsing (30 packages, purchased status) | ✅ Working |
 | Content selection + size estimation | ✅ Working |
 | License fetch + install (.lyc + .lyc.md5) | ✅ Working |
 | Sync command (select → confirm → install) | ✅ Working |
@@ -43,7 +43,7 @@ This project reverse-engineers the NaviExtras wire protocol and reimplements it 
 | **OSM → FBL map conversion** | **✅ Working (pure Python)** |
 | **Map format documentation** | **✅ 1,842 lines** |
 
-**340 tests passing** (57 wire format tests, 32 golden round-trip, 18 USB layout verification, 27 map tool tests).
+**308 tests passing** (57 wire format tests, 32 golden round-trip, 18 USB layout verification, 27 map tool tests).
 
 ### How Map Updates Work
 

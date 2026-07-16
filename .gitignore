@@ -40,7 +40,7 @@ analysis/flows/
 analysis/flows_decoded/
 analysis/http_dump_decrypted/
 analysis/native_serializer/
-analysis/usb-images/
+analysis/usb-images/*
 
 # Harness (Docker/Wine build artifacts)
 harness/
@@ -71,3 +71,5 @@ analysis/brute_*.err
 
 # Large test data files
 tools/maps/testdata/*.hnr
+!analysis/usb-images/report.md
+!analysis/usb-images/post-car-sync-20260716.tar.gz

@@ -79,11 +79,13 @@ NngineFireEvent
 - Full authentication flow (boot → login → fingerprint → delegator → senddevicestatus)
 - Wire protocol encryption fully solved (SnakeOil xorshift128 cipher)
 - **Delegated senddevicestatus** — `build_dynamic_request()` generates from scratch, verified byte-exact against captured data (24 tests)
-- Catalog browsing — 38 items (maps, POIs, safety cameras) from live server
+- Catalog browsing — 30 items (maps, POIs, safety cameras) from live server, with purchased status
 - Free content purchase via web API
 - License fetching — `.lyc` files downloaded live from server
 - License installation to USB drive (`.lyc` + `.lyc.md5`)
-- 320+ unit tests passing
+- **senddevicestatus 409 fix** — `.md5` files must not be listed in body (2026-07-15)
+- **Fresh car sync enables update detection** — server offers 31 updates when USB has current device state (2026-07-16)
+- 308 unit tests passing
 
 ### Remaining ❌
 
@@ -93,6 +95,10 @@ NngineFireEvent
   `.stm` shadow files to USB. Note: the server only offers downloads when the device
   reports older map versions — if the update is already installed on the head unit,
   the server shows it as "installed" and doesn't provide download URLs.
+- **sendfingerprint** — individual file entries work (one per call, marker 0xA0 for files,
+  0x22 for dirs) but multi-entry bodies return 409. The captured Toolbox sends 53KB
+  fingerprints but the server accepts our minimal stub. Full fingerprint not yet required
+  for update availability — the `.stm` files in `senddevicestatus` body provide version info.
 
 ---
 

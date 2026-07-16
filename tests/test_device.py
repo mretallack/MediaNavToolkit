@@ -123,7 +123,7 @@ _usb_missing = not _USB_DIR.exists()
 @pytest.mark.skipif(_usb_missing, reason="analysis/usb_drive/disk not available")
 def test_read_device_status():
     info = read_device_status(_USB_DIR)
-    assert info.free_space == 2312216576
+    assert info.free_space == 733331456
     assert info.total_space == 4407054336
     assert info.os_version == "6.0.12.2.1166_r2"
     assert "store_md5_files" in info.capabilities
