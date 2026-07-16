@@ -257,9 +257,18 @@ Key differences from our failed attempts:
 - Each entry has a **trailing byte** (0x70 observed) — purpose unknown, possibly type/flags
 - The captured fingerprint is 53KB with 389 entries (full USB file listing)
 
-**Current status:** Multi-entry fingerprints still return 409 — likely due to the trailing
-byte or another format detail. Single-entry fingerprints with any of these changes return 200.
-Further investigation needed on the trailing byte value.
+**Current status:** Multi-entry fingerprints still return 409. Analysis of captured plaintext
+reveals the format is a **hierarchical tree** with:
+- Top-level DIR entries: `0x22 + name + mount + size(8) + ts(8) + ts(8)` (2 strings)
+- `0x70` delimiter signals child entries follow
+- Child DIR entries: `0x22 + name + mount + parent(8+N) + size(8) + ts(8) + ts(8)` (3 strings)
+- Child FILE entries: `0xA0 + md5 + name + mount + parent + size(8) + ts(8) + ts(8)` (4 strings)
+
+The Toolbox sends fingerprint 1 (ctx=0, flags=0xC0, 53KB, 11139 entries including local cache)
+and fingerprint 2 (ctx=1, flags=0xD0, 46KB, 2691 entries, USB-only with real checksum).
+The `0x70` delimiter creates a nested tree structure rather than a flat list.
+
+Further investigation needed to fully replicate the hierarchical format.
 
 ---
 
