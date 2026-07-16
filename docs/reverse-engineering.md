@@ -206,6 +206,61 @@ ASCII strings separated by spaces in the decrypted body.
 - `.spc` — speed camera locations
 - `.zip` — configuration packages (global_cfg)
 
+#### sendfingerprint Format (from Run 35 capture)
+
+The fingerprint body format differs from our earlier attempts in several key fields:
+
+```
+Header:
+  [4B] device_context_id = 1 (NOT 0)
+  [1B] flags = 0xD0 (NOT 0xC0)
+  [1B+N] checksum = 32-char MD5 hex string (NOT "N/A")
+  [varint] entry_count (e.g., 0x85 0x03 = 389)
+
+Entry (directory, marker 0x22):
+  [1B] 0x22
+  [1B+N] name (directory name, e.g., "NaviSync")
+  [1B+N] path (mount name: "primary")
+  [8B] size (0 for dirs)
+  [8B] timestamp_ms
+  [8B] timestamp_ms
+  [1B] trailing byte (purpose unknown, e.g., 0x70)
+
+Entry (file, marker 0xA0):
+  [1B] 0xA0
+  [1B+N] md5 (32-char hex)
+  [1B+N] filename
+  [1B+N] path (mount name: "primary")
+  [8B] size
+  [8B] timestamp_ms
+  [8B] timestamp_ms
+  [1B] trailing byte
+
+Storage block:
+  [2B] count + readonly
+  [1B+N] mount name ("primary")
+  [8B] total_space
+  [8B] free_space
+  [8B] min_free
+  [4B] block_size
+  [1B+N] drive_path ("E:\\")
+
+Footer:
+  [1B+N] info string ("{timestamp}_{count}")
+```
+
+Key differences from our failed attempts:
+- `device_context_id` must be **1** (not 0)
+- `flags` must be **0xD0** (not 0xC0)
+- `checksum` must be a real MD5 (from `device_checksum.md5`)
+- `path` field in entries is the **mount name** ("primary"), not the parent directory
+- Each entry has a **trailing byte** (0x70 observed) — purpose unknown, possibly type/flags
+- The captured fingerprint is 53KB with 389 entries (full USB file listing)
+
+**Current status:** Multi-entry fingerprints still return 409 — likely due to the trailing
+byte or another format detail. Single-entry fingerprints with any of these changes return 200.
+Further investigation needed on the trailing byte value.
+
 ---
 
 ## Protocol Architecture
