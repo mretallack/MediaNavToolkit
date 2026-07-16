@@ -173,13 +173,38 @@ populate download tasks. The missing trigger is likely:
 
 #### Next Steps
 
-1. **Capture a live download** — run the Windows Toolbox in the VM with traffic capture
-   while it downloads the UK map update. This will reveal:
-   - What triggers `getprocess` to return download tasks
-   - The CDN URL pattern for map files
-   - The `sendprocessstatus` format for progress reporting
-2. **Alternative: Unicorn emulation** — emulate the Toolbox's event loop to understand
-   what it does when it receives a `RELOAD` event during download mode
+1. ~~**Capture a live download**~~ — **DONE (2026-07-16).** Run 35 captured the full download flow.
+   The download manifest is a SnakeOil-encrypted `getprocess` response containing CDN URLs.
+2. **Implement full automated flow** — `sendfilecontent` still returns 409 from our tool.
+   Once fixed, the full pipeline (confirm → sendfilecontent → SSE event → getprocess → CDN download)
+   can be automated. Currently using the captured manifest directly.
+
+#### CDN Download Protocol (discovered 2026-07-16)
+
+**Host:** `download.naviextras.com` (OVHcloud CDN, nginx edge)
+
+**Authentication:** None. URLs are the only access control.
+
+**URL pattern:** `https://download.naviextras.com/content/{type}/{format}/{region}/{version}/{build_date}/{filename}`
+
+Example: `https://download.naviextras.com/content/map/OSMPlus/ALL/2026_03/2026_06_08__18_12_00/UnitedKingdom_osm.fbl`
+
+**Features:**
+- `Accept-Ranges: bytes` — supports HTTP Range for resume
+- `X-Cache: HIT` — CDN caching active
+- `X-Edge-Location: London, GB` — geo-distributed edges
+- No cookies, no auth headers required
+
+**Manifest format:** The `getprocess` response (25KB, SnakeOil-encrypted) contains all CDN URLs
+with MD5 checksums. Decrypts with `parse_response(data, creds.secret)`. URLs and MD5s are
+ASCII strings separated by spaces in the decrypted body.
+
+**File types in manifest:**
+- `.fbl` — map geometry and road network (largest, 243MB for UK)
+- `.fpa` — address search data
+- `.hnr` — historic routing profiles (Economic/Fastest/Shortest, ~63MB each)
+- `.spc` — speed camera locations
+- `.zip` — configuration packages (global_cfg)
 
 ---
 

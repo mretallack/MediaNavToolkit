@@ -1,182 +1,238 @@
-"""Content file downloader — fetch files from Naviextras via getprocess polling.
+"""Content file downloader — fetch map files from NaviExtras CDN.
 
-The download protocol:
-1. confirm_selection (REST) — tell server what to update
-2. getprocess (wire, with SWIDs) — server returns file manifest
-3. getprocess (wire, polling) — server streams file data
-4. Repeat step 3 until complete
+The download protocol (discovered 2026-07-16):
+1. Server confirms content selection via web API
+2. sendfilecontent triggers server-side preparation
+3. SSE event fires with process UUID
+4. getprocess returns encrypted manifest with CDN URLs + MD5 checksums
+5. Files are downloaded from download.naviextras.com (unauthenticated CDN)
+6. sendprocessstatus reports progress per file
 
-The manifest is a binary structure listing files with content IDs,
-filenames, cache paths, sizes, and timestamps.
+The CDN requires no authentication — URLs are the only access control.
+Files support HTTP Range headers for resume.
+
+URL pattern: https://download.naviextras.com/content/{type}/{format}/{region}/{version}/{build_date}/{filename}
 """
 
+import hashlib
+import json
 import re
 import struct
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
+
+import httpx
+
+CDN_HOST = "https://download.naviextras.com"
 
 
 @dataclass
-class ManifestEntry:
-    """A file entry from the getprocess manifest."""
+class DownloadFile:
+    """A file to download from the CDN."""
 
-    content_id: str
+    url: str
     filename: str
-    cache_path: str = ""
+    md5: str = ""
+    size: int = 0
+    content_type: str = ""  # map, speedcam, global_cfg, etc.
 
 
-def parse_manifest(data: bytes) -> list[ManifestEntry]:
-    """Parse the getprocess manifest response into file entries.
+def parse_getprocess_manifest(data: bytes, secret: int) -> list[DownloadFile]:
+    """Parse the encrypted getprocess response to extract CDN download URLs.
 
-    The manifest is a binary structure with length-prefixed strings
-    for content IDs, filenames, and cache paths.
+    Args:
+        data: Raw wire response from getprocess (starts with 01 00 C2)
+        secret: Device secret for SnakeOil decryption
+
+    Returns:
+        List of DownloadFile entries with URLs and MD5 checksums
     """
+    from medianav_toolbox.protocol import parse_response
+
     if len(data) < 10:
         return []
 
-    entries = []
-    current: dict[str, str] = {}
-    pos = 6  # Skip 4-byte header + 2-byte marker
+    decrypted = parse_response(data, secret)
+    if len(decrypted) < 50:
+        return []
 
-    while pos < len(data) - 2:
-        b = data[pos]
+    # Extract URLs with MD5 checksums
+    # Format in manifest: URL followed by space and 32-char hex MD5
+    raw_urls = re.findall(rb"https://download\.naviextras\.com/[^\x00-\x1f\x80-\xff]+", decrypted)
 
-        # Length-prefixed ASCII string
-        if 1 <= b <= 0x7F and pos + b < len(data):
-            s = data[pos + 1 : pos + 1 + b]
-            if all(0x20 <= c <= 0x7E for c in s):
-                text = s.decode("ascii")
-                if "/" in text and len(text) > 10:
-                    current["cache_path"] = text
-                elif "." in text and len(text) > 3:
-                    current["filename"] = text
-                elif text.isdigit() and len(text) >= 5:
-                    if current.get("filename"):
-                        entries.append(
-                            ManifestEntry(
-                                content_id=current.get("content_id", ""),
-                                filename=current["filename"],
-                                cache_path=current.get("cache_path", ""),
-                            )
-                        )
-                        current = {}
-                    current["content_id"] = text
-                pos += 1 + b
-                continue
-        pos += 1
+    files = []
+    seen = set()
+    for raw in raw_urls:
+        s = raw.decode("ascii")
+        parts = s.split(" ")
+        if len(parts) >= 2 and len(parts[-1]) == 32:
+            url = parts[0]
+            md5 = parts[-1]
+        else:
+            url = s
+            md5 = ""
 
-    if current.get("filename"):
-        entries.append(
-            ManifestEntry(
-                content_id=current.get("content_id", ""),
-                filename=current["filename"],
-                cache_path=current.get("cache_path", ""),
-            )
-        )
-
-    # Deduplicate and filter out .md5 files
-    seen: set[tuple[str, str]] = set()
-    result = []
-    for e in entries:
-        if e.filename.endswith(".md5"):
+        fname = url.rsplit("/", 1)[-1]
+        if fname in seen:
             continue
-        key = (e.content_id, e.filename)
-        if key not in seen:
-            seen.add(key)
-            result.append(e)
-    return result
+        seen.add(fname)
+
+        # Determine content type from URL path
+        content_type = "unknown"
+        if "/content/map/" in url:
+            content_type = "map"
+        elif "/content/speedcam/" in url:
+            content_type = "speedcam"
+        elif "/content/global_cfg/" in url:
+            content_type = "global_cfg"
+        elif "/content/poi/" in url:
+            content_type = "poi"
+
+        files.append(DownloadFile(url=url, filename=fname, md5=md5, content_type=content_type))
+
+    return files
 
 
-def download_content(
-    client,
-    creds,
-    session,
-    swids: list[str],
-    output_dir: Path,
-    max_polls: int = 100,
-    poll_interval: float = 2.0,
-    progress_cb=None,
-):
-    """Download content files via getprocess polling.
+def load_manifest_from_file(path: Path) -> list[DownloadFile]:
+    """Load a previously saved manifest JSON file."""
+    data = json.loads(path.read_text())
+    return [
+        DownloadFile(
+            url=entry["url"],
+            filename=entry["filename"],
+            md5=entry.get("md5", ""),
+            size=entry.get("size", 0),
+        )
+        for entry in data
+    ]
+
+
+def download_file(
+    url: str,
+    output_path: Path,
+    expected_md5: str = "",
+    progress_cb: Callable[[str, int, int], None] | None = None,
+    chunk_size: int = 1024 * 1024,  # 1MB chunks
+) -> bool:
+    """Download a single file from the CDN with resume support and MD5 verification.
 
     Args:
-        client: NaviExtrasClient instance
-        creds: DeviceCredentials
-        session: Session with jsessionid
-        swids: License SWIDs to include in getprocess
-        output_dir: Directory to write downloaded files
-        max_polls: Maximum number of getprocess polls
-        poll_interval: Seconds between polls
-        progress_cb: Optional callback(filename, bytes_received, total_bytes)
+        url: CDN URL to download
+        output_path: Local path to save the file
+        expected_md5: Expected MD5 hash (verified after download)
+        progress_cb: Optional callback(filename, bytes_downloaded, total_bytes)
+        chunk_size: Download chunk size (default 1MB)
 
     Returns:
-        List of downloaded file paths
+        True if download succeeded and MD5 matches
     """
-    from medianav_toolbox.igo_serializer import build_credential_block
-    from medianav_toolbox.protocol import SVC_MARKET, build_request, parse_response
-    from medianav_toolbox.wire_codec import build_getprocess_body
+    output_path.parent.mkdir(parents=True, exist_ok=True)
 
+    # Check if file already exists and is complete
+    if output_path.exists() and expected_md5:
+        existing_md5 = _md5_file(output_path)
+        if existing_md5 == expected_md5.upper():
+            if progress_cb:
+                progress_cb(
+                    output_path.name, output_path.stat().st_size, output_path.stat().st_size
+                )
+            return True
+
+    # Support resume via Range header
+    resume_pos = 0
+    if output_path.exists():
+        resume_pos = output_path.stat().st_size
+
+    headers = {"User-Agent": "DaciaAutomotive-Toolbox-2026041167"}
+    if resume_pos > 0:
+        headers["Range"] = f"bytes={resume_pos}-"
+
+    with httpx.Client(timeout=httpx.Timeout(30.0, read=300.0), follow_redirects=True) as client:
+        with client.stream("GET", url, headers=headers) as resp:
+            if resp.status_code == 416:
+                # Range not satisfiable — file already complete
+                return True
+            if resp.status_code not in (200, 206):
+                raise RuntimeError(f"Download failed: HTTP {resp.status_code} for {url}")
+
+            total = int(resp.headers.get("content-length", 0))
+            if resp.status_code == 206:
+                total += resume_pos
+            elif resp.status_code == 200:
+                resume_pos = 0  # Server doesn't support range, start fresh
+
+            mode = "ab" if resp.status_code == 206 else "wb"
+            downloaded = resume_pos
+
+            with open(output_path, mode) as f:
+                for chunk in resp.iter_bytes(chunk_size=chunk_size):
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if progress_cb:
+                        progress_cb(output_path.name, downloaded, total)
+
+    # Verify MD5
+    if expected_md5:
+        actual_md5 = _md5_file(output_path)
+        if actual_md5 != expected_md5.upper():
+            output_path.unlink()
+            raise RuntimeError(
+                f"MD5 mismatch for {output_path.name}: "
+                f"expected {expected_md5}, got {actual_md5}"
+            )
+
+    return True
+
+
+def download_files(
+    files: list[DownloadFile],
+    output_dir: Path,
+    progress_cb: Callable[[str, int, int], None] | None = None,
+    filter_names: list[str] | None = None,
+) -> list[Path]:
+    """Download multiple files from the CDN.
+
+    Args:
+        files: List of DownloadFile entries
+        output_dir: Directory to save downloaded files
+        progress_cb: Optional progress callback
+        filter_names: If set, only download files whose names contain one of these strings
+
+    Returns:
+        List of successfully downloaded file paths
+    """
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    def _call_getprocess(body=b""):
-        cred_block = build_credential_block(creds.name)
-        query = bytes([0xC3, 0x20]) + cred_block
-        wire = build_request(
-            query=query,
-            body=body,
-            service_minor=SVC_MARKET,
-            code=creds.code,
-            secret=creds.secret,
-        )
-        headers = {"User-Agent": "DaciaAutomotive-Toolbox-2026041167"}
-        if session.jsessionid:
-            headers["Cookie"] = f"JSESSIONID={session.jsessionid}"
-        resp = client.post(
-            "https://dacia-ulc.naviextras.com/rest/1/getprocess",
-            content=wire,
-            headers=headers,
-            timeout=120.0,
-        )
-        if resp.status_code != 200:
-            raise RuntimeError(f"getprocess returned {resp.status_code}")
-        if len(resp.content) <= 4:
-            return b""
-        return parse_response(resp.content, creds.secret)
-
-    # Step 1: Call getprocess with SWIDs to get manifest
-    gp_body = build_getprocess_body(swids) if swids else b""
-    manifest_data = _call_getprocess(gp_body)
-
-    if not manifest_data:
-        return []
-
-    manifest = parse_manifest(manifest_data)
-    if not manifest:
-        # Response might be file data directly, save it
-        if len(manifest_data) > 100:
-            out = output_dir / "getprocess_response.bin"
-            out.write_bytes(manifest_data)
-            return [out]
-        return []
-
     downloaded = []
 
-    # Step 2: Poll getprocess for file data
-    for poll in range(max_polls):
-        time.sleep(poll_interval)
+    for entry in files:
+        if filter_names:
+            if not any(f.lower() in entry.filename.lower() for f in filter_names):
+                continue
 
-        chunk = _call_getprocess()
-        if not chunk:
-            break  # No more data
-
-        # The response is raw file data. We need to figure out which file
-        # it belongs to. For now, save sequentially.
-        out = output_dir / f"chunk_{poll:04d}.bin"
-        out.write_bytes(chunk)
-        downloaded.append(out)
-
-        if progress_cb:
-            progress_cb(f"chunk_{poll}", len(chunk), 0)
+        output_path = output_dir / entry.filename
+        try:
+            success = download_file(
+                url=entry.url,
+                output_path=output_path,
+                expected_md5=entry.md5,
+                progress_cb=progress_cb,
+            )
+            if success:
+                downloaded.append(output_path)
+        except Exception as e:
+            if progress_cb:
+                progress_cb(entry.filename, -1, 0)
+            # Continue with other files
 
     return downloaded
+
+
+def _md5_file(path: Path) -> str:
+    """Compute MD5 hex of a file."""
+    h = hashlib.md5()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    return h.hexdigest().upper()

@@ -856,76 +856,92 @@ def dump_mds(ctx):
 
 @cli.command()
 @click.option("--output", "-o", default="downloads", help="Output directory for downloaded files")
-@click.option("--max-polls", default=50, help="Maximum getprocess polling attempts")
+@click.option(
+    "--manifest", "-m", default=None, help="Path to download manifest JSON (skip server query)"
+)
+@click.option(
+    "--filter",
+    "-f",
+    "filter_names",
+    multiple=True,
+    help="Only download files matching this name (can repeat)",
+)
 @click.pass_context
-def download(ctx, output, max_polls):
-    """Download content files from NaviExtras.
+def download(ctx, output, manifest, filter_names):
+    """Download map update files from NaviExtras CDN.
 
-    After selecting and confirming content (via 'sync'), this command
-    polls getprocess to download the actual file data.
-
-    Requires: NAVIEXTRAS_USER and NAVIEXTRAS_PASS environment variables.
+    Downloads content files using a manifest (JSON file with URLs and MD5s).
+    The manifest is obtained from the getprocess response after content confirmation.
 
     Examples:
-        medianav-toolbox download --usb-path /media/usb -o ./downloads
+        medianav-toolbox download -m manifest.json -o ./downloads
+        medianav-toolbox download -m manifest.json -f UnitedKingdom -f Ireland -o ./maps
     """
-    from medianav_toolbox.content import confirm_selection, get_content_tree, select_content
-    from medianav_toolbox.content_download import download_content, parse_manifest
-    from medianav_toolbox.session import run_session
+    from medianav_toolbox.content_download import (
+        download_files,
+        load_manifest_from_file,
+    )
 
-    usb = ctx.obj["usb_path"]
-    username = os.environ.get("NAVIEXTRAS_USER", "")
-    password = os.environ.get("NAVIEXTRAS_PASS", "")
-
-    if not username or not password:
-        console.print("[red]Set NAVIEXTRAS_USER and NAVIEXTRAS_PASS environment variables[/red]")
+    if not manifest:
+        console.print("[red]Manifest file required. Use -m path/to/manifest.json[/red]")
+        console.print("[dim]Generate a manifest by decrypting the getprocess response.[/dim]")
         sys.exit(1)
 
-    console.print("Connecting...")
-    result = run_session(usb, username, password)
-    if result["errors"]:
-        for e in result["errors"]:
-            console.print(f"[red]✗ {e}[/red]")
+    manifest_path = Path(manifest)
+    if not manifest_path.exists():
+        console.print(f"[red]Manifest not found: {manifest_path}[/red]")
         sys.exit(1)
 
-    creds = result.get("device_creds")
-    session = result.get("session")
-    swids = [lic.swid for lic in result.get("licenses", []) if hasattr(lic, "swid") and lic.swid]
+    files = load_manifest_from_file(manifest_path)
+    console.print(f"Manifest: {len(files)} files")
 
-    if not creds or not session:
-        console.print("[red]Session not established[/red]")
-        sys.exit(1)
+    # Apply filter
+    if filter_names:
+        filtered = [f for f in files if any(n.lower() in f.filename.lower() for n in filter_names)]
+        console.print(f"Filter: {len(filtered)} files match {list(filter_names)}")
+        files = filtered
 
-    from medianav_toolbox.api.client import NaviExtrasClient
-    from medianav_toolbox.config import Config
+    if not files:
+        console.print("[yellow]No files to download after filtering.[/yellow]")
+        return
+
+    # Show what we'll download
+    total_known = sum(f.size for f in files if f.size > 0)
+    table = Table(title="Files to Download")
+    table.add_column("File", style="cyan")
+    table.add_column("Size", justify="right")
+    table.add_column("MD5")
+    for f in files:
+        size_str = f"{f.size / 1024 / 1024:.1f} MB" if f.size else "unknown"
+        table.add_row(f.filename, size_str, f.md5[:8] + "..." if f.md5 else "")
+    console.print(table)
+    if total_known:
+        console.print(f"\nTotal (known): {total_known / 1024 / 1024:.1f} MB")
 
     output_dir = Path(output)
     output_dir.mkdir(parents=True, exist_ok=True)
+    console.print(f"\nDownloading to {output_dir}/ ...")
 
-    console.print(f"Downloading to {output_dir}/ ...")
-    console.print(f"SWIDs: {len(swids)}")
+    from rich.progress import Progress
 
-    with NaviExtrasClient(Config()) as hc:
-        # Set session cookie
-        hc._client.cookies.set("JSESSIONID", session.jsessionid)
+    with Progress() as progress:
+        tasks = {}
 
-        def progress(name, received, total):
-            console.print(f"  ↓ {name}: {received:,} bytes")
+        def progress_cb(name, received, total):
+            if received == -1:
+                console.print(f"  [red]✗ {name} failed[/red]")
+                return
+            if name not in tasks:
+                tasks[name] = progress.add_task(name, total=total or None)
+            progress.update(tasks[name], completed=received, total=total or None)
 
-        files = download_content(
-            hc._client,
-            creds,
-            session,
-            swids,
+        downloaded = download_files(
+            files,
             output_dir,
-            max_polls=max_polls,
-            progress_cb=progress,
+            progress_cb=progress_cb,
+            filter_names=list(filter_names) if filter_names else None,
         )
 
-    if files:
-        console.print(f"\n[green]✓ Downloaded {len(files)} file(s) to {output_dir}/[/green]")
-        for f in files:
-            console.print(f"  {f.name} ({f.stat().st_size:,} bytes)")
-    else:
-        console.print("[yellow]No files downloaded. Server may not have pending updates.[/yellow]")
-        console.print("[dim]Tip: Run 'sync' first to select content, then 'download'.[/dim]")
+    console.print(f"\n[green]✓ Downloaded {len(downloaded)} file(s)[/green]")
+    for f in downloaded:
+        console.print(f"  {f.name} ({f.stat().st_size:,} bytes)")
